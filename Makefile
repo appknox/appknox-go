@@ -13,8 +13,8 @@ bin/appknox-Darwin-x86_64: $(SOURCES)
 bin/appknox-Linux-x86_64: $(SOURCES)
 	GOOS=linux GOARCH=amd64 go build -o bin/appknox-Linux-x86_64 -ldflags="$(LDFLAGS)"
 
-bin/appknox-Windows-x86_64: $(SOURCES)
-	GOOS=windows GOARCH=amd64 go build -o bin/appknox-Windows-x86_64 -ldflags="$(LDFLAGS)"
+bin/appknox-Windows-x86_64.exe: $(SOURCES)
+	GOOS=windows GOARCH=amd64 go build -o bin/appknox-Windows-x86_64.exe -ldflags="$(LDFLAGS)"
 
 clean:
 	rm -rf bin/*
