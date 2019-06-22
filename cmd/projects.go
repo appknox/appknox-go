@@ -48,5 +48,5 @@ var projectsCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(projectsCmd)
+	RootCmd.AddCommand(projectsCmd)
 }

@@ -16,5 +16,5 @@ var rescanCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(rescanCmd)
+	RootCmd.AddCommand(rescanCmd)
 }

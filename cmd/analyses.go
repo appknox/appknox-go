@@ -53,5 +53,5 @@ var analysesCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(analysesCmd)
+	RootCmd.AddCommand(analysesCmd)
 }

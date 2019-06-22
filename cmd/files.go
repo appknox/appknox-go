@@ -58,5 +58,5 @@ var filesCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(filesCmd)
+	RootCmd.AddCommand(filesCmd)
 }

@@ -11,15 +11,15 @@ import (
 
 var cfgFile string
 
-// rootCmd represents the base command when called without any subcommands
-var rootCmd = &cobra.Command{
+// RootCmd represents the base command when called without any subcommands
+var RootCmd = &cobra.Command{
 	Use:   "appknox",
 	Short: "A CLI tool to interact with appknox api",
 	Long:  `A CLI tool to interact with appknox api `,
 }
 
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	if err := RootCmd.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
@@ -29,6 +29,7 @@ func init() {
 	cobra.OnInitialize(initConfig)
 	viper.SetDefault("api_base", "api/")
 	viper.SetDefault("host", "http://localhost:8000/")
+	RootCmd.InitDefaultVersionFlag()
 }
 
 // initConfig reads in config file and ENV variables if set.

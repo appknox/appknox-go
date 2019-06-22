@@ -38,5 +38,5 @@ var organizationsCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(organizationsCmd)
+	RootCmd.AddCommand(organizationsCmd)
 }
