@@ -1,5 +1,5 @@
 all: appknox
-appknox: bin/appknox-Darwin-x86_64 bin/appknox-Linux-x86_64 bin/appknox-Windows-x86_64
+appknox: bin/appknox-Darwin-x86_64 bin/appknox-Linux-x86_64 bin/appknox-Windows-x86_64.exe
 
 VERSION := $(shell git describe --tags)
 BUILD := $(shell git rev-parse --short HEAD)
