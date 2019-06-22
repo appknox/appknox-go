@@ -20,6 +20,10 @@ type MeResponse struct {
 	DefaultOrganization int `json:"default_organization"`
 }
 
+type DetailErrorResponse struct {
+	Detail string `json:"detail"`
+}
+
 func Upload(args []string) {
 	filePath := args[0]
 	var buf1 bytes.Buffer
@@ -27,6 +31,10 @@ func Upload(args []string) {
 	apiBase := "api/"
 	apiHost := "https://api.appknox.com/"
 	accessToken := os.Getenv("APPKNOX_TOKEN")
+	if accessToken == "" {
+		fmt.Println("APPKNOX_TOKEN is no set in env")
+		os.Exit(1)
+	}
 	buf1.WriteString(apiHost)
 	buf1.WriteString(apiBase)
 	buf2.WriteString("Token ")
@@ -46,6 +54,12 @@ func Upload(args []string) {
 		os.Exit(1)
 	}
 	meResponseData, err := ioutil.ReadAll(meResponse.Body)
+	if meResponse.StatusCode != 200 {
+		var errorResp DetailErrorResponse
+		json.Unmarshal(meResponseData, &errorResp)
+		fmt.Println(errorResp.Detail)
+		os.Exit(1)
+	}
 	var responseObject MeResponse
 	json.Unmarshal(meResponseData, &responseObject)
 	organizationID := responseObject.DefaultOrganization
