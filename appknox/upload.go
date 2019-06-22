@@ -30,9 +30,9 @@ func Upload(args []string) {
 	var buf2 bytes.Buffer
 	apiBase := "api/"
 	apiHost := "https://api.appknox.com/"
-	accessToken := os.Getenv("APPKNOX_TOKEN")
+	accessToken := os.Getenv("APPKNOX_ACCESS_TOKEN")
 	if accessToken == "" {
-		fmt.Println("APPKNOX_TOKEN is no set in env")
+		fmt.Println("APPKNOX_ACCESS_TOKEN is no set in env")
 		os.Exit(1)
 	}
 	buf1.WriteString(apiHost)
