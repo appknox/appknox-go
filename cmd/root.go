@@ -18,7 +18,7 @@ var RootCmd = &cobra.Command{
 	Long:  `A CLI tool to interact with appknox api `,
 }
 
-// Execute execute root command
+// Execute will execute the root commands
 func Execute() {
 	if err := RootCmd.Execute(); err != nil {
 		fmt.Println(err)
