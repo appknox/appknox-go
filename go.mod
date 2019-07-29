@@ -10,6 +10,12 @@ require (
 	github.com/magiconair/properties v1.8.0
 	github.com/manifoldco/promptui v0.3.2
 	github.com/mattn/go-runewidth v0.0.4 // indirect
+	github.com/schollz/progressbar/v2 v2.13.2 // indirect
 	github.com/spf13/cobra v0.0.5
 	github.com/spf13/viper v1.4.0
+	github.com/vbauerster/mpb/v4 v4.9.0
+	golang.org/x/net v0.0.0-20190724013045-ca1201d0de80 // indirect
+	golang.org/x/sys v0.0.0-20190726091711-fc99dfbffb4e // indirect
+	golang.org/x/text v0.3.2 // indirect
+	golang.org/x/tools v0.0.0-20190729092621-ff9f1409240a // indirect
 )

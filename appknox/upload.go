@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"time"
@@ -20,9 +21,9 @@ type Upload struct {
 	SubmissionID  int    `json:"submission_id,omitempty"`
 }
 
-// UploadFile is used to upload a file to appknox dashboard.
-// Returns the fileID.
-func (s *UploadService) UploadFile(ctx context.Context, file *os.File) (*int, error) {
+// UploadFileUsingReader is used to upload a file to appknox dashboard.
+// Returns the submissionID.
+func (s *UploadService) UploadFileUsingReader(ctx context.Context, file io.Reader, fileSize int64) (*int, error) {
 	me, _, err := s.client.Me.CurrentAuthenticatedUser(ctx)
 	if err != nil {
 		return nil, err
@@ -41,12 +42,7 @@ func (s *UploadService) UploadFile(ctx context.Context, file *os.File) (*int, er
 	}
 	URL := uploadResponse.URL
 
-	stat, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-
-	req3, err := s.client.NewUploadRequest("PUT", URL, file, stat.Size())
+	req3, err := s.client.NewUploadRequest("PUT", URL, file, fileSize)
 	if err != nil {
 		return nil, err
 	}
@@ -64,9 +60,30 @@ func (s *UploadService) UploadFile(ctx context.Context, file *os.File) (*int, er
 		return nil, err2
 	}
 	submissionID := uploadResponse.SubmissionID
-	var file1 int
+	return &submissionID, nil
+
+}
+
+// UploadFile is used to upload a file to appknox dashboard.
+// Returns the fileID.
+func (s *UploadService) UploadFile(ctx context.Context, file *os.File) (*int, error) {
+	stat, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	fileSize := stat.Size()
+	submissionID, err := s.UploadFileUsingReader(ctx, file, fileSize)
+	if err != nil {
+		return nil, err
+	}
+	return s.CheckSubmission(ctx, *submissionID)
+}
+
+// CheckSubmission will check submission validation and return a valid fileID.
+func (s *UploadService) CheckSubmission(ctx context.Context, submissionID int) (*int, error) {
 	start := time.Now()
-	for file1 == 0 {
+	var fileID int
+	for fileID == 0 {
 		submission, _, err := s.client.Submissions.GetByID(ctx, submissionID)
 		if err != nil {
 			return nil, err
@@ -78,7 +95,7 @@ func (s *UploadService) UploadFile(ctx context.Context, file *os.File) (*int, er
 		if time.Since(start) > 10*time.Second {
 			return nil, errors.New("Request timed out")
 		}
-		file1 = submission.File
+		fileID = submission.File
 	}
-	return &file1, nil
+	return &fileID, nil
 }

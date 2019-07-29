@@ -26,6 +26,7 @@ var uploadCmd = &cobra.Command{
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		file, _ := os.Open(args[0])
+		defer file.Close()
 		helper.ProcessUpload(file)
 	},
 }
