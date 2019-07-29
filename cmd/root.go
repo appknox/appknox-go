@@ -3,8 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
+	"github.com/appknox/appknox-go/appknox"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -18,6 +18,7 @@ var RootCmd = &cobra.Command{
 	Long:  `A CLI tool to interact with appknox api `,
 }
 
+// Execute execute root command
 func Execute() {
 	if err := RootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -27,8 +28,18 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initConfig)
-	viper.SetDefault("api_base", "api/")
-	viper.SetDefault("host", "http://localhost:8000/")
+	viper.SetEnvPrefix("appknox")
+
+	RootCmd.PersistentFlags().StringP("access-token", "a", "", "Appknox Access Token")
+	viper.BindPFlag("access-token", RootCmd.PersistentFlags().Lookup("access-token"))
+	viper.BindEnv("access-token", "APPKNOX_ACCESS_TOKEN")
+	viper.SetDefault("access-token", "")
+
+	RootCmd.PersistentFlags().String("host", appknox.DefaultAPIHost, "Appknox Server")
+	viper.BindPFlag("host", RootCmd.PersistentFlags().Lookup("host"))
+	viper.BindEnv("host")
+	viper.SetDefault("host", appknox.DefaultAPIHost)
+
 	RootCmd.InitDefaultVersionFlag()
 }
 
@@ -44,18 +55,8 @@ func initConfig() {
 	}
 
 	viper.AutomaticEnv()
-
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil {
 		// log.Println("Using config file:", viper.ConfigFileUsed())
-	} else {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Printf(err.Error())
-			os.Exit(1)
-		}
-		path := "/.config/appknox.json"
-		file := filepath.Join(homeDir, path)
-		os.Create(file)
 	}
 }
