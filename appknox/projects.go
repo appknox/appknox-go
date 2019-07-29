@@ -1,62 +1,126 @@
 package appknox
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
 	"fmt"
-	"io/ioutil"
-	"net/http"
+	"strconv"
 	"time"
-
-	"github.com/spf13/viper"
 )
 
-type ProjectResponse struct {
-	Results []struct {
-		ID          int       `json:"id"`
-		CreatedOn   time.Time `json:"created_on"`
-		UpdatedOn   time.Time `json:"updated_on"`
-		PackageName string    `json:"package_name"`
-		Platform    int       `json:"platform"`
-		FileCount   int       `json:"file_count"`
-	} `json:"results"`
+// ProjectsService handles communication with the project related
+// methods of the Appknox API.
+type ProjectsService service
+
+// DRFResponseProject represents for drf response of the Appknox project api.
+type DRFResponseProject struct {
+	Count    int        `json:"count,omitempty"`
+	Next     string     `json:"next,omitempty"`
+	Previous string     `json:"previous,omitempty"`
+	Results  []*Project `json:"results,omitempty"`
 }
 
-func Projects() (*ProjectResponse, error) {
-	var buf1 bytes.Buffer
-	var buf2 bytes.Buffer
-	apiBase := viper.GetString("api_base")
-	apiHost := viper.GetString("host")
-	buf1.WriteString(apiHost)
-	buf1.WriteString(apiBase)
-	organizationID := viper.GetString("organization_id")
-	slagURL := fmt.Sprintf("organizations/%s/projects", organizationID)
-	buf1.WriteString(slagURL)
-	url := buf1.String()
+// ProjectResponse is a wrapper on DRFResponseProject which will help
+// to execute further operations on DRFResponseProject.
+type ProjectResponse struct {
+	r *DRFResponseProject
+	s *ProjectsService
+	c *context.Context
+}
 
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
+// GetNext returns the next page items for a project.
+func (r *ProjectResponse) GetNext() ([]*Project, *ProjectResponse, error) {
+	URL := r.r.Next
+	if URL == "" {
+		err := &Error{Message: *String("There are no next items.")}
+		return nil, nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	buf2.WriteString("Token ")
-	buf2.WriteString(viper.GetString("access_token"))
-	req.Header.Set("Authorization", buf2.String())
-
-	q := req.URL.Query()
-	q.Add("package_name", "")
-	q.Add("search", "")
-	req.URL.RawQuery = q.Encode()
-
-	resp, err := client.Do(req)
+	req, err := r.s.client.NewRequest("GET", URL, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	responseData1, err := ioutil.ReadAll(resp.Body)
 
-	var responseObject ProjectResponse
-	json.Unmarshal(responseData1, &responseObject)
-	return &responseObject, nil
+	var drfResponse DRFResponseProject
+	_, err = r.s.client.Do(*r.c, req, &drfResponse)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp := ProjectResponse{
+		r: &drfResponse,
+		s: r.s,
+		c: r.c,
+	}
+	return drfResponse.Results, &resp, nil
+}
+
+// GetPrevious returns the previous page items for a project.
+func (r *ProjectResponse) GetPrevious() ([]*Project, *ProjectResponse, error) {
+	URL := r.r.Previous
+	if URL == "" {
+		err := &Error{Message: *String("There are no previous items.")}
+		return nil, nil, err
+	}
+	req, err := r.s.client.NewRequest("GET", URL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var drfResponse DRFResponseProject
+	_, err = r.s.client.Do(*r.c, req, &drfResponse)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp := ProjectResponse{
+		r: &drfResponse,
+		s: r.s,
+		c: r.c,
+	}
+	return drfResponse.Results, &resp, nil
+}
+
+// Project represents a Appknox project.
+type Project struct {
+	ID          int        `json:"id,omitempty"`
+	CreatedOn   *time.Time `json:"created_on,omitempty"`
+	UpdatedOn   *time.Time `json:"updated_on,omitempty"`
+	PackageName string     `json:"package_name,omitempty"`
+	Platform    int        `json:"platform,omitempty"`
+	FileCount   int        `json:"file_count,omitempty"`
+}
+
+// ProjectListOptions specifies the optional parameters to the
+// ProjectsService.List method.
+type ProjectListOptions struct {
+	Platform string `url:"platform,omitempty"`
+
+	PackageName string `url:"package_name,omitempty"`
+
+	Search string `url:"q,omitempty"`
+
+	ListOptions
+}
+
+// List lists the files for a project.
+func (s *ProjectsService) List(ctx context.Context, opt *ProjectListOptions) ([]*Project, *ProjectResponse, error) {
+	me, _, err := s.client.Me.CurrentAuthenticatedUser(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	orgID := strconv.Itoa(me.DefaultOrganization)
+	u := fmt.Sprintf("api/organizations/%s/projects", orgID)
+	URL, err := addOptions(u, opt)
+	if err != nil {
+		return nil, nil, err
+	}
+	req, err := s.client.NewRequest("GET", URL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var drfResponse DRFResponseProject
+	_, err = s.client.Do(ctx, req, &drfResponse)
+	resp := ProjectResponse{
+		r: &drfResponse,
+		s: s,
+		c: &ctx,
+	}
+	return drfResponse.Results, &resp, nil
 }
