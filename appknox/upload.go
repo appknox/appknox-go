@@ -21,47 +21,56 @@ type Upload struct {
 	SubmissionID  int    `json:"submission_id,omitempty"`
 }
 
+// uploadFileUsingReaderHelper is used to get a minio upload url
+// and then upload the file to the minio api.
+// Returns the Upload object.
+func (s *UploadService) uploadFileUsingReaderHelper(ctx context.Context, file io.Reader, size int64, url string) (*Upload, error) {
+	req, err := s.client.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var uploadResponse Upload
+	_, err = s.client.Do(ctx, req, &uploadResponse)
+	if err != nil {
+		return nil, err
+	}
+	URL := uploadResponse.URL
+
+	req, err = s.client.NewUploadRequest("PUT", URL, file, size)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.client.Do(ctx, req, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &uploadResponse, nil
+}
+
 // UploadFileUsingReader is used to upload a file to appknox dashboard.
 // Returns the submissionID.
-func (s *UploadService) UploadFileUsingReader(ctx context.Context, file io.Reader, fileSize int64) (*int, error) {
+func (s *UploadService) UploadFileUsingReader(ctx context.Context, file io.Reader, size int64) (*int, error) {
 	me, _, err := s.client.Me.CurrentAuthenticatedUser(ctx)
 	if err != nil {
 		return nil, err
 	}
 	orgID := strconv.Itoa(me.DefaultOrganization)
 	u := fmt.Sprintf("api/organizations/%s/upload_app", orgID)
-	req, err := s.client.NewRequest("GET", u, nil)
+	uploadResponse, err := s.uploadFileUsingReaderHelper(ctx, file, size, u)
 	if err != nil {
 		return nil, err
 	}
-
-	var uploadResponse Upload
-	_, err3 := s.client.Do(ctx, req, &uploadResponse)
-	if err3 != nil {
-		return nil, err3
-	}
-	URL := uploadResponse.URL
-
-	req3, err := s.client.NewUploadRequest("PUT", URL, file, fileSize)
+	req, err := s.client.NewRequest("POST", u, uploadResponse)
 	if err != nil {
 		return nil, err
 	}
-	_, err1 := s.client.Do(ctx, req3, nil)
-	if err1 != nil {
-		return nil, err1
-	}
-
-	req4, err := s.client.NewRequest("POST", u, uploadResponse)
+	_, err = s.client.Do(ctx, req, &uploadResponse)
 	if err != nil {
 		return nil, err
-	}
-	_, err2 := s.client.Do(ctx, req4, &uploadResponse)
-	if err2 != nil {
-		return nil, err2
 	}
 	submissionID := uploadResponse.SubmissionID
 	return &submissionID, nil
-
 }
 
 // UploadFile is used to upload a file to appknox dashboard.

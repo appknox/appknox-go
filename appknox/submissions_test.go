@@ -37,13 +37,13 @@ func TestSubmissionsService_GetByID(t *testing.T) {
 		fmt.Fprint(w, `{"id":1}`)
 	})
 
-	me, _, err := client.Submissions.GetByID(context.Background(), 1)
+	submission, _, err := client.Submissions.GetByID(context.Background(), 1)
 	if err != nil {
 		t.Errorf("Submissions.GetByID returned error: %v", err)
 	}
 
 	want := &Submission{ID: 1}
-	if !reflect.DeepEqual(me, want) {
-		t.Errorf("Submissions.GetByID returned %+v, want %+v", me, want)
+	if !reflect.DeepEqual(submission, want) {
+		t.Errorf("Submissions.GetByID returned %+v, want %+v", submission, want)
 	}
 }
