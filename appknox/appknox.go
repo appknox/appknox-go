@@ -35,6 +35,12 @@ type Client struct {
 
 	// Service used for getting the current authenticated user.
 	Me *MeService
+
+	// Service used for uploading an app to Appknox.
+	Upload *UploadService
+
+	// Submissions service is used to interact with appknox submission api.
+	Submissions *SubmissionsService
 }
 
 // NewClient returns a new appknox API client.
@@ -60,6 +66,8 @@ func NewClient(accessToken string) (*Client, error) {
 	}
 	c.common.client = c
 	c.Me = (*MeService)(&c.common)
+	c.Upload = (*UploadService)(&c.common)
+	c.Submissions = (*SubmissionsService)(&c.common)
 	return c, nil
 }
 
@@ -116,6 +124,23 @@ func (c *Client) NewRequest(method, urlStr string, body interface{}) (*http.Requ
 	req.Header.Set("User-Agent", userAgent)
 	authorization := fmt.Sprintf("Token %s", c.AccessToken)
 	req.Header.Set("Authorization", authorization)
+	return req, nil
+}
+
+// NewUploadRequest creates an upload request to upload a file to appknox dashboard.
+func (c *Client) NewUploadRequest(method, urlStr string, reader io.Reader, size int64) (*http.Request, error) {
+	u, err := c.BaseURL.Parse(urlStr)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(method, u.String(), reader)
+	if err != nil {
+		return nil, err
+	}
+	req.ContentLength = size
+
+	req.Header.Set("Content-Type", "application/octet-stream")
 	return req, nil
 }
 

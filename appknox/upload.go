@@ -1,140 +1,110 @@
 package appknox
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
+	"errors"
 	"fmt"
-	"io/ioutil"
-	"net/http"
+	"io"
 	"os"
 	"strconv"
+	"time"
 )
 
-type UploadResponse struct {
-	URL           string `json:"url"`
-	FileKey       string `json:"file_key"`
-	FileKeySigned string `json:"file_key_signed"`
+// UploadService is used to interact with appknox file upload api.
+type UploadService service
+
+// Upload struct is used to validate the response of ile upload api.
+type Upload struct {
+	URL           string `json:"url,omitempty"`
+	FileKey       string `json:"file_key,omitempty"`
+	FileKeySigned string `json:"file_key_signed,omitempty"`
+	SubmissionID  int    `json:"submission_id,omitempty"`
 }
 
-type MeResponse struct {
-	DefaultOrganization int `json:"default_organization"`
+// uploadFileUsingReaderHelper is used to get a minio upload url
+// and then upload the file to the minio api.
+// Returns the Upload object.
+func (s *UploadService) uploadFileUsingReaderHelper(ctx context.Context, file io.Reader, size int64, url string) (*Upload, error) {
+	req, err := s.client.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var uploadResponse Upload
+	_, err = s.client.Do(ctx, req, &uploadResponse)
+	if err != nil {
+		return nil, err
+	}
+	URL := uploadResponse.URL
+
+	req, err = s.client.NewUploadRequest("PUT", URL, file, size)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.client.Do(ctx, req, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &uploadResponse, nil
 }
 
-type DetailErrorResponse struct {
-	Detail string `json:"detail"`
+// UploadFileUsingReader is used to upload a file to appknox dashboard.
+// Returns the submissionID.
+func (s *UploadService) UploadFileUsingReader(ctx context.Context, file io.Reader, size int64) (*int, error) {
+	me, _, err := s.client.Me.CurrentAuthenticatedUser(ctx)
+	if err != nil {
+		return nil, err
+	}
+	orgID := strconv.Itoa(me.DefaultOrganization)
+	u := fmt.Sprintf("api/organizations/%s/upload_app", orgID)
+	uploadResponse, err := s.uploadFileUsingReaderHelper(ctx, file, size, u)
+	if err != nil {
+		return nil, err
+	}
+	req, err := s.client.NewRequest("POST", u, uploadResponse)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.client.Do(ctx, req, &uploadResponse)
+	if err != nil {
+		return nil, err
+	}
+	submissionID := uploadResponse.SubmissionID
+	return &submissionID, nil
 }
 
-func Upload(args []string) {
-	filePath := args[0]
-	var buf1 bytes.Buffer
-	var buf2 bytes.Buffer
-	apiBase := "api/"
-	apiHost := "https://api.appknox.com/"
-	accessToken := os.Getenv("APPKNOX_ACCESS_TOKEN")
-	if accessToken == "" {
-		fmt.Println("APPKNOX_ACCESS_TOKEN is no set in env")
-		os.Exit(1)
-	}
-	buf1.WriteString(apiHost)
-	buf1.WriteString(apiBase)
-	buf2.WriteString("Token ")
-	buf2.WriteString(accessToken)
-	meURL := "https://api.appknox.com/api/me"
-	client1 := &http.Client{}
-	req1, err := http.NewRequest("GET", meURL, nil)
+// UploadFile is used to upload a file to appknox dashboard.
+// Returns the fileID.
+func (s *UploadService) UploadFile(ctx context.Context, file *os.File) (*int, error) {
+	stat, err := file.Stat()
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return nil, err
 	}
-	req1.Header.Set("Content-Type", "application/json")
-	req1.Header.Set("Authorization", buf2.String())
-	meResponse, err := client1.Do(req1)
+	fileSize := stat.Size()
+	submissionID, err := s.UploadFileUsingReader(ctx, file, fileSize)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return nil, err
 	}
-	meResponseData, err := ioutil.ReadAll(meResponse.Body)
-	if meResponse.StatusCode != 200 {
-		var errorResp DetailErrorResponse
-		json.Unmarshal(meResponseData, &errorResp)
-		fmt.Println(errorResp.Detail)
-		os.Exit(1)
-	}
-	var responseObject MeResponse
-	json.Unmarshal(meResponseData, &responseObject)
-	organizationID := responseObject.DefaultOrganization
-	strOrgID := strconv.Itoa(organizationID)
-	orgURL := fmt.Sprintf("organizations/%s/upload_app", strOrgID)
-	buf1.WriteString(orgURL)
-	url2 := buf1.String()
-	client2 := &http.Client{}
-	req2, err := http.NewRequest("GET", url2, nil)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	req2.Header.Set("Content-Type", "application/json")
-	req2.Header.Set("Authorization", buf2.String())
+	return s.CheckSubmission(ctx, *submissionID)
+}
 
-	response, err := client2.Do(req2)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+// CheckSubmission will check submission validation and return a valid fileID.
+func (s *UploadService) CheckSubmission(ctx context.Context, submissionID int) (*int, error) {
+	start := time.Now()
+	var fileID int
+	for fileID == 0 {
+		submission, _, err := s.client.Submissions.GetByID(ctx, submissionID)
+		if err != nil {
+			return nil, err
+		}
+		reason := submission.Reason
+		if reason != "" {
+			return nil, errors.New(reason)
+		}
+		if time.Since(start) > 10*time.Second {
+			return nil, errors.New("Request timed out")
+		}
+		fileID = submission.File
 	}
-	responseData, err := ioutil.ReadAll(response.Body)
-
-	var orgResponseObject UploadResponse
-	json.Unmarshal(responseData, &orgResponseObject)
-	fileReader, err := os.Open(filePath)
-	// If any error fail quickly here.
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	defer fileReader.Close()
-
-	// Save the file stat.
-	fileStat, err := fileReader.Stat()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	// Save the file size.
-	fileSize := fileStat.Size()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	client3 := &http.Client{}
-	URL := orgResponseObject.URL
-	req3, err := http.NewRequest("PUT", URL, fileReader)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	req3.Header.Set("Content-Type", "application/octet-stream")
-	req3.ContentLength = fileSize
-	client3.Do(req3)
-
-	data1 := map[string]string{"url": orgResponseObject.URL,
-		"file_key":        orgResponseObject.FileKey,
-		"file_key_signed": orgResponseObject.FileKeySigned}
-
-	jsonValue1, _ := json.Marshal(data1)
-	client4 := &http.Client{}
-	req4, err := http.NewRequest("POST", url2, bytes.NewBuffer(jsonValue1))
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	req4.Header.Set("Content-Type", "application/json")
-	req4.Header.Set("Authorization", buf2.String())
-	_, err1 := client4.Do(req4)
-	if err1 != nil {
-		fmt.Println(err1)
-		os.Exit(1)
-	}
-	fmt.Println("File Uploaded Successfully.")
+	return &fileID, nil
 }
