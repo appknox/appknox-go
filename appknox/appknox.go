@@ -10,7 +10,10 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
+
+	"github.com/google/go-querystring/query"
 )
 
 const (
@@ -33,14 +36,17 @@ type Client struct {
 	// Reuse a single struct instead of allocating one for each service on the heap.
 	common service
 
-	// Service used for getting the current authenticated user.
-	Me *MeService
-
 	// Service used for uploading an app to Appknox.
 	Upload *UploadService
 
+	// Service used for getting the current authenticated user.
+	Me *MeService
+
 	// Submissions service is used to interact with appknox submission api.
 	Submissions *SubmissionsService
+
+	// Projects service is used to interact with appknox project api.
+	Projects *ProjectsService
 }
 
 // NewClient returns a new appknox API client.
@@ -68,6 +74,7 @@ func NewClient(accessToken string) (*Client, error) {
 	c.Me = (*MeService)(&c.common)
 	c.Upload = (*UploadService)(&c.common)
 	c.Submissions = (*SubmissionsService)(&c.common)
+	c.Projects = (*ProjectsService)(&c.common)
 	return c, nil
 }
 
@@ -111,7 +118,6 @@ func (c *Client) NewRequest(method, urlStr string, body interface{}) (*http.Requ
 			return nil, err
 		}
 	}
-
 	req, err := http.NewRequest(method, u.String(), buf)
 	if err != nil {
 		return nil, err
@@ -232,6 +238,15 @@ func (r *ErrorResponse) Error() string {
 		r.Response.StatusCode, r.Detail)
 }
 
+// Error is custom error object.
+type Error struct {
+	Message string `json:"message"`
+}
+
+func (e *Error) Error() string {
+	return fmt.Sprintf("Error: %s", e.Message)
+}
+
 // CheckResponse checks the API response for errors, and returns them if
 // present. A response is considered an error if it has a status code outside
 // the 200 range or equal to 202 Accepted.
@@ -248,4 +263,34 @@ func CheckResponse(r *http.Response) error {
 		json.Unmarshal(data, errorResponse)
 	}
 	return errorResponse
+}
+
+// ListOptions specifies the optional parameters to various List methods that
+// support pagination.
+type ListOptions struct {
+	// For paginated result sets, page of results to retrieve.
+	Offset int `url:"offset,omitempty"`
+
+	// For paginated result sets, the number of results to include per page.
+	Limit int `url:"limit,omitempty"`
+}
+
+func addOptions(s string, opt interface{}) (string, error) {
+	v := reflect.ValueOf(opt)
+	if v.Kind() == reflect.Ptr && v.IsNil() {
+		return s, nil
+	}
+
+	u, err := url.Parse(s)
+	if err != nil {
+		return s, err
+	}
+
+	qs, err := query.Values(opt)
+	if err != nil {
+		return s, err
+	}
+
+	u.RawQuery = qs.Encode()
+	return u.String(), nil
 }
