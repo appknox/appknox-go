@@ -37,12 +37,12 @@ func ProcessUpload(file *os.File) {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	fileID, err := client.Upload.CheckSubmission(ctx, *submissionID)
+	akFile, _, err := client.Upload.CheckSubmission(ctx, *submissionID)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
 	t := tabby.New()
-	t.AddLine("FileID: ", *fileID)
+	t.AddLine("FileID: ", akFile.ID)
 	t.Print()
 }

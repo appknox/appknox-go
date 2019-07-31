@@ -36,15 +36,18 @@ func TestUploadService_CheckSubmission(t *testing.T) {
 		testMethod(t, r, "GET")
 		fmt.Fprint(w, `{"id":1, "file":2}`)
 	})
-
-	file, err := client.Upload.CheckSubmission(context.Background(), 1)
+	mux.HandleFunc("/api/v2/files/2", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		fmt.Fprint(w, `{"id":2}`)
+	})
+	akFile, _, err := client.Upload.CheckSubmission(context.Background(), 1)
 	if err != nil {
 		t.Errorf("Upload.CheckSubmission returned error: %v", err)
 	}
 
-	want := 2
-	if !reflect.DeepEqual(*file, want) {
-		t.Errorf("Upload.CheckSubmission returned %+v, want %+v", *file, want)
+	want := &File{ID: 2}
+	if !reflect.DeepEqual(akFile, want) {
+		t.Errorf("Upload.CheckSubmission returned %+v, want %+v", akFile, want)
 	}
 }
 
@@ -140,6 +143,10 @@ func TestUploadService_UploadFile(t *testing.T) {
 		testMethod(t, r, "GET")
 		fmt.Fprint(w, `{"id":1, "file":2}`)
 	})
+	mux.HandleFunc("/api/v2/files/2", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		fmt.Fprint(w, `{"id":2}`)
+	})
 	mux.HandleFunc("/api/organizations/1/upload_app", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
 			testMethod(t, r, "GET")
@@ -162,13 +169,13 @@ func TestUploadService_UploadFile(t *testing.T) {
 		testBody(t, r, "Upload me !\n")
 	})
 
-	submissionID, err := client.Upload.UploadFile(context.Background(), file)
+	akFile, _, err := client.Upload.UploadFile(context.Background(), file)
 	if err != nil {
 		t.Errorf("Upload.UploadFile returned error: %v", err)
 	}
 
-	want := 2
-	if !reflect.DeepEqual(*submissionID, want) {
-		t.Errorf("Upload.UploadFile returned %+v, want %+v", *submissionID, want)
+	want := &File{ID: 2}
+	if !reflect.DeepEqual(akFile, want) {
+		t.Errorf("Upload.UploadFile returned %+v, want %+v", akFile, want)
 	}
 }
