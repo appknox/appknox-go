@@ -33,10 +33,10 @@ func ProcessFiles(projectID int, versionCode string, offset, limit int) {
 	ctx := context.Background()
 	client := getClient()
 	options := &appknox.FileListOptions{
-		VersionCode: *appknox.String(versionCode),
+		VersionCode: versionCode,
 		ListOptions: appknox.ListOptions{
-			Offset: *appknox.Int(offset),
-			Limit:  *appknox.Int(limit)},
+			Offset: offset,
+			Limit:  limit},
 	}
 	files, _, err := client.Files.ListByProject(ctx, projectID, options)
 	if err != nil {

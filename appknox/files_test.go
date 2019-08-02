@@ -88,10 +88,10 @@ func TestFilesService_ListByProjectWithOptions(t *testing.T) {
 			`{"count":1, "results":[{"version_code":"3"}]}`)
 	})
 	options := &FileListOptions{
-		VersionCode: *String("3"),
+		VersionCode: "3",
 		ListOptions: ListOptions{
-			Offset: *Int(1),
-			Limit:  *Int(1)},
+			Offset: 1,
+			Limit:  1},
 	}
 	files, _, err := client.Files.ListByProject(context.Background(), 1, options)
 	if err != nil {

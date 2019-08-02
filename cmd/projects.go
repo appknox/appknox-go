@@ -14,8 +14,8 @@ var projectsCmd = &cobra.Command{
 		platform := cmd.Flag("platform").Value.String()
 		packageName := cmd.Flag("package_name").Value.String()
 		query := cmd.Flag("query").Value.String()
-		offset, _ := RootCmd.Flags().GetInt("offset")
-		limit, _ := RootCmd.Flags().GetInt("limit")
+		offset, _ := cmd.Flags().GetInt("offset")
+		limit, _ := cmd.Flags().GetInt("limit")
 		helper.ProcessProjects(platform, packageName, query, offset, limit)
 	},
 }
@@ -25,4 +25,6 @@ func init() {
 	projectsCmd.Flags().StringP("platform", "p", "", "Filter with project platform")
 	projectsCmd.Flags().StringP("package_name", "g", "", "Filter with package name")
 	projectsCmd.Flags().StringP("query", "q", "", "Filter with search query")
+	projectsCmd.PersistentFlags().Int("offset", 0, "Filter results with page")
+	projectsCmd.PersistentFlags().Int("limit", 0, "Limit results per page")
 }

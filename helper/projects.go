@@ -25,12 +25,12 @@ func ProcessProjects(platform, packageName, query string, offset, limit int) {
 	ctx := context.Background()
 	client := getClient()
 	options := &appknox.ProjectListOptions{
-		Platform:    *appknox.String(platform),
-		PackageName: *appknox.String(packageName),
-		Search:      *appknox.String(query),
+		Platform:    platform,
+		PackageName: packageName,
+		Search:      query,
 		ListOptions: appknox.ListOptions{
-			Offset: *appknox.Int(offset),
-			Limit:  *appknox.Int(limit)},
+			Offset: offset,
+			Limit:  limit},
 	}
 	projects, _, err := client.Projects.List(ctx, options)
 	if err != nil {

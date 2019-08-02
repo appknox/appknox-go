@@ -2,6 +2,7 @@ package appknox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -12,9 +13,9 @@ type FilesService service
 
 // DRFResponseFile represents for drf response of the Appknox file api.
 type DRFResponseFile struct {
-	Count    *int64  `json:"count,omitempty"`
-	Next     *string `json:"next,omitempty"`
-	Previous *string `json:"previous,omitempty"`
+	Count    int64   `json:"count,omitempty"`
+	Next     string  `json:"next,omitempty"`
+	Previous string  `json:"previous,omitempty"`
 	Results  []*File `json:"results,omitempty"`
 }
 
@@ -28,9 +29,9 @@ type FileResponse struct {
 
 // GetNext returns the next page items for a file.
 func (r *FileResponse) GetNext() ([]*File, *FileResponse, error) {
-	URL := *r.r.Next
+	URL := r.r.Next
 	if URL == "" {
-		err := &Error{Message: *String("There are no next items.")}
+		err := errors.New("there are no next items")
 		return nil, nil, err
 	}
 	req, err := r.s.client.NewRequest("GET", URL, nil)
@@ -53,9 +54,9 @@ func (r *FileResponse) GetNext() ([]*File, *FileResponse, error) {
 
 // GetPrevious returns the previous page items for a file.
 func (r *FileResponse) GetPrevious() ([]*File, *FileResponse, error) {
-	URL := *r.r.Previous
+	URL := r.r.Previous
 	if URL == "" {
-		err := &Error{Message: *String("There are no previous items.")}
+		err := errors.New("there are no previous items")
 		return nil, nil, err
 	}
 	req, err := r.s.client.NewRequest("GET", URL, nil)
