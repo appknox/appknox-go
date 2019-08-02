@@ -1,62 +1,126 @@
 package appknox
 
 import (
-	"bytes"
-	"encoding/json"
-	"io/ioutil"
-	"net/http"
+	"context"
+	"errors"
+	"fmt"
 	"time"
 
-	"github.com/spf13/viper"
+	"github.com/appknox/appknox-go/appknox/enums"
 )
 
-type AnalysesResponse struct {
-	Results []struct {
-		ID            int       `json:"id"`
-		Risk          int       `json:"risk"`
-		Status        int       `json:"status"`
-		CvssVector    string    `json:"cvss_vector"`
-		CvssBase      float64   `json:"cvss_base"`
-		CvssVersion   int       `json:"cvss_version"`
-		Owasp         []string  `json:"owasp"`
-		UpdatedOn     time.Time `json:"updated_on"`
-		Vulnerability struct {
-			ID int `json:"id"`
-		} `json:"vulnerability"`
-	} `json:"results"`
+// AnalysesService handles communication with the analyses related
+// methods of the Appknox API.
+type AnalysesService service
+
+// DRFResponseAnalysis represents for drf response of the Appknox analyses api.
+type DRFResponseAnalysis struct {
+	Count    int         `json:"count,omitempty"`
+	Next     string      `json:"next,omitempty"`
+	Previous string      `json:"previous,omitempty"`
+	Results  []*Analysis `json:"results"`
 }
 
-func Analyses(args []string) (*AnalysesResponse, error) {
-	var buf1 bytes.Buffer
-	var buf2 bytes.Buffer
-	apiBase := viper.GetString("api_base")
-	apiHost := viper.GetString("host")
-	buf1.WriteString(apiHost)
-	buf1.WriteString(apiBase)
-	buf1.WriteString("v2/files/")
-	buf1.WriteString(args[0])
-	buf1.WriteString("/analyses")
+// AnalysisResponse is a wrapper on DRFResponseAnalysis which will help
+// to execute further operations on DRFResponseAnalysis.
+type AnalysisResponse struct {
+	r *DRFResponseAnalysis
+	s *AnalysesService
+	c *context.Context
+}
 
-	url := buf1.String()
-
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
+// GetNext returns the next page items for a analysis.
+func (r *AnalysisResponse) GetNext() ([]*Analysis, *AnalysisResponse, error) {
+	URL := r.r.Next
+	if URL == "" {
+		err := errors.New("there are no next items")
+		return nil, nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	buf2.WriteString("Token ")
-	buf2.WriteString(viper.GetString("access_token"))
-	req.Header.Set("Authorization", buf2.String())
-
-	resp, err := client.Do(req)
+	req, err := r.s.client.NewRequest("GET", URL, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	responseData, err := ioutil.ReadAll(resp.Body)
 
-	var responseObject AnalysesResponse
-	json.Unmarshal(responseData, &responseObject)
-	return &responseObject, nil
+	var drfResponse DRFResponseAnalysis
+	_, err = r.s.client.Do(*r.c, req, &drfResponse)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp := AnalysisResponse{
+		r: &drfResponse,
+		s: r.s,
+		c: r.c,
+	}
+	return drfResponse.Results, &resp, nil
+}
+
+// GetPrevious returns the previous page items for a analysis.
+func (r *AnalysisResponse) GetPrevious() ([]*Analysis, *AnalysisResponse, error) {
+	URL := r.r.Previous
+	if URL == "" {
+		err := errors.New("there are no previous items")
+		return nil, nil, err
+	}
+	req, err := r.s.client.NewRequest("GET", URL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var drfResponse DRFResponseAnalysis
+	_, err = r.s.client.Do(*r.c, req, &drfResponse)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp := AnalysisResponse{
+		r: &drfResponse,
+		s: r.s,
+		c: r.c,
+	}
+	return drfResponse.Results, &resp, nil
+}
+
+// GetCount will return total number of items in the analysis response.
+func (r *AnalysisResponse) GetCount() int {
+	return r.r.Count
+}
+
+// Analysis represents the appknox file analysis.
+type Analysis struct {
+	ID              int                     `json:"id,omitempty"`
+	Risk            enums.RiskType          `json:"risk,omitempty"`
+	Status          enums.AnalysisStateType `json:"status,omitempty"`
+	CvssVector      string                  `json:"cvss_vector,omitempty"`
+	CvssBase        float64                 `json:"cvss_base,omitempty"`
+	CvssVersion     int                     `json:"cvss_version,omitempty"`
+	Owasp           []string                `json:"owasp,omitempty"`
+	UpdatedOn       *time.Time              `json:"updated_on,omitempty"`
+	VulnerabilityID int                     `json:"vulnerability,omitempty"`
+}
+
+// AnalysisListOptions specifies the optional parameters to the
+// AnalysesService.List method.
+type AnalysisListOptions struct {
+	ListOptions
+}
+
+// ListByFile lists the analyses for a file.
+func (s *AnalysesService) ListByFile(ctx context.Context, fileID int, opt *AnalysisListOptions) ([]*Analysis, *AnalysisResponse, error) {
+	u := fmt.Sprintf("api/v2/files/%v/analyses", fileID)
+	URL, err := addOptions(u, opt)
+	req, err := s.client.NewRequest("GET", URL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var drfResponse DRFResponseAnalysis
+	_, err = s.client.Do(ctx, req, &drfResponse)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp := AnalysisResponse{
+		r: &drfResponse,
+		s: s,
+		c: &ctx,
+	}
+	return drfResponse.Results, &resp, nil
 }
