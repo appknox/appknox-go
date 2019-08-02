@@ -53,6 +53,9 @@ type Client struct {
 
 	// Analyses service is used to interact with appknox analyses api.
 	Analyses *AnalysesService
+
+	// Vulnerabilities service is used to interact with appknox vulnerability api.
+	Vulnerabilities *VulnerabilitiesService
 }
 
 // NewClient returns a new appknox API client.
@@ -83,6 +86,7 @@ func NewClient(accessToken string) (*Client, error) {
 	c.Projects = (*ProjectsService)(&c.common)
 	c.Files = (*FilesService)(&c.common)
 	c.Analyses = (*AnalysesService)(&c.common)
+	c.Vulnerabilities = (*VulnerabilitiesService)(&c.common)
 	return c, nil
 }
 

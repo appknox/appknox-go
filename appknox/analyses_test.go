@@ -50,7 +50,6 @@ func TestAnalysesService_ListByFile(t *testing.T) {
 		t.Errorf("Analyses.ListByFile returned %+v, want %+v", analyses, want)
 	}
 }
-
 func TestAnalysesService_ListByFileWithOptions(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()

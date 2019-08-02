@@ -35,8 +35,6 @@ func init() {
 	viper.SetDefault("host", appknox.DefaultAPIHost)
 
 	RootCmd.InitDefaultVersionFlag()
-	RootCmd.PersistentFlags().Int("offset", 0, "Filter results with page")
-	RootCmd.PersistentFlags().Int("limit", 0, "Limit results per page")
 }
 
 // initConfig reads in config file and ENV variables if set.
