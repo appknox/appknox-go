@@ -3,11 +3,10 @@ package helper
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/appknox/appknox-go/appknox"
-	"github.com/landoop/tableprinter"
+	"github.com/cheynewallace/tabby"
 )
 
 // ProjectData represents a struct which will be printed to the CLI.
@@ -36,17 +35,19 @@ func ProcessProjects(platform, packageName, query string, offset, limit int) {
 	if err != nil {
 		fmt.Println(err.Error())
 	}
-	items := []ProjectData{}
+	t := tabby.New()
+	t.AddHeader(
+		"ID", "CREATED-ON", "UPDATED-ON",
+		"PACKAGE-NAME", "PLATFORM", "FILE-COUNT")
 	for i := 0; i < len(projects); i++ {
-		items = append(items,
-			ProjectData{
-				projects[i].ID,
-				projects[i].CreatedOn,
-				projects[i].UpdatedOn,
-				projects[i].PackageName,
-				projects[i].Platform,
-				projects[i].FileCount,
-			})
+		t.AddLine(
+			projects[i].ID,
+			projects[i].CreatedOn,
+			projects[i].UpdatedOn,
+			projects[i].PackageName,
+			projects[i].Platform,
+			projects[i].FileCount,
+		)
 	}
-	tableprinter.Print(os.Stdout, items)
+	t.Print()
 }

@@ -3,30 +3,10 @@ package helper
 import (
 	"context"
 	"fmt"
-	"os"
-	"time"
 
 	"github.com/appknox/appknox-go/appknox"
-	"github.com/landoop/tableprinter"
+	"github.com/cheynewallace/tabby"
 )
-
-// FileData represents a struct which will be printed to the CLI.
-type FileData struct {
-	ID                 int       `header:"id"`
-	Name               string    `header:"name"`
-	Version            string    `header:"version"`
-	VersionCode        string    `header:"version-code"`
-	DynamicStatus      int       `header:"dynamic-status"`
-	APIScanProgress    int       `header:"api-scan-progress"`
-	IsStaticDone       bool      `header:"is-static-done"`
-	IsDynamicDone      bool      `header:"is-dynamic-done"`
-	StaticScanProgress int       `header:"static-scan-progress"`
-	APIScanStatus      int       `header:"api-scan-status"`
-	Rating             string    `header:"rating"`
-	IsManualDone       bool      `header:"is-manual-done"`
-	IsAPIDone          bool      `header:"is-api-done"`
-	CreatedOn          time.Time `header:"created-on"`
-}
 
 // ProcessFiles takes the list of files and print it to CLI.
 func ProcessFiles(projectID int, versionCode string, offset, limit int) {
@@ -42,25 +22,30 @@ func ProcessFiles(projectID int, versionCode string, offset, limit int) {
 	if err != nil {
 		fmt.Println(err.Error())
 	}
-	items := []FileData{}
+	t := tabby.New()
+	t.AddHeader(
+		"ID", "NAME", "VERSION",
+		"VERSION-CODE", "DYNAMIC-STATUS", "API-SCAN-PROGRESS",
+		"IS-STATIC-DONE", "IS-DYNAMIC-DONE", "STATIC-SCAN-PROGRESS",
+		"API-SCAN-STATUS", "RATING", "IS-MANUAL-DONE", "IS-API-DONE",
+		"CREATED-ON")
 	for i := 0; i < len(files); i++ {
-		items = append(items,
-			FileData{
-				files[i].ID,
-				files[i].Name,
-				files[i].Version,
-				files[i].VersionCode,
-				files[i].DynamicStatus,
-				files[i].APIScanProgress,
-				files[i].IsStaticDone,
-				files[i].IsDynamicDone,
-				files[i].StaticScanProgress,
-				files[i].APIScanStatus,
-				files[i].Rating,
-				files[i].IsManualDone,
-				files[i].IsAPIDone,
-				*files[i].CreatedOn,
-			})
+		t.AddLine(
+			files[i].ID,
+			files[i].Name,
+			files[i].Version,
+			files[i].VersionCode,
+			files[i].DynamicStatus,
+			files[i].APIScanProgress,
+			files[i].IsStaticDone,
+			files[i].IsDynamicDone,
+			files[i].StaticScanProgress,
+			files[i].APIScanStatus,
+			files[i].Rating,
+			files[i].IsManualDone,
+			files[i].IsAPIDone,
+			*files[i].CreatedOn,
+		)
 	}
-	tableprinter.Print(os.Stdout, items)
+	t.Print()
 }
