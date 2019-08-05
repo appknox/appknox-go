@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/appknox/appknox-go/appknox"
+	"github.com/appknox/appknox-go/appknox/enums"
 	"github.com/cheynewallace/tabby"
 )
 
@@ -45,7 +46,7 @@ func ProcessProjects(platform, packageName, query string, offset, limit int) {
 			projects[i].CreatedOn,
 			projects[i].UpdatedOn,
 			projects[i].PackageName,
-			projects[i].Platform,
+			enums.Platform(projects[i].Platform),
 			projects[i].FileCount,
 		)
 	}

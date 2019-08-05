@@ -230,15 +230,6 @@ func (r *ErrorResponse) Error() string {
 		r.Response.StatusCode, r.Detail)
 }
 
-// Error is custom error object.
-type Error struct {
-	Message string `json:"message"`
-}
-
-func (e *Error) Error() string {
-	return fmt.Sprintf("Error: %s", e.Message)
-}
-
 // CheckResponse checks the API response for errors, and returns them if
 // present. A response is considered an error if it has a status code outside
 // the 200 range or equal to 202 Accepted.
