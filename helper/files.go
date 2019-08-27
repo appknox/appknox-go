@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/appknox/appknox-go/appknox"
-	"github.com/appknox/appknox-go/appknox/enums"
 	"github.com/cheynewallace/tabby"
 )
 
@@ -36,12 +35,12 @@ func ProcessFiles(projectID int, versionCode string, offset, limit int) {
 			files[i].Name,
 			files[i].Version,
 			files[i].VersionCode,
-			enums.DynamicScanState(files[i].DynamicStatus),
+			files[i].DynamicStatus,
 			files[i].APIScanProgress,
 			files[i].IsStaticDone,
 			files[i].IsDynamicDone,
 			files[i].StaticScanProgress,
-			enums.APIScanState(files[i].APIScanStatus),
+			files[i].APIScanStatus,
 			files[i].Rating,
 			files[i].IsManualDone,
 			files[i].IsAPIDone,

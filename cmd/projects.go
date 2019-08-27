@@ -25,6 +25,6 @@ func init() {
 	projectsCmd.Flags().StringP("platform", "p", "", "Filter with project platform")
 	projectsCmd.Flags().StringP("package_name", "g", "", "Filter with package name")
 	projectsCmd.Flags().StringP("query", "q", "", "Filter with search query")
-	projectsCmd.PersistentFlags().Int("offset", 0, "Filter results with page")
-	projectsCmd.PersistentFlags().Int("limit", 0, "Limit results per page")
+	projectsCmd.Flags().Int("offset", 0, "Filter results with page")
+	projectsCmd.Flags().Int("limit", 0, "Limit results per page")
 }

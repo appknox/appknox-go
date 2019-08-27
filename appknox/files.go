@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/appknox/appknox-go/appknox/enums"
 )
 
 // FilesService handles communication with the file related
@@ -79,20 +81,20 @@ func (r *FileResponse) GetPrevious() ([]*File, *FileResponse, error) {
 
 // File represents a Appknox file.
 type File struct {
-	ID                 int        `json:"id,omitempty"`
-	Name               string     `json:"name,omitempty"`
-	Version            string     `json:"version,omitempty"`
-	VersionCode        string     `json:"version_code,omitempty"`
-	DynamicStatus      int        `json:"dynamic_status,omitempty"`
-	APIScanProgress    int        `json:"api_scan_progress,omitempty"`
-	IsStaticDone       bool       `json:"is_static_done,omitempty"`
-	IsDynamicDone      bool       `json:"is_dynamic_done,omitempty"`
-	StaticScanProgress int        `json:"static_scan_progress,omitempty"`
-	APIScanStatus      int        `json:"api_scan_status,omitempty"`
-	Rating             string     `json:"rating,omitempty"`
-	IsManualDone       bool       `json:"is_manual_done,omitempty"`
-	IsAPIDone          bool       `json:"is_api_done,omitempty"`
-	CreatedOn          *time.Time `json:"created_on,omitempty"`
+	ID                 int                        `json:"id,omitempty"`
+	Name               string                     `json:"name,omitempty"`
+	Version            string                     `json:"version,omitempty"`
+	VersionCode        string                     `json:"version_code,omitempty"`
+	DynamicStatus      enums.DynamicScanStateType `json:"dynamic_status,omitempty"`
+	APIScanProgress    int                        `json:"api_scan_progress,omitempty"`
+	IsStaticDone       bool                       `json:"is_static_done,omitempty"`
+	IsDynamicDone      bool                       `json:"is_dynamic_done,omitempty"`
+	StaticScanProgress int                        `json:"static_scan_progress,omitempty"`
+	APIScanStatus      enums.APIScanStateType     `json:"api_scan_status,omitempty"`
+	Rating             string                     `json:"rating,omitempty"`
+	IsManualDone       bool                       `json:"is_manual_done,omitempty"`
+	IsAPIDone          bool                       `json:"is_api_done,omitempty"`
+	CreatedOn          *time.Time                 `json:"created_on,omitempty"`
 }
 
 // FileListOptions specifies the optional parameters to the

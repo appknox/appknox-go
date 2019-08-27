@@ -24,7 +24,7 @@ var filesCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		projectID, err := strconv.Atoi(args[0])
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("valid project id is required")
 			os.Exit(1)
 		}
 		versionCode := cmd.Flag("version_code").Value.String()
@@ -37,6 +37,6 @@ var filesCmd = &cobra.Command{
 func init() {
 	RootCmd.AddCommand(filesCmd)
 	filesCmd.Flags().StringP("version_code", "v", "", "Filter files with version code.")
-	filesCmd.PersistentFlags().Int("offset", 0, "Filter results with page")
-	filesCmd.PersistentFlags().Int("limit", 0, "Limit results per page")
+	filesCmd.Flags().Int("offset", 0, "Filter results with page")
+	filesCmd.Flags().Int("limit", 0, "Limit results per page")
 }

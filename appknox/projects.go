@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/appknox/appknox-go/appknox/enums"
 )
 
 // ProjectsService handles communication with the project related
@@ -80,12 +82,12 @@ func (r *ProjectResponse) GetPrevious() ([]*Project, *ProjectResponse, error) {
 
 // Project represents a Appknox project.
 type Project struct {
-	ID          int        `json:"id,omitempty"`
-	CreatedOn   *time.Time `json:"created_on,omitempty"`
-	UpdatedOn   *time.Time `json:"updated_on,omitempty"`
-	PackageName string     `json:"package_name,omitempty"`
-	Platform    int        `json:"platform,omitempty"`
-	FileCount   int        `json:"file_count,omitempty"`
+	ID          int                `json:"id,omitempty"`
+	CreatedOn   *time.Time         `json:"created_on,omitempty"`
+	UpdatedOn   *time.Time         `json:"updated_on,omitempty"`
+	PackageName string             `json:"package_name,omitempty"`
+	Platform    enums.PlatformType `json:"platform,omitempty"`
+	FileCount   int                `json:"file_count,omitempty"`
 }
 
 // ProjectListOptions specifies the optional parameters to the
