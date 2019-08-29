@@ -2,9 +2,12 @@ package appknox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/appknox/appknox-go/appknox/enums"
 )
 
 // ProjectsService handles communication with the project related
@@ -31,7 +34,7 @@ type ProjectResponse struct {
 func (r *ProjectResponse) GetNext() ([]*Project, *ProjectResponse, error) {
 	URL := r.r.Next
 	if URL == "" {
-		err := &Error{Message: *String("There are no next items.")}
+		err := errors.New("there are no next items")
 		return nil, nil, err
 	}
 	req, err := r.s.client.NewRequest("GET", URL, nil)
@@ -56,7 +59,7 @@ func (r *ProjectResponse) GetNext() ([]*Project, *ProjectResponse, error) {
 func (r *ProjectResponse) GetPrevious() ([]*Project, *ProjectResponse, error) {
 	URL := r.r.Previous
 	if URL == "" {
-		err := &Error{Message: *String("There are no previous items.")}
+		err := errors.New("there are no previous items")
 		return nil, nil, err
 	}
 	req, err := r.s.client.NewRequest("GET", URL, nil)
@@ -79,12 +82,12 @@ func (r *ProjectResponse) GetPrevious() ([]*Project, *ProjectResponse, error) {
 
 // Project represents a Appknox project.
 type Project struct {
-	ID          int        `json:"id,omitempty"`
-	CreatedOn   *time.Time `json:"created_on,omitempty"`
-	UpdatedOn   *time.Time `json:"updated_on,omitempty"`
-	PackageName string     `json:"package_name,omitempty"`
-	Platform    int        `json:"platform,omitempty"`
-	FileCount   int        `json:"file_count,omitempty"`
+	ID          int                `json:"id,omitempty"`
+	CreatedOn   *time.Time         `json:"created_on,omitempty"`
+	UpdatedOn   *time.Time         `json:"updated_on,omitempty"`
+	PackageName string             `json:"package_name,omitempty"`
+	Platform    enums.PlatformType `json:"platform,omitempty"`
+	FileCount   int                `json:"file_count,omitempty"`
 }
 
 // ProjectListOptions specifies the optional parameters to the

@@ -1,9 +1,6 @@
 package cmd
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -20,10 +17,7 @@ var RootCmd = &cobra.Command{
 
 // Execute will execute the root commands
 func Execute() {
-	if err := RootCmd.Execute(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+	RootCmd.Execute()
 }
 
 func init() {
@@ -41,8 +35,6 @@ func init() {
 	viper.SetDefault("host", appknox.DefaultAPIHost)
 
 	RootCmd.InitDefaultVersionFlag()
-	RootCmd.PersistentFlags().Int("offset", 0, "Filter results with page")
-	RootCmd.PersistentFlags().Int("limit", 0, "Limit results per page")
 }
 
 // initConfig reads in config file and ENV variables if set.

@@ -74,37 +74,41 @@ func (s *UploadService) UploadFileUsingReader(ctx context.Context, file io.Reade
 }
 
 // UploadFile is used to upload a file to appknox dashboard.
-// Returns the fileID.
-func (s *UploadService) UploadFile(ctx context.Context, file *os.File) (*int, error) {
+// Returns the file object.
+func (s *UploadService) UploadFile(ctx context.Context, file *os.File) (*File, *Response, error) {
 	stat, err := file.Stat()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	fileSize := stat.Size()
 	submissionID, err := s.UploadFileUsingReader(ctx, file, fileSize)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	return s.CheckSubmission(ctx, *submissionID)
 }
 
-// CheckSubmission will check submission validation and return a valid fileID.
-func (s *UploadService) CheckSubmission(ctx context.Context, submissionID int) (*int, error) {
+// CheckSubmission will check submission validation and return a valid file object.
+func (s *UploadService) CheckSubmission(ctx context.Context, submissionID int) (*File, *Response, error) {
 	start := time.Now()
 	var fileID int
 	for fileID == 0 {
 		submission, _, err := s.client.Submissions.GetByID(ctx, submissionID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		reason := submission.Reason
 		if reason != "" {
-			return nil, errors.New(reason)
+			return nil, nil, errors.New(reason)
 		}
 		if time.Since(start) > 10*time.Second {
-			return nil, errors.New("Request timed out")
+			return nil, nil, errors.New("Request timed out")
 		}
 		fileID = submission.File
 	}
-	return &fileID, nil
+	file, resp, err := s.client.Files.GetByID(ctx, fileID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return file, resp, nil
 }

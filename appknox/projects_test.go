@@ -66,12 +66,12 @@ func TestProjectsService_ListWithOptions(t *testing.T) {
 		fmt.Fprint(w, `{"count": 1, "results":[{"id":1}]}`)
 	})
 	options := &ProjectListOptions{
-		Platform:    *String("0"),
-		PackageName: *String("com.appknox.mfva"),
-		Search:      *String("com."),
+		Platform:    "0",
+		PackageName: "com.appknox.mfva",
+		Search:      "com.",
 		ListOptions: ListOptions{
-			Offset: *Int(1),
-			Limit:  *Int(1)},
+			Offset: 1,
+			Limit:  1},
 	}
 	projects, _, err := client.Projects.List(context.Background(), options)
 	if err != nil {
