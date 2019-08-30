@@ -50,6 +50,9 @@ type Client struct {
 
 	// Files service is used to interact with appknox file api.
 	Files *FilesService
+
+	// Analyses service is used to interact with appknox analyses api.
+	Analyses *AnalysesService
 }
 
 // NewClient returns a new appknox API client.
@@ -79,6 +82,7 @@ func NewClient(accessToken string) (*Client, error) {
 	c.Submissions = (*SubmissionsService)(&c.common)
 	c.Projects = (*ProjectsService)(&c.common)
 	c.Files = (*FilesService)(&c.common)
+	c.Analyses = (*AnalysesService)(&c.common)
 	return c, nil
 }
 

@@ -90,7 +90,7 @@ type File struct {
 	IsStaticDone       bool                       `json:"is_static_done,omitempty"`
 	IsDynamicDone      bool                       `json:"is_dynamic_done,omitempty"`
 	StaticScanProgress int                        `json:"static_scan_progress,omitempty"`
-	APIScanStatus      enums.APIScanStateType     `json:"api_scan_status,omitempty"`
+	APIScanStatus      enums.AnalysisStateType    `json:"api_scan_status,omitempty"`
 	Rating             string                     `json:"rating,omitempty"`
 	IsManualDone       bool                       `json:"is_manual_done,omitempty"`
 	IsAPIDone          bool                       `json:"is_api_done,omitempty"`
