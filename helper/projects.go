@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/appknox/appknox-go/appknox"
@@ -33,7 +34,8 @@ func ProcessProjects(platform, packageName, query string, offset, limit int) {
 	}
 	projects, _, err := client.Projects.List(ctx, options)
 	if err != nil {
-		fmt.Println(err.Error())
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	t := tabby.New()
 	t.AddHeader(

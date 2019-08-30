@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/cheynewallace/tabby"
@@ -20,7 +21,8 @@ func ProcessFiles(projectID int, versionCode string, offset, limit int) {
 	}
 	files, _, err := client.Files.ListByProject(ctx, projectID, options)
 	if err != nil {
-		fmt.Println(err.Error())
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	t := tabby.New()
 	t.AddHeader(

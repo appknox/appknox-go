@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/cheynewallace/tabby"
@@ -20,7 +21,8 @@ func ProcessAnalyses(fileID int) {
 	}
 	finalAnalyses, _, err := client.Analyses.ListByFile(ctx, fileID, options)
 	if err != nil {
-		fmt.Println(err.Error())
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	t := tabby.New()
 	t.AddHeader(
