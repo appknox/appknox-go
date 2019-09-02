@@ -20,6 +20,7 @@ func ProcessUpload(file *os.File) {
 	p := mpb.New(
 		mpb.WithWidth(60),
 		mpb.WithRefreshRate(180*time.Millisecond),
+		mpb.WithOutput(os.Stderr),
 	)
 	bar := p.AddBar(fileSize, mpb.BarStyle("[=>-|"),
 		mpb.PrependDecorators(
@@ -34,15 +35,15 @@ func ProcessUpload(file *os.File) {
 	filewithbar := bar.ProxyReader(file)
 	submissionID, err := client.Upload.UploadFileUsingReader(ctx, filewithbar, fileSize)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	akFile, _, err := client.Upload.CheckSubmission(ctx, *submissionID)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	t := tabby.New()
-	t.AddLine("FileID: ", akFile.ID)
+	t.AddLine(akFile.ID)
 	t.Print()
 }
