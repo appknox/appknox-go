@@ -27,6 +27,6 @@ func ProcessOrganizations() {
 	t := tabby.New()
 	t.AddLine("ID: ", organizations[0].ID)
 	t.AddLine("Username: ", organizations[0].Name)
-	t.AddLine("Email: ", organizations[0].ProjectsCount)
+	t.AddLine("ProjectsCount: ", organizations[0].ProjectsCount)
 	t.Print()
 }
