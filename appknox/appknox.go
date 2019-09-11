@@ -56,6 +56,9 @@ type Client struct {
 
 	// Vulnerabilities service is used to interact with appknox vulnerability api.
 	Vulnerabilities *VulnerabilitiesService
+
+	// OWASP service is used to interact with appknox owasp api.
+	OWASP *OWASPService
 }
 
 // NewClient returns a new appknox API client.
@@ -87,6 +90,7 @@ func NewClient(accessToken string) (*Client, error) {
 	c.Files = (*FilesService)(&c.common)
 	c.Analyses = (*AnalysesService)(&c.common)
 	c.Vulnerabilities = (*VulnerabilitiesService)(&c.common)
+	c.OWASP = (*OWASPService)(&c.common)
 	return c, nil
 }
 
