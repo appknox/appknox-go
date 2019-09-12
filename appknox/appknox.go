@@ -59,6 +59,9 @@ type Client struct {
 
 	// OWASP service is used to interact with appknox owasp api.
 	OWASP *OWASPService
+
+	// Organizaions service is used to interact with appknox organizations api.
+	Organizations *OrganizationsService
 }
 
 // NewClient returns a new appknox API client.
@@ -91,6 +94,7 @@ func NewClient(accessToken string) (*Client, error) {
 	c.Analyses = (*AnalysesService)(&c.common)
 	c.Vulnerabilities = (*VulnerabilitiesService)(&c.common)
 	c.OWASP = (*OWASPService)(&c.common)
+	c.Organizations = (*OrganizationsService)(&c.common)
 	return c, nil
 }
 
@@ -240,6 +244,15 @@ func (r *ErrorResponse) Error() string {
 	return fmt.Sprintf("%v %v: %d %v",
 		r.Response.Request.Method, sanitizeURL(r.Response.Request.URL),
 		r.Response.StatusCode, r.Detail)
+}
+
+// Error is custom error object.
+type Error struct {
+	Message string `json:"message"`
+}
+
+func (e *Error) Error() string {
+	return fmt.Sprintf("Error: %s", e.Message)
 }
 
 // CheckResponse checks the API response for errors, and returns them if

@@ -1,52 +1,53 @@
 package appknox
 
 import (
-	"bytes"
-	"encoding/json"
-	"io/ioutil"
-	"net/http"
-
-	"github.com/spf13/viper"
+	"context"
+	"fmt"
 )
 
-type OrgResponse struct {
-	Results []struct {
-		ID   int    `json:"id"`
-		Name string `json:"name"`
-	} `json:"results"`
+// OrganizationsService is used to interact with appknox owasp api.
+type OrganizationsService service
+
+// DRFResponseOrganization represents for drf response of the Appknox organizations api.
+type DRFResponseOrganization struct {
+	Count    int64           `json:"count,omitempty"`
+	Next     string          `json:"next,omitempty"`
+	Previous string          `json:"previous,omitempty"`
+	Results  []*Organization `json:"results,omitempty"`
 }
 
-func Organizations() (*OrgResponse, error) {
-	token := viper.GetString("token")
-	userID := viper.GetString("user_id")
-	var buf1 bytes.Buffer
-	apiBase := viper.GetString("api_base")
-	apiHost := viper.GetString("host")
-	buf1.WriteString(apiHost)
-	buf1.WriteString(apiBase)
-	buf1.WriteString("organizations")
-	url := buf1.String()
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	q := req.URL.Query()
-	q.Add("token", token)
-	q.Add("user", userID)
-	req.URL.RawQuery = q.Encode()
+// Organization represents a Appknox organization object.
+type Organization struct {
+	ID            int    `json:"id,omitempty"`
+	Name          string `json:"name,omitempty"`
+	ProjectsCount int    `json:"projects_count,omitempty"`
+}
 
-	resp, err := http.Get(req.URL.String())
+// OrganizationResponse is a wrapper on DRFResponseOrganization which will help
+// to execute further operations on DRFResponseOrganization.
+type OrganizationResponse struct {
+	r *DRFResponseOrganization
+	s *OrganizationsService
+	c *context.Context
+}
 
+// List lists organizations for the current user.
+func (s *OrganizationsService) List(ctx context.Context) ([]*Organization, *OrganizationResponse, error) {
+	u := fmt.Sprintf("api/organizations")
+	req, err := s.client.NewRequest("GET", u, nil)
 	if err != nil {
-		return nil, err
-	}
-	responseData, err := ioutil.ReadAll(resp.Body)
-
-	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	var responseObject OrgResponse
-	json.Unmarshal(responseData, &responseObject)
-	return &responseObject, nil
+	var drfResponse DRFResponseOrganization
+	_, err = s.client.Do(ctx, req, &drfResponse)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp := OrganizationResponse{
+		r: &drfResponse,
+		s: s,
+		c: &ctx,
+	}
+	return drfResponse.Results, &resp, nil
 }
