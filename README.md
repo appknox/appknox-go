@@ -107,7 +107,7 @@ $ appknox files 4
 
 - **Upload a file and do cicheck based on the risk threshold**
 
-$ appknox upload ~/Downloads/mfva.apk | xargs appknox cicheck --risk_threshold low
+$ appknox upload ~/Downloads/mfva.apk | xargs appknox cicheck --risk-threshold low
 
 2.3 MiB / 2.3 MiB [==========================================================| 00:00 ] 226.28 KiB/s
 Static Scan Progress:  100 % [==========================================================| ]
