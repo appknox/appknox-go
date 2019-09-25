@@ -1,6 +1,10 @@
 package cmd
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -49,8 +53,18 @@ func initConfig() {
 	}
 
 	viper.AutomaticEnv()
+
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil {
 		// log.Println("Using config file:", viper.ConfigFileUsed())
+	} else {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Printf(err.Error())
+			os.Exit(1)
+		}
+		path := "/.config/appknox.json"
+		file := filepath.Join(homeDir, path)
+		os.Create(file)
 	}
 }
