@@ -98,6 +98,15 @@ func NewClient(accessToken string) (*Client, error) {
 	return c, nil
 }
 
+// SetProxy sets the proxy to the existing client
+func (c *Client) SetProxy(proxyURL *url.URL) *Client {
+	tr := &http.Transport{
+		Proxy: http.ProxyURL(proxyURL),
+	}
+	c.client.Transport = tr
+	return c
+}
+
 type service struct {
 	client *Client
 }

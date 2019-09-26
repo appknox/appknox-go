@@ -38,6 +38,16 @@ func init() {
 	viper.BindEnv("host")
 	viper.SetDefault("host", appknox.DefaultAPIHost)
 
+	RootCmd.PersistentFlags().String("proxy", "", "proxy url")
+	viper.BindPFlag("proxy", RootCmd.PersistentFlags().Lookup("proxy"))
+	viper.BindEnv("proxy")
+	viper.SetDefault("proxy", "")
+
+	RootCmd.PersistentFlags().String("pac", "", "pac file path or url")
+	viper.BindPFlag("pac", RootCmd.PersistentFlags().Lookup("pac"))
+	viper.BindEnv("pac")
+	viper.SetDefault("pac", "")
+
 	RootCmd.InitDefaultVersionFlag()
 }
 
