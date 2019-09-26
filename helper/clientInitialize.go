@@ -3,10 +3,13 @@ package helper
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/appknox/appknox-go/appknox"
+	"github.com/jackwakefield/gopac"
 	"github.com/spf13/viper"
 )
 
@@ -35,6 +38,12 @@ func getClient() *appknox.Client {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+	proxyURL, err := GetProxy()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	client = client.SetProxy(proxyURL)
 	baseHost, err := url.Parse(host)
 	if err != nil {
 		fmt.Println(err)
@@ -61,4 +70,45 @@ func CheckToken() (*appknox.Me, error) {
 	client.BaseURL = baseHost
 	me, _, err := client.Me.CurrentAuthenticatedUser(ctx)
 	return me, err
+}
+
+// GetProxy return the proxy url if proxy is set.
+func GetProxy() (*url.URL, error) {
+	host := viper.GetString("host")
+	pac := viper.GetString("pac")
+	if pac == "" {
+		proxy := viper.GetString("proxy")
+		if proxy == "" {
+			return nil, nil
+		}
+		proxyURL, errParse := url.Parse(proxy)
+		if errParse != nil {
+			return nil, errParse
+		}
+		return proxyURL, nil
+	}
+	parser := new(gopac.Parser)
+	if err := parser.ParseUrl(pac); err != nil {
+		log.Fatalf("Failed to parse PAC (%s)", err)
+	}
+	result, errResult := parser.FindProxy("", host)
+
+	if errResult != nil {
+		return nil, errResult
+	}
+
+	if strings.Contains(result, "DIRECT") {
+		return nil, nil
+	}
+
+	var urlProxy string
+
+	host = strings.Replace(result, "PROXY ", "", -1)
+	urlProxy = "http://" + host
+
+	proxyURL, errParse := url.Parse(urlProxy)
+	if errParse != nil {
+		return nil, errResult
+	}
+	return proxyURL, nil
 }
