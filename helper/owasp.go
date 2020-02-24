@@ -2,7 +2,6 @@ package helper
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	"github.com/cheynewallace/tabby"
@@ -14,7 +13,7 @@ func ProcessOwasp(owaspID string) {
 	client := getClient()
 	owasp, _, err := client.OWASP.GetByID(ctx, owaspID)
 	if err != nil {
-		fmt.Println(err)
+		PrintError(err)
 		os.Exit(1)
 	}
 	t := tabby.New()

@@ -2,7 +2,6 @@ package helper
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	"github.com/cheynewallace/tabby"
@@ -21,7 +20,7 @@ func ProcessOrganizations() {
 	client := getClient()
 	organizations, _, err := client.Organizations.List(ctx)
 	if err != nil {
-		fmt.Println(err.Error())
+		PrintError(err.Error())
 		os.Exit(1)
 	}
 	t := tabby.New()

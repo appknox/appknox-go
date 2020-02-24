@@ -2,7 +2,6 @@ package helper
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	"github.com/appknox/appknox-go/appknox"
@@ -21,7 +20,7 @@ type MeData struct {
 func ProcessMe() {
 	me, err := GetMe()
 	if err != nil {
-		fmt.Println(err)
+		PrintError(err)
 		os.Exit(1)
 	}
 	t := tabby.New()

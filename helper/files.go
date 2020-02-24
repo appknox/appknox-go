@@ -2,7 +2,6 @@ package helper
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	"github.com/appknox/appknox-go/appknox"
@@ -21,7 +20,7 @@ func ProcessFiles(projectID int, versionCode string, offset, limit int) {
 	}
 	files, _, err := client.Files.ListByProject(ctx, projectID, options)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		PrintError(err)
 		os.Exit(1)
 	}
 	t := tabby.New()

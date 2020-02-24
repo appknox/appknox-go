@@ -136,5 +136,5 @@ func (s *FilesService) GetByID(ctx context.Context, fileID int) (*File, *Respons
 	}
 	var fileResponse File
 	resp, err := s.client.Do(ctx, req, &fileResponse)
-	return &fileResponse, resp, nil
+	return &fileResponse, resp, err
 }
