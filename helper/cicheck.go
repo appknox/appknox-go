@@ -3,7 +3,6 @@ package helper
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"time"
 
@@ -39,14 +38,14 @@ func ProcessCiCheck(fileID, riskThreshold int) {
 	for staticScanProgess < 100 {
 		file, _, err := client.Files.GetByID(ctx, fileID)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			PrintError(err)
 			os.Exit(1)
 		}
 		staticScanProgess = file.StaticScanProgress
 		bar.SetCurrent(int64(staticScanProgess), time.Since(start))
 		if time.Since(start) > 15*time.Minute {
 			err := errors.New("Request timed out")
-			fmt.Fprintln(os.Stderr, err)
+			PrintError(err)
 			os.Exit(1)
 		}
 	}
@@ -59,7 +58,7 @@ func ProcessCiCheck(fileID, riskThreshold int) {
 	}
 	finalAnalyses, _, err := client.Analyses.ListByFile(ctx, fileID, options)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		PrintError(err)
 		os.Exit(1)
 	}
 	var foundVulnerability bool
@@ -74,7 +73,7 @@ func ProcessCiCheck(fileID, riskThreshold int) {
 			vulnerabilityID := finalAnalyses[i].VulnerabilityID
 			vulnerability, _, err := client.Vulnerabilities.GetByID(ctx, vulnerabilityID)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
+				PrintError(err)
 				os.Exit(1)
 			}
 			t.AddLine(
@@ -88,14 +87,14 @@ func ProcessCiCheck(fileID, riskThreshold int) {
 		}
 	}
 	if foundVulnerability {
-		fmt.Println(
+		PrintError(
 			"Found vulnerabilities with risk threshold greater or equal than the provided:", enums.RiskType(riskThreshold))
-		fmt.Println("")
+		PrintError("")
 		t.Print()
-		fmt.Println("")
+		PrintError("")
 		os.Exit(1)
 	} else {
-		fmt.Println(
+		PrintError(
 			"No vulnerabilities found with risk threshold greater or equal than the provided:", enums.RiskType(riskThreshold))
 	}
 }

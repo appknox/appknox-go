@@ -2,7 +2,6 @@ package helper
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"time"
 
@@ -35,12 +34,12 @@ func ProcessUpload(file *os.File) {
 	filewithbar := bar.ProxyReader(file)
 	submissionID, err := client.Upload.UploadFileUsingReader(ctx, filewithbar, fileSize)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		PrintError(err)
 		os.Exit(1)
 	}
 	akFile, _, err := client.Upload.CheckSubmission(ctx, *submissionID)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		PrintError(err)
 		os.Exit(1)
 	}
 	t := tabby.New()

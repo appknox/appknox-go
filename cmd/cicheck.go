@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -25,7 +24,8 @@ var cicheckCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fileID, err := strconv.Atoi(args[0])
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			err := errors.New("Valid file id is required")
+			helper.PrintError(err)
 			os.Exit(1)
 		}
 		riskThreshold, _ := cmd.Flags().GetString("risk-threshold")
@@ -42,7 +42,7 @@ var cicheckCmd = &cobra.Command{
 			riskThresholdInt = 4
 		default:
 			err := errors.New("valid risk threshold is required")
-			fmt.Fprintln(os.Stderr, err)
+			helper.PrintError(err)
 			os.Exit(1)
 		}
 		helper.ProcessCiCheck(fileID, riskThresholdInt)
