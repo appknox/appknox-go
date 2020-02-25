@@ -31,7 +31,7 @@ func ProcessAnalyses(fileID int) {
 	for i := 0; i < len(finalAnalyses); i++ {
 		t.AddLine(
 			finalAnalyses[i].ID,
-			finalAnalyses[i].Risk,
+			finalAnalyses[i].ComputedRisk,
 			finalAnalyses[i].Status,
 			finalAnalyses[i].CvssVector,
 			finalAnalyses[i].CvssBase,

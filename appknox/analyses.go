@@ -88,6 +88,8 @@ func (r *AnalysisResponse) GetCount() int {
 type Analysis struct {
 	ID              int                     `json:"id,omitempty"`
 	Risk            enums.RiskType          `json:"risk,omitempty"`
+	OverRiddenRisk  enums.RiskType          `json:"overridden_risk,omitempty"`
+	ComputedRisk    enums.RiskType          `json:"computed_risk,omitempty"`
 	Status          enums.AnalysisStateType `json:"status,omitempty"`
 	CvssVector      string                  `json:"cvss_vector,omitempty"`
 	CvssBase        float64                 `json:"cvss_base,omitempty"`

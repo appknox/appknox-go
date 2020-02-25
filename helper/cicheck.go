@@ -68,7 +68,7 @@ func ProcessCiCheck(fileID, riskThreshold int) {
 		"CVSS-BASE", "VULNERABILITY-ID",
 		"VULNERABILITY-NAME")
 	for i := 0; i < len(finalAnalyses); i++ {
-		if int(finalAnalyses[i].Risk) >= riskThreshold {
+		if int(finalAnalyses[i].ComputedRisk) >= riskThreshold {
 			foundVulnerability = true
 			vulnerabilityID := finalAnalyses[i].VulnerabilityID
 			vulnerability, _, err := client.Vulnerabilities.GetByID(ctx, vulnerabilityID)
@@ -78,7 +78,7 @@ func ProcessCiCheck(fileID, riskThreshold int) {
 			}
 			t.AddLine(
 				finalAnalyses[i].ID,
-				finalAnalyses[i].Risk,
+				finalAnalyses[i].ComputedRisk,
 				finalAnalyses[i].CvssVector,
 				finalAnalyses[i].CvssBase,
 				vulnerabilityID,
