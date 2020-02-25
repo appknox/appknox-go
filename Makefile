@@ -6,7 +6,7 @@ VERSION := $(shell git describe --tags)
 BUILD := $(shell git rev-parse --short HEAD)
 PROJECTNAME := $(shell basename "$(PWD)")
 SOURCES = $(shell find . -maxdepth 3 -name '*.go' '!' -name '*_test.go')
-LDFLAGS := -X main.version=${VERSION} -X main.commit=${BUILD}
+LDFLAGS := -X main.version=${VERSION} -X main.commit=${BUILD} -s -w
 
 bin/appknox-Darwin-x86_64: $(SOURCES)
 	GO111MODULE=on GOOS=darwin GOARCH=amd64 go build -o bin/appknox-Darwin-x86_64 -ldflags="$(LDFLAGS)"
