@@ -13,6 +13,8 @@ func TestAnalyses_marshall(t *testing.T) {
 	u := &Analysis{
 		ID:              1,
 		Risk:            2,
+		OverRiddenRisk:  1,
+		ComputedRisk:    2,
 		Status:          3,
 		CvssVector:      "c",
 		CvssBase:        1.01,
@@ -22,6 +24,8 @@ func TestAnalyses_marshall(t *testing.T) {
 	want := `{
 		"id": 1,
 		"risk": 2,
+		"overridden_risk": 1,
+		"computed_risk": 2,
 		"status": 3,
 		"cvss_vector": "c",
 		"cvss_base": 1.01,
