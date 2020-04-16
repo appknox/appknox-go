@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"time"
 
@@ -61,40 +62,48 @@ func ProcessCiCheck(fileID, riskThreshold int) {
 		PrintError(err)
 		os.Exit(1)
 	}
-	var foundVulnerability bool
 	t := tabby.New()
 	t.AddHeader(
-		"ID", "RISK", "CVSS-VECTOR",
-		"CVSS-BASE", "VULNERABILITY-ID",
-		"VULNERABILITY-NAME")
-	for i := 0; i < len(finalAnalyses); i++ {
-		if int(finalAnalyses[i].ComputedRisk) >= riskThreshold {
-			foundVulnerability = true
-			vulnerabilityID := finalAnalyses[i].VulnerabilityID
-			vulnerability, _, err := client.Vulnerabilities.GetByID(ctx, vulnerabilityID)
-			if err != nil {
-				PrintError(err)
-				os.Exit(1)
-			}
-			t.AddLine(
-				finalAnalyses[i].ID,
-				finalAnalyses[i].ComputedRisk,
-				finalAnalyses[i].CvssVector,
-				finalAnalyses[i].CvssBase,
-				vulnerabilityID,
-				vulnerability.Name,
-			)
+		"ANALYSIS-ID",
+		"RISK",
+		"CVSS-VECTOR",
+		"CVSS-BASE",
+		"VULNERABILITY-ID",
+		"VULNERABILITY-NAME",
+	)
+	vulnerableAnalyses := make([]appknox.Analysis, 0)
+	for _, analysis := range finalAnalyses {
+		if int(analysis.ComputedRisk) >= riskThreshold {
+			vulnerableAnalyses = append(vulnerableAnalyses, *analysis)
 		}
 	}
-	if foundVulnerability {
-		PrintError(
-			"Found vulnerabilities with risk threshold greater or equal than the provided:", enums.RiskType(riskThreshold))
-		PrintError("")
+	for _, analysis := range vulnerableAnalyses {
+		vulnerability, _, err := client.Vulnerabilities.GetByID(
+			ctx, analysis.VulnerabilityID,
+		)
+		if err != nil {
+			PrintError(err)
+			os.Exit(1)
+		}
+		t.AddLine(
+			analysis.ID,
+			analysis.ComputedRisk,
+			analysis.CvssVector,
+			analysis.CvssBase,
+			analysis.VulnerabilityID,
+			vulnerability.Name,
+		)
+	}
+	vulLen := len(vulnerableAnalyses)
+	linkMsg := fmt.Sprintf("\nFor details: https://secure.appknox.com/file/%d\n", fileID)
+	if vulLen > 0 {
+		errmsg := fmt.Sprintf("Found %d vulnerabilities with risk >= %s\n", vulLen, enums.RiskType(riskThreshold))
+		PrintError(errmsg)
 		t.Print()
-		PrintError("")
+		fmt.Printf(linkMsg)
 		os.Exit(1)
 	} else {
-		PrintError(
-			"No vulnerabilities found with risk threshold greater or equal than the provided:", enums.RiskType(riskThreshold))
+		fmt.Println("\nNo vulnerabilities found with risk threshold >= ", enums.RiskType(riskThreshold))
+		fmt.Printf(linkMsg)
 	}
 }
