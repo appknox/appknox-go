@@ -22,11 +22,6 @@ func getAppknoxAccessToken() string {
 		fmt.Println("Use APPKNOX_ACCESS_TOKEN as env.")
 		os.Exit(1)
 	}
-	_, err := CheckToken()
-	if err != nil {
-		PrintError(err)
-		os.Exit(1)
-	}
 	return accessToken
 }
 
@@ -44,6 +39,8 @@ func getClient() *appknox.Client {
 		os.Exit(1)
 	}
 	client = client.SetProxy(proxyURL)
+	insecure := viper.GetBool("insecure")
+	client = client.DisableSSL(insecure)
 	baseHost, err := url.Parse(host)
 	if err != nil {
 		fmt.Println(err)

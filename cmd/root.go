@@ -50,6 +50,11 @@ func init() {
 	viper.BindEnv("pac")
 	viper.SetDefault("pac", "")
 
+	RootCmd.PersistentFlags().BoolP("insecure", "k", false, "Disable Security Checks")
+	viper.BindPFlag("insecure", RootCmd.PersistentFlags().Lookup("insecure"))
+	viper.BindEnv("insecure")
+	viper.SetDefault("insecure", false)
+
 	RootCmd.InitDefaultVersionFlag()
 }
 

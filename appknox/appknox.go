@@ -3,6 +3,7 @@ package appknox
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -102,6 +103,15 @@ func NewClient(accessToken string) (*Client, error) {
 func (c *Client) SetProxy(proxyURL *url.URL) *Client {
 	tr := &http.Transport{
 		Proxy: http.ProxyURL(proxyURL),
+	}
+	c.client.Transport = tr
+	return c
+}
+
+// DisableSSL disables security checks for the request
+func (c *Client) DisableSSL(insecure bool) *Client {
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
 	}
 	c.client.Transport = tr
 	return c
