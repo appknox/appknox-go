@@ -95,15 +95,12 @@ func ProcessCiCheck(fileID, riskThreshold int) {
 		)
 	}
 	vulLen := len(vulnerableAnalyses)
-	linkMsg := fmt.Sprintf("\nFor details: https://secure.appknox.com/file/%d\n", fileID)
 	if vulLen > 0 {
 		errmsg := fmt.Sprintf("Found %d vulnerabilities with risk >= %s\n", vulLen, enums.RiskType(riskThreshold))
 		PrintError(errmsg)
 		t.Print()
-		fmt.Printf(linkMsg)
 		os.Exit(1)
 	} else {
 		fmt.Println("\nNo vulnerabilities found with risk threshold >= ", enums.RiskType(riskThreshold))
-		fmt.Printf(linkMsg)
 	}
 }
