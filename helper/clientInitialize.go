@@ -38,9 +38,8 @@ func getClient() *appknox.Client {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	client = client.SetProxy(proxyURL)
 	insecure := viper.GetBool("insecure")
-	client = client.DisableSSL(insecure)
+	client = client.SetHTTPTransportParams(proxyURL, insecure)
 	baseHost, err := url.Parse(host)
 	if err != nil {
 		fmt.Println(err)
