@@ -1,7 +1,6 @@
 package helper
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net/url"
@@ -51,21 +50,7 @@ func getClient() *appknox.Client {
 
 // CheckToken checks if access token is valid.
 func CheckToken() (*appknox.Me, error) {
-	accessToken := viper.GetString("access-token")
-	host := viper.GetString("host")
-	baseHost, err := url.Parse(host)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	ctx := context.Background()
-	client, err := appknox.NewClient(accessToken)
-	if err != nil {
-		return nil, err
-	}
-	client.BaseURL = baseHost
-	me, _, err := client.Me.CurrentAuthenticatedUser(ctx)
-	return me, err
+	return GetMe()
 }
 
 // GetProxy return the proxy url if proxy is set.
