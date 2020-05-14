@@ -3,6 +3,7 @@ package appknox
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -98,10 +99,11 @@ func NewClient(accessToken string) (*Client, error) {
 	return c, nil
 }
 
-// SetProxy sets the proxy to the existing client
-func (c *Client) SetProxy(proxyURL *url.URL) *Client {
+// SetHTTPTransportParams sets http params like Proxy and TLSClientConfig
+func (c *Client) SetHTTPTransportParams(proxyURL *url.URL, insecure bool) *Client {
 	tr := &http.Transport{
-		Proxy: http.ProxyURL(proxyURL),
+		Proxy:           http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
 	}
 	c.client.Transport = tr
 	return c

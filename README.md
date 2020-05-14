@@ -28,6 +28,9 @@ Flags:
   -a, --access-token string   Appknox Access Token
   -h, --help                  help for appknox
       --host string           Appknox Server (default "https://api.appknox.com/")
+  -k, --insecure              Disable Security Checks
+      --pac string            pac file path or url
+      --proxy string          proxy url
       --version               version for appknox
 
 Use "appknox [command] --help" for more information about a command.
