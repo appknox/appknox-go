@@ -101,7 +101,7 @@ func (s *UploadService) CheckSubmission(ctx context.Context, submissionID int) (
 		if reason != "" {
 			return nil, nil, errors.New(reason)
 		}
-		if time.Since(start) > 10*time.Second {
+		if time.Since(start) > 60*time.Second {
 			return nil, nil, errors.New("Request timed out")
 		}
 		fileID = submission.File
