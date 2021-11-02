@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/appknox/appknox-go/appknox/enums"
@@ -117,6 +119,10 @@ func (s *AnalysesService) ListByFile(ctx context.Context, fileID int, opt *Analy
 	var drfResponse DRFResponseAnalysis
 	_, err = s.client.Do(ctx, req, &drfResponse)
 	if err != nil {
+		if strings.Contains(err.Error(), "404") {
+			fileId := strconv.Itoa(fileID)
+			return nil, nil, errors.New("Analyses for fileID " + fileId + " doesn’t exist. Are you sure " + fileId + " is a fileID?")
+		}
 		return nil, nil, err
 	}
 	resp := AnalysisResponse{
