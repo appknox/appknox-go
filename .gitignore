@@ -13,5 +13,8 @@
 
 .vscode
 bin/
+dist/
 
 .DS_Store
+
+coverage.*
