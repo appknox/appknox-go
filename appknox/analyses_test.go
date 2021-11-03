@@ -134,3 +134,20 @@ func TestAnalysisResponse_GetPrevious(t *testing.T) {
 		t.Errorf("Analyses.ListByFile returned %+v, want %+v", analyses, want)
 	}
 }
+
+func TestAnalysisResponseGetCount_InvalidFileID(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+	mux.HandleFunc("/api/v2/files/999/analyses", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"detail":"Not found."}`)
+	})
+	_, resp, err := client.Analyses.ListByFile(context.Background(), 999, nil)
+	if resp != nil {
+		t.Errorf("AnalysesResponse should be nil for invalid fileID")
+	}
+	if err.Error() != "Analyses for fileID 999 doesn’t exist. Are you sure 999 is a fileID?" {
+		t.Errorf("Error message should be displayed for invalid fileID")
+	}
+}

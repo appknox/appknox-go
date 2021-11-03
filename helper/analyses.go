@@ -13,6 +13,10 @@ func ProcessAnalyses(fileID int) {
 	ctx := context.Background()
 	client := getClient()
 	_, analysisResponse, err := client.Analyses.ListByFile(ctx, fileID, nil)
+	if err != nil {
+		PrintError(err)
+		os.Exit(1)
+	}
 	analysisCount := analysisResponse.GetCount()
 	options := &appknox.AnalysisListOptions{
 		ListOptions: appknox.ListOptions{
