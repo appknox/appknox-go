@@ -1,29 +1,32 @@
+.PHONY: all
 all: appknox
+
+.PHONY: build
 build: appknox
+
+.PHONY: appknox
 appknox: bin/appknox-Darwin-x86_64 bin/appknox-Linux-x86_64 bin/appknox-Windows-x86_64.exe
 
 VERSION := $(shell git describe --tags)
 BUILD := $(shell git rev-parse --short HEAD)
 PROJECTNAME := $(shell basename "$(PWD)")
 SOURCES = $(shell find . -maxdepth 3 -name '*.go' '!' -name '*_test.go')
-LDFLAGS := -X main.version=${VERSION} -X main.commit=${BUILD} -s -w
+LDFLAGS := -s -w -X main.version=${VERSION} -X main.commit=${BUILD}
 
-bin/appknox-Darwin-x86_64: $(SOURCES)
-	GO111MODULE=on GOOS=darwin GOARCH=amd64 go build -o bin/appknox-Darwin-x86_64 -ldflags="$(LDFLAGS)"
+bin/appknox-%-x86_64: $(SOURCES)
+	GOOS=$(shell echo $* | tr A-Z a-z) GOARCH=amd64 go build -o $@ -ldflags="$(LDFLAGS)"
 
-bin/appknox-Linux-x86_64: $(SOURCES)
-	GO111MODULE=on GOOS=linux GOARCH=amd64 go build -o bin/appknox-Linux-x86_64 -ldflags="$(LDFLAGS)"
+bin/appknox-Windows-x86_64.exe: bin/appknox-Windows-x86_64
+	cp bin/appknox-Windows-x86_64 $@
 
-bin/appknox-Windows-x86_64.exe: $(SOURCES)
-	GO111MODULE=on GOOS=windows GOARCH=amd64 go build -o bin/appknox-Windows-x86_64.exe -ldflags="$(LDFLAGS)"
-
+.PHONY: clean
 clean:
 	rm -rf bin/*
 
+.PHONY: test
 test:
-	GO111MODULE=on go test -v ./...
+	go test -v ./...
 
+.PHONY: test_coverage
 test_coverage:
-	GO111MODULE=on go test -race -coverprofile=coverage.txt -covermode=atomic -v ./...
-
-.PHONY: clean test all build appknox test_coverage
+	go test -race -coverprofile=coverage.txt -covermode=atomic -v ./...

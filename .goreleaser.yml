@@ -1,0 +1,54 @@
+project_name: appknox
+release:
+  name_template: "Appknox CLI {{.Version}}"
+  footer: |
+    ### For installing in Linux & OSX:
+    ```
+    $ curl -L https://github.com/appknox/appknox-go/releases/download/{{.Version}}/appknox-`uname -s`-x86_64 > /usr/local/bin/appknox && chmod +x /usr/local/bin/appknox
+    ```
+
+before:
+  hooks:
+    - make clean
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.build={{.Version}} -X main.commit={{.Commit}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+archives:
+  - format: binary
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+    replacements:
+      darwin: Darwin
+      linux: Linux
+      windows: Windows
+      386: i386
+      amd64: x86_64
+checksum:
+  name_template: "checksums.txt"
+snapshot:
+  name_template: "{{ .Tag }}-next"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+nfpms:
+  - vendor: Appknox
+    maintainer: Appknox <engineering@appknox.com>
+    homepage: https://github.com/appknox/appknox-go
+    description: Appknox CLI tool.
+    file_name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+    formats:
+      - deb
+      - rpm
