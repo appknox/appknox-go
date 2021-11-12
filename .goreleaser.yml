@@ -4,7 +4,7 @@ release:
   footer: |
     ### For installing in Linux & OSX:
     ```
-    $ curl -L https://github.com/appknox/appknox-go/releases/download/{{.Version}}/appknox-`uname -s`-x86_64 > /usr/local/bin/appknox && chmod +x /usr/local/bin/appknox
+    curl -L https://github.com/appknox/appknox-go/releases/download/{{.Version}}/appknox-`uname -s`-x86_64 > /usr/local/bin/appknox && chmod +x /usr/local/bin/appknox
     ```
 
 before:
