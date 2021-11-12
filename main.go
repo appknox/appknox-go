@@ -12,6 +12,7 @@ var (
 
 func main() {
 	v.SetPackageVersion(version, commit)
+	cmd.RootCmd.SetVersionTemplate(`{{printf "%s" .Version}}`)
 	cmd.RootCmd.Version = version
 	cmd.Execute()
 }
