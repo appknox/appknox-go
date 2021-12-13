@@ -55,7 +55,13 @@ Get the access_token from the Appknox dashboard developer settings and put it to
 Instead of init command we can use environment variables for authentication. This will be useful for scenarios such as CI/CD setup.
 
 ```
-$ export APPKNOX_ACCESS_TOKEN=1a0b61a6f6f3548f04540a18c49bd40759879c73
+export APPKNOX_ACCESS_TOKEN=1a0b61a6f6f3548f04540a18c49bd40759879c73
+```
+
+For CI/CD in on-premise installations, change the Appknox host value:
+
+```
+export APPKNOX_API_HOST=https://customdomain.onpremisecompany.com/
 ```
 
 #### Using command flags
