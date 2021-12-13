@@ -37,7 +37,7 @@ func init() {
 
 	RootCmd.PersistentFlags().String("host", appknox.DefaultAPIHost, "Appknox Server")
 	viper.BindPFlag("host", RootCmd.PersistentFlags().Lookup("host"))
-	viper.BindEnv("host")
+	viper.BindEnv("host", "APPKNOX_API_HOST")
 	viper.SetDefault("host", appknox.DefaultAPIHost)
 
 	RootCmd.PersistentFlags().String("proxy", "", "proxy url")
