@@ -95,6 +95,7 @@ type File struct {
 	IsManualDone       bool                       `json:"is_manual_done,omitempty"`
 	IsAPIDone          bool                       `json:"is_api_done,omitempty"`
 	CreatedOn          *time.Time                 `json:"created_on,omitempty"`
+	ProfileID          int                        `json:"profile,omitempty"`
 }
 
 // FileListOptions specifies the optional parameters to the

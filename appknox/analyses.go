@@ -97,6 +97,12 @@ type Analysis struct {
 	CvssBase        float64                 `json:"cvss_base,omitempty"`
 	CvssVersion     int                     `json:"cvss_version,omitempty"`
 	Owasp           []string                `json:"owasp,omitempty"`
+	Pcidss          []string                `json:"pcidss,omitempty"`
+	Hipaa           []string                `json:"hipaa,omitempty"`
+	Asvs            []string                `json:"asvs,omitempty"`
+	Cwe             []string                `json:"cwe,omitempty"`
+	Gdpr            []string                `json:"gdpr,omitempty"`
+	Mstg            []string                `json:"mstg,omitempty"`
 	UpdatedOn       *time.Time              `json:"updated_on,omitempty"`
 	VulnerabilityID int                     `json:"vulnerability,omitempty"`
 }

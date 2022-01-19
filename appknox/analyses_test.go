@@ -35,6 +35,32 @@ func TestAnalyses_marshall(t *testing.T) {
 	testJSONMarshal(t, u, want)
 }
 
+func TestAnalysesCompliance_marshall(t *testing.T) {
+	u := &Analysis{
+		ID:              1,
+		Owasp:           []string{"O_1", "O_2"},
+		Pcidss:          []string{"P_1"},
+		Hipaa:           []string{"H_1", "H_2"},
+		Asvs:            []string{"A_1"},
+		Cwe:             []string{"C_1"},
+		Gdpr:            []string{"G_1", "G_2"},
+		Mstg:            []string{"M_1"},
+		VulnerabilityID: 1,
+	}
+	want := `{
+		"id": 1,
+		"owasp": ["O_1", "O_2"],
+		"pcidss": ["P_1"],
+		"hipaa": ["H_1", "H_2"],
+		"asvs": ["A_1"],
+		"cwe": ["C_1"],
+		"gdpr": ["G_1", "G_2"],
+		"mstg": ["M_1"],
+		"vulnerability": 1
+	}`
+	testJSONMarshal(t, u, want)
+}
+
 func TestAnalysesService_ListByFile(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()
