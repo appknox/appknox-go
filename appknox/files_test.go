@@ -8,6 +8,43 @@ import (
 	"testing"
 )
 
+func TestFiles_marshall(t *testing.T) {
+	testJSONMarshal(t, &File{}, "{}")
+	u := &File{
+		ID:                 1,
+		Name:               "file name",
+		Version:            "1.0",
+		VersionCode:        "1.0",
+		DynamicStatus:      2,
+		APIScanProgress:    1,
+		IsStaticDone:       true,
+		IsDynamicDone:      true,
+		StaticScanProgress: 100,
+		APIScanStatus:      2,
+		Rating:             "4.5",
+		IsManualDone:       true,
+		IsAPIDone:          true,
+		ProfileID:          1,
+	}
+	want := `{
+		"id": 1,
+		"name": "file name",
+		"version": "1.0",
+		"version_code": "1.0",
+		"dynamic_status": 2,
+		"api_scan_progress": 1,
+		"is_static_done": true,
+		"is_dynamic_done": true,
+		"static_scan_progress": 100,
+		"api_scan_status": 2,
+		"rating": "4.5",
+		"is_manual_done": true,
+		"is_api_done": true,
+		"profile": 1
+	}`
+	testJSONMarshal(t, u, want)
+}
+
 func TestFilesService_ListByProject(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()
