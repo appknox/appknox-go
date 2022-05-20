@@ -36,6 +36,21 @@ Flags:
 Use "appknox [command] --help" for more information about a command.
 ```
 
+## Installation
+#### For Linux & macOS platform
+1. Open Terminal
+2. Run following command.
+```
+curl -L https://github.com/appknox/appknox-go/releases/download/latest/appknox-`uname -s`-x86_64 > /usr/local/bin/appknox && chmod +x /usr/local/bin/appknox
+```
+
+#### For windows platform
+1. Run Powershell as Administrator
+2. Run following command
+```
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest https://github.com/appknox/appknox-go/releases/download/latest/appknox-Windows-x86_64.exe -OutFile C:\Windows\System32\appknox.exe
+```
+
 ### Authentication
 
 CLI requires an access_token to interact with Appknox API.
