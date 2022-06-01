@@ -64,6 +64,9 @@ type Client struct {
 
 	// Organizaions service is used to interact with appknox organizations api.
 	Organizations *OrganizationsService
+
+	// Reports service is used to interact with appknox reports api.
+	Reports *ReportsService
 }
 
 // NewClient returns a new appknox API client.
@@ -98,6 +101,7 @@ func NewClient(accessToken string) (*Client, error) {
 	c.Vulnerabilities = (*VulnerabilitiesService)(&c.common)
 	c.OWASP = (*OWASPService)(&c.common)
 	c.Organizations = (*OrganizationsService)(&c.common)
+	c.Reports = (*ReportsService)(&c.common)
 	return c, nil
 }
 
