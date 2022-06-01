@@ -4,14 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 )
 
-func ProcessDownloadReports(fileID int, alwaysApproved bool, output string) {
+func ProcessDownloadReports(fileID int, alwaysApproved bool, output string) (bool, error) {
 	fmt.Println("Warning: This process will download report file to system.")
 	if !alwaysApproved {
 		fmt.Println("Please pass `--always-approved` to approve all the reports")
-		os.Exit(1)
+		return false, errors.New("Please pass `--always-approved` to approve all the reports")
 	}
 
 	ctx := context.Background()
@@ -20,19 +19,20 @@ func ProcessDownloadReports(fileID int, alwaysApproved bool, output string) {
 	report, err := client.Reports.GetReportURL(ctx, fileID)
 	if err != nil {
 		PrintError(err)
-		os.Exit(1)
+		return false, err
 	}
 	if report == nil {
 		PrintError(errors.New("No report found"))
-		os.Exit(1)
+		return false, errors.New("No report found")
 	}
 
 	out, err := client.Reports.DownloadFile(ctx, report.URL, output)
 	if err != nil {
 		PrintError(err)
-		os.Exit(1)
+		return false, err
 	}
 
 	fmt.Println("Report downloaded successfully.")
 	fmt.Println("Report saved to: ", out)
+	return true, nil
 }
