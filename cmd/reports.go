@@ -32,7 +32,10 @@ var reportsCmd = &cobra.Command{
 		alwaysApproved, _ := cmd.Flags().GetBool("always-approved")
 		outputDir, _ := cmd.Flags().GetString("output")
 		// Performing download reports
-		helper.ProcessDownloadReports(fileID, alwaysApproved, outputDir)
+		ok, err := helper.ProcessDownloadReports(fileID, alwaysApproved, outputDir)
+		if err != nil || !ok {
+			os.Exit(1)
+		}
 	},
 }
 
