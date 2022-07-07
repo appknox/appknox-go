@@ -63,7 +63,7 @@ func TestHelper_ProcessDownloadReports_WithValidData_Success(t *testing.T) {
 		fmt.Fprint(w, `Fake_File_Content`)
 	})
 
-	ok, err := ProcessDownloadReports(1, true, ".")
+	ok, err := ProcessDownloadReports(1, true, "no", ".")
 	assert.Equal(t, true, ok)
 	assert.Equal(t, nil, err)
 
@@ -73,7 +73,7 @@ func TestHelper_ProcessDownloadReports_WithValidData_Success(t *testing.T) {
 }
 
 func TestHelper_ProcessDownloadReports_WithInvalidData_Fail(t *testing.T) {
-	ok, err := ProcessDownloadReports(1, false, ".")
+	ok, err := ProcessDownloadReports(1, false, "no", ".")
 	assert.Equal(t, false, ok)
 	assert.Equal(t, "Please pass `--always-approved` to approve all the reports", err.Error())
 }
