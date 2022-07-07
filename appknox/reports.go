@@ -16,6 +16,48 @@ type Report struct {
 	URL string `json:"url"`
 }
 
+type ReportResult struct {
+	ID          int    `json:"id"`
+	GeneratedOn string `json:"generated_on"`
+	Language    string `json:"language"`
+	Progress    int    `json:"progress"`
+	Rating      string `json:"rating"`
+}
+
+func (s *ReportsService) GenerateReport(ctx context.Context, fileID int) (*ReportResult, error) {
+	url := fmt.Sprintf("api/v2/files/%d/reports", fileID)
+	req, err := s.client.NewRequest("POST", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp ReportResult
+
+	_, err = s.client.Do(ctx, req, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
+func (s *ReportsService) FetchReportResult(ctx context.Context, reportID int) (*ReportResult, error) {
+	url := fmt.Sprintf("api/v2/reports/%d", reportID)
+	req, err := s.client.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp ReportResult
+
+	_, err = s.client.Do(ctx, req, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
 // GetReportURL returns the url of the report file to download.
 func (s *ReportsService) GetReportURL(ctx context.Context, fileID int) (*Report, error) {
 	u := fmt.Sprintf("api/hudson-api/reports/%d", fileID)

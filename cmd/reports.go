@@ -31,8 +31,9 @@ var reportsCmd = &cobra.Command{
 		// Collecting flags
 		alwaysApproved, _ := cmd.Flags().GetBool("always-approved")
 		outputDir, _ := cmd.Flags().GetString("output")
+		generate, _ := cmd.Flags().GetString("generate")
 		// Performing download reports
-		ok, err := helper.ProcessDownloadReports(fileID, alwaysApproved, outputDir)
+		ok, err := helper.ProcessDownloadReports(fileID, alwaysApproved, generate, outputDir)
 		if err != nil || !ok {
 			os.Exit(1)
 		}
@@ -42,5 +43,6 @@ var reportsCmd = &cobra.Command{
 func init() {
 	RootCmd.AddCommand(reportsCmd)
 	reportsCmd.Flags().StringP("output", "o", ".", "Output directory to save reports")
+	reportsCmd.Flags().StringP("generate", "g", "no", "Generate reports")
 	reportsCmd.Flags().Bool("always-approved", false, "Need to approve all the reports")
 }
