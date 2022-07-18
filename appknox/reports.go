@@ -3,6 +3,7 @@ package appknox
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,6 +25,7 @@ type ReportResult struct {
 	Rating      string `json:"rating"`
 }
 
+// GenerateReport generates a report for the specified file.
 func (s *ReportsService) GenerateReport(ctx context.Context, fileID int) (*ReportResult, error) {
 	url := fmt.Sprintf("api/v2/files/%d/reports", fileID)
 	req, err := s.client.NewRequest("POST", url, nil)
@@ -41,6 +43,7 @@ func (s *ReportsService) GenerateReport(ctx context.Context, fileID int) (*Repor
 	return &resp, nil
 }
 
+// FetchReportResult it will fetch report result by result id.
 func (s *ReportsService) FetchReportResult(ctx context.Context, reportID int) (*ReportResult, error) {
 	url := fmt.Sprintf("api/v2/reports/%d", reportID)
 	req, err := s.client.NewRequest("GET", url, nil)
@@ -58,9 +61,34 @@ func (s *ReportsService) FetchReportResult(ctx context.Context, reportID int) (*
 	return &resp, nil
 }
 
+// FetchLastReportResult it will return last report result, report list api is responding in decending order.
+func (s *ReportsService) FetchLastReportResult(ctx context.Context, fileID int) (*ReportResult, error) {
+	url := fmt.Sprintf("api/v2/files/%d/reports", fileID)
+	req, err := s.client.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	type ReportResultList struct {
+		Results []*ReportResult `json:"results"`
+	}
+
+	var resp ReportResultList
+
+	_, err = s.client.Do(ctx, req, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(resp.Results) > 0 {
+		return resp.Results[0], nil
+	}
+	return nil, errors.New("No report results found")
+}
+
 // GetReportURL returns the url of the report file to download.
-func (s *ReportsService) GetReportURL(ctx context.Context, fileID int) (*Report, error) {
-	u := fmt.Sprintf("api/hudson-api/reports/%d", fileID)
+func (s *ReportsService) GetReportURL(ctx context.Context, resultID int) (*Report, error) {
+	u := fmt.Sprintf("api/v2/reports/%d/pdf", resultID)
 	req, err := s.client.NewRequest("GET", u, nil)
 	if err != nil {
 		return nil, err

@@ -8,6 +8,8 @@ import (
 )
 
 func ProcessDownloadReports(fileID int, alwaysApproved bool, generate string, output string) (bool, error) {
+	var resultID int
+
 	fmt.Println("Warning: This process will download report file to system.")
 	if !alwaysApproved {
 		fmt.Println("Please pass `--always-approved` to approve all the reports")
@@ -18,16 +20,19 @@ func ProcessDownloadReports(fileID int, alwaysApproved bool, generate string, ou
 	client := getClient()
 
 	if generate == "yes" {
+		// This part of code is to generate reports
 		fmt.Println("Generating reports...")
 		result, err := client.Reports.GenerateReport(ctx, fileID)
 		if err != nil {
 			PrintError(errors.New("A report is already being generated or scan is in progress. Please wait."))
 			return false, err
 		}
+		// Assigning result id for later use in download report section
+		resultID = result.ID
 
 		for result.Progress < 100 {
 			time.Sleep(100 * time.Millisecond)
-			result, err = client.Reports.FetchReportResult(ctx, result.ID)
+			result, err = client.Reports.FetchReportResult(ctx, resultID)
 			if err != nil {
 				PrintError(errors.New("Faild to fetch report result"))
 				return false, err
@@ -35,9 +40,19 @@ func ProcessDownloadReports(fileID int, alwaysApproved bool, generate string, ou
 			fmt.Printf("\rGeneration progress: %d%%", result.Progress)
 		}
 		fmt.Println("\nReport generated successfully.")
+	} else {
+		// This part of code will be executed when user want to download report which is already generated.
+		fmt.Println("Fetching reports...")
+		result, err := client.Reports.FetchLastReportResult(ctx, fileID)
+		if err != nil {
+			PrintError(errors.New("No report generated for this file."))
+			return false, err
+		}
+		// Assigning result id for later use in download report section
+		resultID = result.ID
 	}
 
-	report, err := client.Reports.GetReportURL(ctx, fileID)
+	report, err := client.Reports.GetReportURL(ctx, resultID)
 	if err != nil {
 		PrintError(err)
 		return false, err

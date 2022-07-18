@@ -17,7 +17,7 @@ func TestReportsService_GetReportURL_Success(t *testing.T) {
 	defer teardown()
 
 	// Starting fake server to accept request
-	mux.HandleFunc("/api/hudson-api/reports/1", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v2/reports/1/pdf", func(w http.ResponseWriter, r *http.Request) {
 		testMethod(t, r, "GET")
 		fmt.Fprint(w, `{"url":"http://example.com"}`)
 	})
@@ -39,7 +39,7 @@ func TestReportsService_GetReportURL_IFAPINotWorking_ShuldFail(t *testing.T) {
 	defer teardown()
 
 	// Starting fake server to accept request
-	mux.HandleFunc("/api/hudson-api/reports/1", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v2/reports/1/pdf", func(w http.ResponseWriter, r *http.Request) {
 		testMethod(t, r, "GET")
 		w.WriteHeader(http.StatusInternalServerError)
 	})
