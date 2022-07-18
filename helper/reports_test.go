@@ -99,19 +99,19 @@ func TestHelper_ProcessDownloadReports_With_Generate_Yes_Success(t *testing.T) {
 	viper.Set("insecure", true)
 	viper.Set("access-token", "token")
 
-	// Starting fake server to accept request
+	// Starting fake server to accept request for generate reports
 	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
 		resp := fmt.Sprintf(`{
 					"id": %d,
 					"language": "en",
-					"progress": 100,
+					"progress": 50,
 					"rating": "20.73"
 				}`, 1)
 		fmt.Fprint(w, resp)
 	})
 
 	// Starting fake server to accept request
-	mux.HandleFunc("api/v2/reports/1", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v2/reports/1", func(w http.ResponseWriter, r *http.Request) {
 		resp := fmt.Sprintf(`{
 					"id": %d,
 					"language": "en",

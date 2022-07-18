@@ -12,6 +12,113 @@ import (
 	"github.com/magiconair/properties/assert"
 )
 
+func TestReportsService_GenerateReport_Success(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	// Starting fake server to accept request
+	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "POST")
+		resp := fmt.Sprintf(`{
+			"id": %d,
+			"language": "en",
+			"progress": 50,
+			"rating": "20.73"
+		}`, 1)
+		fmt.Fprint(w, resp)
+	})
+
+	report, err := client.Reports.GenerateReport(context.Background(), 1)
+
+	if err != nil {
+		t.Errorf("Reports.GenerateReport returned error: %v", err)
+	}
+
+	want := &ReportResult{
+		ID:       1,
+		Language: "en",
+		Progress: 50,
+		Rating:   "20.73",
+	}
+	if !reflect.DeepEqual(report, want) {
+		t.Errorf("Reports.GenerateReport returned %+v, want %+v", report, want)
+	}
+}
+
+func TestReportsService_FetchReportResult_Success(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	// Starting fake server to accept request
+	mux.HandleFunc("/api/v2/reports/1", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		resp := fmt.Sprintf(`{
+			"id": %d,
+			"language": "en",
+			"progress": 100,
+			"rating": "20.73"
+		}`, 1)
+		fmt.Fprint(w, resp)
+	})
+
+	report, err := client.Reports.FetchReportResult(context.Background(), 1)
+
+	if err != nil {
+		t.Errorf("Reports.FetchReportResult returned error: %v", err)
+	}
+
+	want := &ReportResult{
+		ID:       1,
+		Language: "en",
+		Progress: 100,
+		Rating:   "20.73",
+	}
+	if !reflect.DeepEqual(report, want) {
+		t.Errorf("Reports.FetchReportResult returned %+v, want %+v", report, want)
+	}
+}
+
+func TestReportsService_FetchLastReportResult_Success(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	// Starting fake server to accept request
+	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		resp := fmt.Sprintf(`{
+			"count": 1,
+			"next": null,
+			"previous": null,
+			"results": [
+				{
+					"id": %d,
+					"language": "en",
+					"progress": 100,
+					"rating": "20.73"
+				}
+			]
+		}`, 1)
+		fmt.Fprint(w, resp)
+	})
+
+	report, err := client.Reports.FetchLastReportResult(context.Background(), 1)
+
+	if err != nil {
+		t.Errorf("Reports.FetchLastReportResult returned error: %v", err)
+	}
+
+	want := &ReportResult{
+		ID:       1,
+		Language: "en",
+		Progress: 100,
+		Rating:   "20.73",
+	}
+
+	if !reflect.DeepEqual(report, want) {
+		t.Errorf("Reports.FetchLastReportResult returned %+v, want %+v", report, want)
+	}
+}
+
 func TestReportsService_GetReportURL_Success(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()
