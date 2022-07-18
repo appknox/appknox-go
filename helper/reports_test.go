@@ -53,7 +53,6 @@ func TestHelper_ProcessDownloadReports_WithValidData_Success(t *testing.T) {
 	viper.Set("access-token", "token")
 
 	// Starting fake server to accept request
-
 	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
 		resp := fmt.Sprintf(`{
 			"count": 1,
@@ -89,6 +88,77 @@ func TestHelper_ProcessDownloadReports_WithValidData_Success(t *testing.T) {
 	// remove files after test
 	err = os.Remove("./aws_fake_signed_url1.txt")
 	assert.Equal(t, nil, err)
+}
+
+func TestHelper_ProcessDownloadReports_With_Generate_Yes_Success(t *testing.T) {
+	_, mux, serverURL, teardown := setup()
+	defer teardown()
+
+	// Setting up environment variable to use fake server in this api tests
+	viper.Set("host", serverURL+"/")
+	viper.Set("insecure", true)
+	viper.Set("access-token", "token")
+
+	// Starting fake server to accept request
+	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
+		resp := fmt.Sprintf(`{
+					"id": %d,
+					"language": "en",
+					"progress": 100,
+					"rating": "20.73"
+				}`, 1)
+		fmt.Fprint(w, resp)
+	})
+
+	// Starting fake server to accept request
+	mux.HandleFunc("api/v2/reports/1", func(w http.ResponseWriter, r *http.Request) {
+		resp := fmt.Sprintf(`{
+					"id": %d,
+					"language": "en",
+					"progress": 100,
+					"rating": "20.73"
+				}`, 1)
+		fmt.Fprint(w, resp)
+	})
+
+	// Starting fake server to accept request
+	mux.HandleFunc("/api/v2/reports/1/pdf", func(w http.ResponseWriter, r *http.Request) {
+		resp := fmt.Sprintf(`{"url":"%s/aws_fake_signed_url1.txt?signature=fake_signature_hash"}`, serverURL)
+		fmt.Fprint(w, resp)
+	})
+
+	// Starting fake server to accept download request
+	mux.HandleFunc("/aws_fake_signed_url1.txt", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `Fake_File_Content`)
+	})
+
+	ok, err := ProcessDownloadReports(1, true, "yes", ".")
+	assert.Equal(t, true, ok)
+	assert.Equal(t, nil, err)
+
+	// remove files after test
+	err = os.Remove("./aws_fake_signed_url1.txt")
+	assert.Equal(t, nil, err)
+}
+
+func TestHelper_ProcessDownloadReports_With_Generate_Yes_and_Generate_Report_Fails_Should_Fail(t *testing.T) {
+	_, mux, serverURL, teardown := setup()
+	defer teardown()
+
+	// Setting up environment variable to use fake server in this api tests
+	viper.Set("host", serverURL+"/")
+	viper.Set("insecure", true)
+	viper.Set("access-token", "token")
+
+	// Starting fake server to accept request
+	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"message": "Report can't be generated"}`)
+		w.Header().Set("Status", "400")
+	})
+
+	ok, err := ProcessDownloadReports(1, true, "yes", ".")
+	assert.Equal(t, false, ok)
+	assert.Equal(t, "A report is already being generated or scan is in progress. Please wait.", err.Error())
 }
 
 func TestHelper_ProcessDownloadReports_WithInvalidData_Fail(t *testing.T) {

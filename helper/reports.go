@@ -24,12 +24,18 @@ func ProcessDownloadReports(fileID int, alwaysApproved bool, generate string, ou
 		fmt.Println("Generating reports...")
 		result, err := client.Reports.GenerateReport(ctx, fileID)
 		if err != nil {
-			PrintError(errors.New("A report is already being generated or scan is in progress. Please wait."))
+			PrintError(err)
 			return false, err
 		}
+
+		if result != nil && result.ID == 0 {
+			err := errors.New("A report is already being generated or scan is in progress. Please wait.")
+			PrintError(err)
+			return false, err
+		}
+
 		// Assigning result id for later use in download report section
 		resultID = result.ID
-
 		for result.Progress < 100 {
 			time.Sleep(100 * time.Millisecond)
 			result, err = client.Reports.FetchReportResult(ctx, resultID)
