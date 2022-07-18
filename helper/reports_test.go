@@ -53,7 +53,26 @@ func TestHelper_ProcessDownloadReports_WithValidData_Success(t *testing.T) {
 	viper.Set("access-token", "token")
 
 	// Starting fake server to accept request
-	mux.HandleFunc("/api/hudson-api/reports/1", func(w http.ResponseWriter, r *http.Request) {
+
+	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
+		resp := fmt.Sprintf(`{
+			"count": 1,
+			"next": null,
+			"previous": null,
+			"results": [
+				{
+					"id": %d,
+					"language": "en",
+					"progress": 100,
+					"rating": "20.73"
+				}
+			]
+		}`, 1)
+		fmt.Fprint(w, resp)
+	})
+
+	// Starting fake server to accept request
+	mux.HandleFunc("/api/v2/reports/1/pdf", func(w http.ResponseWriter, r *http.Request) {
 		resp := fmt.Sprintf(`{"url":"%s/aws_fake_signed_url1.txt?signature=fake_signature_hash"}`, serverURL)
 		fmt.Fprint(w, resp)
 	})
