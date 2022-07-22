@@ -63,10 +63,6 @@ func ProcessDownloadReports(fileID int, alwaysApproved bool, generate string, ou
 		PrintError(err)
 		return false, err
 	}
-	if report == nil {
-		PrintError(errors.New("No report found"))
-		return false, errors.New("No report found")
-	}
 
 	out, err := client.Reports.DownloadFile(ctx, report.URL, output)
 	if err != nil {

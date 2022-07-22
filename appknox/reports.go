@@ -118,23 +118,22 @@ func (s *ReportsService) DownloadFile(ctx context.Context, url string, outputDir
 	// Creating output file from output path
 	out, err := os.Create(outputPath.String())
 	if err != nil {
-		fmt.Println(outputPath.String())
 		return "", err
 	}
 	defer out.Close()
 
 	// Downloading file
 	resp, err := http.Get(url)
-	if err != nil {
+	if err != nil || resp.StatusCode != 200 {
+		if resp.StatusCode != 200 {
+			err = errors.New(`resource not found`)
+		}
 		return "", err
 	}
 	defer resp.Body.Close()
 
 	// Writing file to output file
 	_, err = io.Copy(out, resp.Body)
-	if err != nil {
-		return "", err
-	}
 
-	return outputPath.String(), nil
+	return outputPath.String(), err
 }
