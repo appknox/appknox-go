@@ -45,6 +45,35 @@ func TestReportsService_GenerateReport_Success(t *testing.T) {
 	}
 }
 
+func TestReportsService_GenerateReport_IfAPIFails_Should_Fail(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	// Starting fake server to accept request
+	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "POST")
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	report, err := client.Reports.GenerateReport(context.Background(), 1)
+
+	assert.Equal(t, true, err != nil)
+	assert.Equal(t, true, report == nil)
+}
+
+func TestReportsService_GenerateReport_IfBaseURL_Should_Fail(t *testing.T) {
+	client, _, _, teardown := setup()
+	defer teardown()
+	// Setting invalid schame name to fail in `client.NewRequest`
+	client.BaseURL.Scheme = ""
+	client.BaseURL.Host = "localhost/"
+
+	report, err := client.Reports.GenerateReport(context.Background(), 1)
+
+	assert.Equal(t, true, err != nil)
+	assert.Equal(t, true, report == nil)
+}
+
 func TestReportsService_FetchReportResult_Success(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()
@@ -76,6 +105,35 @@ func TestReportsService_FetchReportResult_Success(t *testing.T) {
 	if !reflect.DeepEqual(report, want) {
 		t.Errorf("Reports.FetchReportResult returned %+v, want %+v", report, want)
 	}
+}
+
+func TestReportsService_FetchReportResult_IfAPIFails_Should_Fail(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	// Starting fake server to accept request
+	mux.HandleFunc("/api/v2/reports/1", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	report, err := client.Reports.FetchReportResult(context.Background(), 1)
+
+	assert.Equal(t, true, err != nil)
+	assert.Equal(t, true, report == nil)
+}
+
+func TestReportsService_FetchReportResult_IfBaseURL_Should_Fail(t *testing.T) {
+	client, _, _, teardown := setup()
+	defer teardown()
+	// Setting invalid schame name to fail in `client.NewRequest`
+	client.BaseURL.Scheme = ""
+	client.BaseURL.Host = "localhost/"
+
+	report, err := client.Reports.FetchReportResult(context.Background(), 1)
+
+	assert.Equal(t, true, err != nil)
+	assert.Equal(t, true, report == nil)
 }
 
 func TestReportsService_FetchLastReportResult_Success(t *testing.T) {
@@ -119,6 +177,58 @@ func TestReportsService_FetchLastReportResult_Success(t *testing.T) {
 	}
 }
 
+func TestReportsService_FetchLastReportResult_IfEmptyReport_Should_Fail(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	// Starting fake server to accept request
+	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		resp := fmt.Sprintf(`{
+			"count": 1,
+			"next": null,
+			"previous": null,
+			"results": []
+		}`)
+		fmt.Fprint(w, resp)
+	})
+
+	report, err := client.Reports.FetchLastReportResult(context.Background(), 1)
+
+	assert.Equal(t, true, err != nil)
+	assert.Equal(t, err.Error(), "No report results found")
+	assert.Equal(t, true, report == nil)
+}
+
+func TestReportsService_FetchLastReportResult_IfAPIFails_Should_Fail(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	// Starting fake server to accept request
+	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	report, err := client.Reports.FetchLastReportResult(context.Background(), 1)
+
+	assert.Equal(t, true, err != nil)
+	assert.Equal(t, true, report == nil)
+}
+
+func TestReportsService_FetchLastReportResult_IfBaseURL_Should_Fail(t *testing.T) {
+	client, _, _, teardown := setup()
+	defer teardown()
+	// Setting invalid schame name to fail in `client.NewRequest`
+	client.BaseURL.Scheme = ""
+	client.BaseURL.Host = "localhost/"
+
+	report, err := client.Reports.FetchLastReportResult(context.Background(), 1)
+
+	assert.Equal(t, true, err != nil)
+	assert.Equal(t, true, report == nil)
+}
+
 func TestReportsService_GetReportURL_Success(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()
@@ -157,7 +267,25 @@ func TestReportsService_GetReportURL_IFAPINotWorking_ShuldFail(t *testing.T) {
 	assert.Equal(t, strings.TrimSpace(strings.Split(err.Error(), ":")[3]), "500")
 }
 
-func TestReportsService_DownloadFile(t *testing.T) {
+func TestReportsService_GetReportURL_IFBaseURL_ShuldFail(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	// Starting fake server to accept request
+	mux.HandleFunc("/api/v2/reports/1/pdf", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	// Setting invalid schame name to fail in `client.NewRequest`
+	client.BaseURL.Scheme = ""
+	client.BaseURL.Host = "localhost/"
+
+	_, err := client.Reports.GetReportURL(context.Background(), 1)
+	assert.Equal(t, true, err != nil)
+}
+
+func TestReportsService_DownloadFile_Success(t *testing.T) {
 	client, mux, serverURL, teardown := setup()
 	defer teardown()
 
@@ -182,4 +310,43 @@ func TestReportsService_DownloadFile(t *testing.T) {
 	// remove files after test
 	err = os.Remove(want)
 	assert.Equal(t, nil, err)
+}
+
+func TestReportsService_DownloadFile_IfWrongURL_Should_Fail(t *testing.T) {
+	client, mux, serverURL, teardown := setup()
+	defer teardown()
+
+	// Starting fake server to accept request
+	mux.HandleFunc("/aws_fake_signed_url.txt", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	outputDir := ".."
+	report, err := client.Reports.DownloadFile(context.Background(), serverURL+"/aws_fake_signed_url.txt?signature=fake_signature_hash", outputDir)
+	assert.Equal(t, true, err != nil)
+	assert.Equal(t, true, len(report) == 0)
+}
+
+func TestReportsService_DownloadFile_IfInvalidURL_Should_Fail(t *testing.T) {
+	client, _, _, teardown := setup()
+	defer teardown()
+
+	outputDir := ".."
+	report, err := client.Reports.DownloadFile(context.Background(), "", outputDir)
+	assert.Equal(t, true, err != nil)
+	assert.Equal(t, true, len(report) == 0)
+}
+
+func TestReportsService_DownloadFile_IfBaseURL_Should_Fail(t *testing.T) {
+	client, _, _, teardown := setup()
+	defer teardown()
+	// Setting invalid schame name to fail in `client.NewRequest`
+	client.BaseURL.Scheme = ""
+	client.BaseURL.Host = "localhost/"
+
+	outputDir := ".."
+	report, err := client.Reports.DownloadFile(context.Background(), "", outputDir)
+	assert.Equal(t, true, err != nil)
+	assert.Equal(t, true, len(report) == 0)
 }
