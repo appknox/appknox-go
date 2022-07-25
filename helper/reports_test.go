@@ -81,7 +81,7 @@ func TestHelper_ProcessDownloadReports_WithValidData_Success(t *testing.T) {
 		fmt.Fprint(w, `Fake_File_Content`)
 	})
 
-	ok, err := ProcessDownloadReports(1, true, "no", ".")
+	ok, err := ProcessDownloadReports(1, true, false, ".")
 	assert.Equal(t, true, ok)
 	assert.Equal(t, nil, err)
 
@@ -104,7 +104,7 @@ func TestHelper_ProcessDownloadReports_With_Generate_No_IfFetchLastReportResult_
 	viper.Set("insecure", true)
 	viper.Set("access-token", "token")
 
-	ok, err := ProcessDownloadReports(1, true, "no", ".")
+	ok, err := ProcessDownloadReports(1, true, false, ".")
 	assert.Equal(t, false, ok)
 	assert.Equal(t, false, err == nil)
 }
@@ -141,7 +141,7 @@ func TestHelper_ProcessDownloadReports_With_Generate_No_IfGetReportURL_Fail_Shou
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	ok, err := ProcessDownloadReports(1, true, "no", ".")
+	ok, err := ProcessDownloadReports(1, true, false, ".")
 	assert.Equal(t, false, ok)
 	assert.Equal(t, false, err == nil)
 }
@@ -184,7 +184,7 @@ func TestHelper_ProcessDownloadReports_With_Generate_No_IfDownloadFile_Fail_Shou
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	ok, err := ProcessDownloadReports(1, true, "no", ".")
+	ok, err := ProcessDownloadReports(1, true, false, ".")
 	assert.Equal(t, false, ok)
 	assert.Equal(t, false, err == nil)
 }
@@ -231,7 +231,7 @@ func TestHelper_ProcessDownloadReports_With_Generate_Yes_Success(t *testing.T) {
 		fmt.Fprint(w, `Fake_File_Content`)
 	})
 
-	ok, err := ProcessDownloadReports(1, true, "yes", ".")
+	ok, err := ProcessDownloadReports(1, true, true, ".")
 	assert.Equal(t, true, ok)
 	assert.Equal(t, nil, err)
 
@@ -253,7 +253,7 @@ func TestHelper_ProcessDownloadReports_With_Generate_Yes_IfAPIFails_Should_Fail(
 	viper.Set("insecure", true)
 	viper.Set("access-token", "token")
 
-	ok, err := ProcessDownloadReports(1, true, "yes", ".")
+	ok, err := ProcessDownloadReports(1, true, true, ".")
 	assert.Equal(t, false, ok)
 	assert.Equal(t, false, err == nil)
 }
@@ -268,17 +268,16 @@ func TestHelper_ProcessDownloadReports_With_Generate_Yes_and_Generate_Report_Fai
 
 	// Starting fake server to accept request
 	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"message": "Report can't be generated"}`)
-		w.Header().Set("Status", "400")
+		w.WriteHeader(http.StatusBadRequest)
 	})
 
-	ok, err := ProcessDownloadReports(1, true, "yes", ".")
+	ok, err := ProcessDownloadReports(1, true, true, ".")
 	assert.Equal(t, false, ok)
 	assert.Equal(t, "A report is already being generated or scan is in progress. Please wait.", err.Error())
 }
 
 func TestHelper_ProcessDownloadReports_WithInvalidData_Fail(t *testing.T) {
-	ok, err := ProcessDownloadReports(1, false, "no", ".")
+	ok, err := ProcessDownloadReports(1, false, false, ".")
 	assert.Equal(t, false, ok)
 	assert.Equal(t, "Please pass `--always-approved` to approve all the reports", err.Error())
 }
@@ -308,7 +307,7 @@ func TestHelper_ProcessDownloadReports_With_Generate_Yes_FetchReportResultFail_S
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	ok, err := ProcessDownloadReports(1, true, "yes", ".")
+	ok, err := ProcessDownloadReports(1, true, true, ".")
 	assert.Equal(t, false, ok)
 	assert.Equal(t, false, err == nil)
 }

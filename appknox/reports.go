@@ -35,8 +35,14 @@ func (s *ReportsService) GenerateReport(ctx context.Context, fileID int) (*Repor
 
 	var resp ReportResult
 
-	_, err = s.client.Do(ctx, req, &resp)
+	res, err := s.client.Do(ctx, req, &resp)
 	if err != nil {
+		if res.StatusCode == 400 {
+			return nil, errors.New("A report is already being generated or scan is in progress. Please wait.")
+		}
+		if res.StatusCode == 404 {
+			return nil, errors.New("File not found")
+		}
 		return nil, err
 	}
 

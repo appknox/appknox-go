@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func ProcessDownloadReports(fileID int, alwaysApproved bool, generate string, output string) (bool, error) {
+func ProcessDownloadReports(fileID int, alwaysApproved bool, generate bool, output string) (bool, error) {
 	var resultID int
 
 	fmt.Println("Warning: This process will download report file to system.")
@@ -19,17 +19,11 @@ func ProcessDownloadReports(fileID int, alwaysApproved bool, generate string, ou
 	ctx := context.Background()
 	client := getClient()
 
-	if generate == "yes" {
+	if generate {
 		// This part of code is to generate reports
 		fmt.Println("Generating reports...")
 		result, err := client.Reports.GenerateReport(ctx, fileID)
 		if err != nil {
-			PrintError(err)
-			return false, err
-		}
-
-		if result != nil && result.ID == 0 {
-			err := errors.New("A report is already being generated or scan is in progress. Please wait.")
 			PrintError(err)
 			return false, err
 		}
