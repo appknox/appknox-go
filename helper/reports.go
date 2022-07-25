@@ -7,13 +7,14 @@ import (
 	"time"
 )
 
-func ProcessDownloadReports(fileID int, alwaysApproved bool, generate bool, output string) (bool, error) {
+func ProcessDownloadReports(fileID int, allowExperimentalFeatures bool, generate bool, output string) (bool, error) {
 	var resultID int
 
-	fmt.Println("Warning: This process will download report file to system.")
-	if !alwaysApproved {
-		fmt.Println("Please pass `--always-approved` to approve all the reports")
-		return false, errors.New("Please pass `--always-approved` to approve all the reports")
+	if !allowExperimentalFeatures {
+		fmt.Println("Downloading PDF reports is not a fully supported/experimental feature. Please opt-in by specifying --allow-experimental-features in the command.")
+		return false, errors.New("Downloading PDF reports is not a fully supported/experimental feature. Please opt-in by specifying --allow-experimental-features in the command.")
+	} else {
+		fmt.Println("Downloading PDF reports is a fully supported/experimental feature.")
 	}
 
 	ctx := context.Background()

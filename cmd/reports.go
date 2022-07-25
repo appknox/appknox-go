@@ -29,11 +29,11 @@ var reportsCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		// Collecting flags
-		alwaysApproved, _ := cmd.Flags().GetBool("always-approved")
+		allowExperimentalFeatures, _ := cmd.Flags().GetBool("allow-experimental-features")
 		outputDir, _ := cmd.Flags().GetString("output")
 		generate, _ := cmd.Flags().GetBool("generate")
 		// Performing download reports
-		ok, err := helper.ProcessDownloadReports(fileID, alwaysApproved, generate, outputDir)
+		ok, err := helper.ProcessDownloadReports(fileID, allowExperimentalFeatures, generate, outputDir)
 		if err != nil || !ok {
 			os.Exit(1)
 		}
@@ -44,5 +44,5 @@ func init() {
 	RootCmd.AddCommand(reportsCmd)
 	reportsCmd.Flags().StringP("output", "o", ".", "Output directory to save reports")
 	reportsCmd.Flags().Bool("generate", false, "Generate reports")
-	reportsCmd.Flags().Bool("always-approved", false, "Need to approve all the reports")
+	reportsCmd.Flags().Bool("allow-experimental-features", false, "Allow experimental features to download reports")
 }

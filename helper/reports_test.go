@@ -279,7 +279,7 @@ func TestHelper_ProcessDownloadReports_With_Generate_Yes_and_Generate_Report_Fai
 func TestHelper_ProcessDownloadReports_WithInvalidData_Fail(t *testing.T) {
 	ok, err := ProcessDownloadReports(1, false, false, ".")
 	assert.Equal(t, false, ok)
-	assert.Equal(t, "Please pass `--always-approved` to approve all the reports", err.Error())
+	assert.Equal(t, "Downloading PDF reports is not a fully supported/experimental feature. Please opt-in by specifying --allow-experimental-features in the command.", err.Error())
 }
 
 func TestHelper_ProcessDownloadReports_With_Generate_Yes_FetchReportResultFail_ShouldFail(t *testing.T) {
