@@ -322,7 +322,7 @@ func TestReportsService_DownloadFile_IfWrongURL_Should_Fail(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	outputDir := ".."
+	outputDir := t.TempDir()
 	report, err := client.Reports.DownloadFile(context.Background(), serverURL+"/aws_fake_signed_url.txt?signature=fake_signature_hash", outputDir)
 	assert.Equal(t, true, err != nil)
 	assert.Equal(t, true, len(report) == 0)
@@ -332,7 +332,7 @@ func TestReportsService_DownloadFile_IfInvalidURL_Should_Fail(t *testing.T) {
 	client, _, _, teardown := setup()
 	defer teardown()
 
-	outputDir := ".."
+	outputDir := t.TempDir()
 	report, err := client.Reports.DownloadFile(context.Background(), "", outputDir)
 	assert.Equal(t, true, err != nil)
 	assert.Equal(t, true, len(report) == 0)
@@ -345,7 +345,7 @@ func TestReportsService_DownloadFile_IfBaseURL_Should_Fail(t *testing.T) {
 	client.BaseURL.Scheme = ""
 	client.BaseURL.Host = "localhost/"
 
-	outputDir := ".."
+	outputDir := t.TempDir()
 	report, err := client.Reports.DownloadFile(context.Background(), "", outputDir)
 	assert.Equal(t, true, err != nil)
 	assert.Equal(t, true, len(report) == 0)

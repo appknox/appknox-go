@@ -1,13 +1,13 @@
 package appknox
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -93,8 +93,8 @@ func (s *ReportsService) FetchLastReportResult(ctx context.Context, fileID int) 
 }
 
 // GetReportURL returns the url of the report file to download.
-func (s *ReportsService) GetReportURL(ctx context.Context, resultID int) (*Report, error) {
-	u := fmt.Sprintf("api/v2/reports/%d/pdf", resultID)
+func (s *ReportsService) GetReportURL(ctx context.Context, reportID int) (*Report, error) {
+	u := fmt.Sprintf("api/v2/reports/%d/pdf", reportID)
 	req, err := s.client.NewRequest("GET", u, nil)
 	if err != nil {
 		return nil, err
@@ -116,13 +116,10 @@ func (s *ReportsService) DownloadFile(ctx context.Context, url string, outputDir
 	// Generating filename from download url
 	filename := strings.Split(strings.Split(url, "?")[0], "/")[len(strings.Split(url, "/"))-1]
 
-	var outputPath bytes.Buffer
-	outputPath.WriteString(outputDir)
-	outputPath.WriteString("/")
-	outputPath.WriteString(filename)
+	outputPath := filepath.Join(outputDir, filename)
 
 	// Creating output file from output path
-	out, err := os.Create(outputPath.String())
+	out, err := os.Create(outputPath)
 	if err != nil {
 		return "", err
 	}
@@ -141,5 +138,5 @@ func (s *ReportsService) DownloadFile(ctx context.Context, url string, outputDir
 	// Writing file to output file
 	_, err = io.Copy(out, resp.Body)
 
-	return outputPath.String(), err
+	return outputPath, err
 }

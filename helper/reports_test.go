@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/appknox/appknox-go/appknox"
@@ -81,12 +82,14 @@ func TestHelper_ProcessDownloadReports_WithValidData_Success(t *testing.T) {
 		fmt.Fprint(w, `Fake_File_Content`)
 	})
 
-	ok, err := ProcessDownloadReports(1, true, false, ".")
+	tmpDir := t.TempDir()
+
+	ok, err := ProcessDownloadReports(1, true, false, tmpDir)
 	assert.Equal(t, true, ok)
 	assert.Equal(t, nil, err)
 
 	// remove files after test
-	err = os.Remove("./aws_fake_signed_url1.txt")
+	err = os.Remove(filepath.Join(tmpDir, "aws_fake_signed_url1.txt"))
 	assert.Equal(t, nil, err)
 }
 
@@ -104,7 +107,7 @@ func TestHelper_ProcessDownloadReports_With_Generate_No_IfFetchLastReportResult_
 	viper.Set("insecure", true)
 	viper.Set("access-token", "token")
 
-	ok, err := ProcessDownloadReports(1, true, false, ".")
+	ok, err := ProcessDownloadReports(1, true, false, t.TempDir())
 	assert.Equal(t, false, ok)
 	assert.Equal(t, false, err == nil)
 }
@@ -141,7 +144,7 @@ func TestHelper_ProcessDownloadReports_With_Generate_No_IfGetReportURL_Fail_Shou
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	ok, err := ProcessDownloadReports(1, true, false, ".")
+	ok, err := ProcessDownloadReports(1, true, false, t.TempDir())
 	assert.Equal(t, false, ok)
 	assert.Equal(t, false, err == nil)
 }
@@ -184,9 +187,15 @@ func TestHelper_ProcessDownloadReports_With_Generate_No_IfDownloadFile_Fail_Shou
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	ok, err := ProcessDownloadReports(1, true, false, ".")
+	tmpDir := t.TempDir()
+
+	ok, err := ProcessDownloadReports(1, true, false, tmpDir)
 	assert.Equal(t, false, ok)
 	assert.Equal(t, false, err == nil)
+
+	// remove files after test
+	err = os.Remove(filepath.Join(tmpDir, "aws_fake_signed_url1.txt"))
+	assert.Equal(t, nil, err)
 }
 
 func TestHelper_ProcessDownloadReports_With_Generate_Yes_Success(t *testing.T) {
@@ -231,12 +240,15 @@ func TestHelper_ProcessDownloadReports_With_Generate_Yes_Success(t *testing.T) {
 		fmt.Fprint(w, `Fake_File_Content`)
 	})
 
-	ok, err := ProcessDownloadReports(1, true, true, ".")
+	tmpDir := t.TempDir()
+
+	ok, err := ProcessDownloadReports(1, true, true, tmpDir)
 	assert.Equal(t, true, ok)
 	assert.Equal(t, nil, err)
 
 	// remove files after test
-	err = os.Remove("./aws_fake_signed_url1.txt")
+	// remove files after test
+	err = os.Remove(filepath.Join(tmpDir, "aws_fake_signed_url1.txt"))
 	assert.Equal(t, nil, err)
 }
 func TestHelper_ProcessDownloadReports_With_Generate_Yes_IfAPIFails_Should_Fail(t *testing.T) {
@@ -253,7 +265,7 @@ func TestHelper_ProcessDownloadReports_With_Generate_Yes_IfAPIFails_Should_Fail(
 	viper.Set("insecure", true)
 	viper.Set("access-token", "token")
 
-	ok, err := ProcessDownloadReports(1, true, true, ".")
+	ok, err := ProcessDownloadReports(1, true, true, t.TempDir())
 	assert.Equal(t, false, ok)
 	assert.Equal(t, false, err == nil)
 }
@@ -271,13 +283,13 @@ func TestHelper_ProcessDownloadReports_With_Generate_Yes_and_Generate_Report_Fai
 		w.WriteHeader(http.StatusBadRequest)
 	})
 
-	ok, err := ProcessDownloadReports(1, true, true, ".")
+	ok, err := ProcessDownloadReports(1, true, true, t.TempDir())
 	assert.Equal(t, false, ok)
 	assert.Equal(t, "A report is already being generated or scan is in progress. Please wait.", err.Error())
 }
 
 func TestHelper_ProcessDownloadReports_WithInvalidData_Fail(t *testing.T) {
-	ok, err := ProcessDownloadReports(1, false, false, ".")
+	ok, err := ProcessDownloadReports(1, false, false, t.TempDir())
 	assert.Equal(t, false, ok)
 	assert.Equal(t, "Downloading PDF reports is not a fully supported/experimental feature. Please opt-in by specifying --allow-experimental-features in the command.", err.Error())
 }
@@ -307,7 +319,7 @@ func TestHelper_ProcessDownloadReports_With_Generate_Yes_FetchReportResultFail_S
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	ok, err := ProcessDownloadReports(1, true, true, ".")
+	ok, err := ProcessDownloadReports(1, true, true, t.TempDir())
 	assert.Equal(t, false, ok)
 	assert.Equal(t, false, err == nil)
 }
