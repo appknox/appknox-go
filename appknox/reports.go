@@ -2,7 +2,9 @@ package appknox
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -52,7 +54,11 @@ func (s *ReportsService) List(ctx context.Context, fileID int) ([]*ReportResult,
 
 	var drfResponseReport DRFResponseReport
 
-	_, err = s.client.Do(ctx, request, &drfResponseReport)
+	resp, err := s.client.Do(ctx, request, &drfResponseReport)
+	if resp.StatusCode == 404 {
+		id := strconv.Itoa(fileID)
+		return nil, errors.New("Reports for fileID " + id + " doesn't exist. Are you sure " + id + " is a fileID?")
+	}
 	if err != nil {
 		return nil, err
 	}
