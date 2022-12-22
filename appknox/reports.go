@@ -55,7 +55,7 @@ func (s *ReportsService) List(ctx context.Context, fileID int) ([]*ReportResult,
 	var drfResponseReport DRFResponseReport
 
 	resp, err := s.client.Do(ctx, request, &drfResponseReport)
-	if resp.StatusCode == 404 {
+	if resp != nil && resp.StatusCode == 404 {
 		id := strconv.Itoa(fileID)
 		return nil, errors.New("Reports for fileID " + id + " doesn't exist. Are you sure " + id + " is a fileID?")
 	}
