@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"errors"
-	"os"
 	"strconv"
 
 	"github.com/appknox/appknox-go/helper"
@@ -13,7 +12,7 @@ import (
 var reportsCmd = &cobra.Command{
 	Use:   "reports",
 	Short: "Vulnerability Analysis Reports",
-	Long:  `List, Download, Create reports for the Appknox Files`,
+	Long:  `List or create reports for the file ID. Download reports using report ID`,
 }
 
 var reportsListCmd = &cobra.Command{
@@ -30,16 +29,15 @@ var reportsListCmd = &cobra.Command{
 		if err != nil {
 			err := errors.New("Valid file id is required")
 			helper.PrintError(err)
-			os.Exit(1)
 		}
-		helper.ProcessListReports(fileID)
+		err = helper.ProcessListReports(fileID)
+		if err != nil {
+			helper.PrintError(err)
+		}
 	},
 }
 
 func init() {
 	reportsCmd.AddCommand(reportsListCmd)
 	RootCmd.AddCommand(reportsCmd)
-	reportsCmd.Flags().StringP("output", "o", ".", "Output directory to save reports")
-	reportsCmd.Flags().Bool("generate", false, "Generate reports")
-	reportsCmd.Flags().Bool("allow-experimental-features", false, "Allow experimental features to download reports")
 }

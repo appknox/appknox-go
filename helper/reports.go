@@ -2,19 +2,17 @@ package helper
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/cheynewallace/tabby"
 )
 
-func ProcessListReports(fileID int) {
+func ProcessListReports(fileID int) error {
 	ctx := context.Background()
 	client := getClient()
 	reports, err := client.Reports.List(ctx, fileID)
 	if err != nil {
-		PrintError(err)
-		os.Exit((1))
+		return err
 	}
 	t := tabby.New()
 	header := []interface{}{
@@ -54,5 +52,6 @@ func ProcessListReports(fileID int) {
 		t.AddLine(row...)
 	}
 	t.Print()
+	return nil
 
 }
