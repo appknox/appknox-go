@@ -1,9 +1,14 @@
 package appknox
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -44,6 +49,13 @@ type DRFResponseReport struct {
 	Previous string          `json:"previous,omitempty"`
 	Results  []*ReportResult `json:"results"`
 }
+type DRFResponseReportDownloadUrl struct {
+	Url string `json:"url"`
+}
+
+type DRFResponseReportDataCSV struct {
+	Body string `json:""`
+}
 
 func (s *ReportsService) List(ctx context.Context, fileID int) ([]*ReportResult, error) {
 	url := fmt.Sprintf("api/v2/files/%d/reports", fileID)
@@ -67,4 +79,61 @@ func (s *ReportsService) List(ctx context.Context, fileID int) ([]*ReportResult,
 
 	// return drfResponse.Results, &resp, nil
 
+}
+
+//Get Signed URL to download Summary CSV report Data
+func (s *ReportsService) GetDownloadUrlCSV(ctx context.Context, reportID int) (string, error) {
+	url := fmt.Sprintf("/api/v2/reports/%d/summary_csv", reportID)
+	request, err := s.client.NewRequest("GET", url, nil)
+	var drfResponseReportDownloadUrl DRFResponseReportDownloadUrl
+	resp, err := s.client.Do(ctx, request, &drfResponseReportDownloadUrl)
+	if resp != nil && resp.StatusCode == 404 {
+		id := strconv.Itoa(reportID)
+		return "", errors.New("Report with ID " + id + " doesn't exist. Are you sure " + id + " is a reportID?")
+	}
+	return drfResponseReportDownloadUrl.Url, err
+
+}
+
+//Download Report Data from Url to buffer
+func (s *ReportsService) DownloadReportData(ctx context.Context, downloadUrl string) (*http.Response, error) {
+
+	request, err := s.client.NewRequest("GET", downloadUrl, nil)
+	resp, err := s.client.Reports.client.DoTxt(request)
+	if resp != nil && resp.StatusCode != 200 {
+		return resp, errors.New("We are facing issues while downloading the report.")
+	}
+	return resp, err
+
+}
+
+//Output report from buffer to terminal
+func (s *ReportsService) WriteReportDataToTerminal(response *http.Response) error {
+	reader := bufio.NewReader(response.Body)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(line))
+	}
+}
+
+//Output report from buffer to file
+func (s *ReportsService) WriteReportDataToFile(respBody io.ReadCloser, outputFilePath string) (string, error) {
+
+	filePath := filepath.FromSlash(outputFilePath)
+	dirPath := filepath.Dir(filePath)
+	os.MkdirAll(dirPath, os.ModePerm)
+	out, err := os.Create(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer out.Close()
+	defer respBody.Close()
+	_, err = io.Copy(out, respBody)
+	return outputFilePath, err
 }

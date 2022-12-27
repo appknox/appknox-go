@@ -37,7 +37,39 @@ var reportsListCmd = &cobra.Command{
 	},
 }
 
+var reportsDownloadCmd = &cobra.Command{
+	Use:   "download",
+	Short: "Download Reports",
+	Long:  `Download reports in different formats such as CSV, excel or PDF`,
+}
+
+var reportsDownloadCsvCmd = &cobra.Command{
+	Use:   "summary-csv",
+	Short: "List Vulnerability Analysis Reports",
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) < 1 {
+			return errors.New("file id is required")
+		}
+		return nil
+	},
+	Run: func(cmd *cobra.Command, args []string) {
+		reportID, err := strconv.Atoi(args[0])
+		if err != nil {
+			err := errors.New("Valid Report id is required")
+			helper.PrintError(err)
+		}
+		outputFilePath, _ := cmd.Flags().GetString("output")
+		err = helper.ProcessDownloadReportCSV(reportID, outputFilePath)
+		if err != nil {
+			helper.PrintError(err)
+		}
+	},
+}
+
 func init() {
+	reportsDownloadCmd.AddCommand(reportsDownloadCsvCmd)
+	reportsCmd.AddCommand(reportsDownloadCmd)
+	reportsDownloadCmd.PersistentFlags().StringP("output", "o", "", "Output file path to save reports")
 	reportsCmd.AddCommand(reportsListCmd)
 	RootCmd.AddCommand(reportsCmd)
 }
