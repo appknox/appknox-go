@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 
 	"github.com/appknox/appknox-go/helper"
@@ -13,6 +14,33 @@ var reportsCmd = &cobra.Command{
 	Use:   "reports",
 	Short: "Vulnerability Analysis Reports",
 	Long:  `List or create reports for the file ID. Download reports using report ID`,
+}
+
+var reportsCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create Report for the given file ID.",
+	Long: `Triggers report generation if report doesn't exists or not updated
+	and returns report ID, else last report ID is returned.`,
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) < 1 {
+			return errors.New("file id is required")
+		}
+		return nil
+	},
+	Run: func(cmd *cobra.Command, args []string) {
+		fileID, err := strconv.Atoi(args[0])
+		if err != nil {
+			err := errors.New("Valid file id is required")
+			helper.PrintError(err)
+		}
+		reportId, err := helper.ProcessCreateReport(fileID)
+		if err != nil {
+			helper.PrintError(err)
+			return
+		}
+		fmt.Println(reportId)
+
+	},
 }
 
 var reportsDownloadCmd = &cobra.Command{
@@ -48,5 +76,6 @@ func init() {
 	reportsDownloadCmd.AddCommand(reportsDownloadCsvCmd)
 	reportsCmd.AddCommand(reportsDownloadCmd)
 	reportsDownloadCmd.PersistentFlags().StringP("output", "o", "", "Output file path to save reports")
+	reportsCmd.AddCommand(reportsCreateCmd)
 	RootCmd.AddCommand(reportsCmd)
 }

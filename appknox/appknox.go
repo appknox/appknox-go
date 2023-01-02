@@ -233,6 +233,7 @@ func (c *Client) Do(ctx context.Context, req *http.Request, v interface{}) (*Res
 	}
 	if v != nil {
 		if w, ok := v.(io.Writer); ok {
+
 			io.Copy(w, resp.Body)
 		} else {
 			decErr := json.NewDecoder(resp.Body).Decode(v)

@@ -29,3 +29,14 @@ func ProcessDownloadReportCSV(reportID int, outputFilePath string) error {
 	return err
 
 }
+
+func ProcessCreateReport(fileID int) (reportID int, err error) {
+	ctx := context.Background()
+	client := getClient()
+	report, err := client.Reports.CreateReport(ctx, fileID)
+	if err != nil {
+		return 0, err
+	}
+
+	return report.ID, nil
+}

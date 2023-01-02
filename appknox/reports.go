@@ -68,3 +68,14 @@ func (s *ReportsService) WriteReportDataToFile(reportData bytes.Buffer, outputFi
 	_, err = out.Write(reportData.Bytes())
 	return outputFilePath, err
 }
+
+func (s *ReportsService) CreateReport(ctx context.Context, fileID int) (report *ReportResult, err error) {
+	url := fmt.Sprintf("api/v2/files/%d/reports", fileID)
+	request, err := s.client.NewRequest("POST", url, nil)
+	var reportResult ReportResult
+	_, err = s.client.Do(ctx, request, &reportResult)
+	if err != nil {
+		return nil, err
+	}
+	return &reportResult, nil
+}
