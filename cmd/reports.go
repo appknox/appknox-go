@@ -45,10 +45,10 @@ var reportsDownloadCmd = &cobra.Command{
 
 var reportsDownloadCsvCmd = &cobra.Command{
 	Use:   "summary-csv",
-	Short: "List Vulnerability Analysis Reports",
+	Short: "Download Summary CSV report",
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) < 1 {
-			return errors.New("file id is required")
+			return errors.New("report id is required")
 		}
 		return nil
 	},

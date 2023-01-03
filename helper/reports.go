@@ -66,17 +66,18 @@ func ProcessDownloadReportCSV(reportID int, outputFilePath string) error {
 		return err
 	}
 
-	resp, err := client.Reports.DownloadReportData(ctx, downloadUrl)
+	reportData, err := client.Reports.DownloadReportData(ctx, downloadUrl)
 	if err != nil {
 		return err
 	}
 	if outputFilePath != "" {
-		_, err := client.Reports.WriteReportDataToFile(resp.Body, outputFilePath)
+		_, err := client.Reports.WriteReportDataToFile(reportData, outputFilePath)
 		if err != nil {
 			return errors.New(fmt.Sprintf("Failed to download report. Error: %v", err))
 		}
+		return nil
 	}
-	err = client.Reports.WriteReportDataToTerminal(resp)
+	err = client.Reports.WriteReportDataToTerminal(reportData)
 	return err
 
 }

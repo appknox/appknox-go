@@ -1,12 +1,11 @@
 package appknox
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -53,10 +52,6 @@ type DRFResponseReportDownloadUrl struct {
 	Url string `json:"url"`
 }
 
-type DRFResponseReportDataCSV struct {
-	Body string `json:""`
-}
-
 func (s *ReportsService) List(ctx context.Context, fileID int) ([]*ReportResult, error) {
 	url := fmt.Sprintf("api/v2/files/%d/reports", fileID)
 	request, err := s.client.NewRequest("GET", url, nil)
@@ -96,22 +91,22 @@ func (s *ReportsService) GetDownloadUrlCSV(ctx context.Context, reportID int) (s
 }
 
 //Download Report Data from Url to buffer
-func (s *ReportsService) DownloadReportData(ctx context.Context, downloadUrl string) (*http.Response, error) {
+func (s *ReportsService) DownloadReportData(ctx context.Context, downloadUrl string) (bytes.Buffer, error) {
 
 	request, err := s.client.NewRequest("GET", downloadUrl, nil)
-	resp, err := s.client.Reports.client.DoTxt(request)
+	var reportData bytes.Buffer
+	resp, err := s.client.Reports.client.Do(ctx, request, &reportData)
 	if resp != nil && resp.StatusCode != 200 {
-		return resp, errors.New("We are facing issues while downloading the report.")
+		return reportData, errors.New("We are facing issues while downloading the report.")
 	}
-	return resp, err
+	return reportData, err
 
 }
 
 //Output report from buffer to terminal
-func (s *ReportsService) WriteReportDataToTerminal(response *http.Response) error {
-	reader := bufio.NewReader(response.Body)
+func (s *ReportsService) WriteReportDataToTerminal(reportData bytes.Buffer) error {
 	for {
-		line, err := reader.ReadBytes('\n')
+		line, err := reportData.ReadBytes('\n')
 		if err == io.EOF {
 			return nil
 		}
@@ -123,17 +118,19 @@ func (s *ReportsService) WriteReportDataToTerminal(response *http.Response) erro
 }
 
 //Output report from buffer to file
-func (s *ReportsService) WriteReportDataToFile(respBody io.ReadCloser, outputFilePath string) (string, error) {
+func (s *ReportsService) WriteReportDataToFile(reportData bytes.Buffer, outputFilePath string) (string, error) {
 
 	filePath := filepath.FromSlash(outputFilePath)
 	dirPath := filepath.Dir(filePath)
-	os.MkdirAll(dirPath, os.ModePerm)
+	err := os.MkdirAll(dirPath, os.ModePerm)
+	if err != nil {
+		return "", err
+	}
 	out, err := os.Create(filePath)
 	if err != nil {
 		return "", err
 	}
 	defer out.Close()
-	defer respBody.Close()
-	_, err = io.Copy(out, respBody)
+	_, err = out.Write(reportData.Bytes())
 	return outputFilePath, err
 }

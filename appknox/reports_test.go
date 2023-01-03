@@ -3,7 +3,6 @@ package appknox
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"reflect"
 	"testing"
@@ -93,9 +92,8 @@ func TestReportService_DownloadReportData_Should_Download_Data(t *testing.T) {
 		testMethod(t, r, "GET")
 		fmt.Fprint(w, respBody)
 	})
-	resp, err := client.Reports.DownloadReportData(context.Background(), signedUrl)
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
-	body := string(bodyBytes)
+	reportData, err := client.Reports.DownloadReportData(context.Background(), signedUrl)
+	body := string(reportData.Bytes())
 	if body != respBody {
 		t.Errorf("Reports.DownloadReportData failed. Expected %s, Got %s", respBody, body)
 
