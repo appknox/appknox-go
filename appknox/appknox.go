@@ -247,12 +247,6 @@ func (c *Client) Do(ctx context.Context, req *http.Request, v interface{}) (*Res
 	return response, err
 }
 
-// DoTxt sends an API request and returns the API response.
-// The API response is plaintext.
-func (c *Client) DoTxt(request *http.Request) (*http.Response, error) {
-	return c.client.Do(request)
-}
-
 func sanitizeURL(uri *url.URL) *url.URL {
 	if uri == nil {
 		return nil
