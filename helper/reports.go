@@ -34,9 +34,8 @@ func ProcessCreateReport(fileID int) (reportID int, err error) {
 	ctx := context.Background()
 	client := getClient()
 	report, err := client.Reports.CreateReport(ctx, fileID)
-	if err != nil {
-		return 0, err
+	if report != nil {
+		return report.ID, nil
 	}
-
-	return report.ID, nil
+	return 0, err
 }

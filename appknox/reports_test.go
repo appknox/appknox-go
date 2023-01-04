@@ -141,5 +141,55 @@ func TestReportService_WriteReportDataToFile_Should_Throw_Error_If_Filename_Is_E
 	if err == nil {
 		t.Errorf("Reports.WriteReportDataToFile should returned error details if directory is passed as file name")
 	}
+}
+func TestReportService_CreateReport_Should_Return_New_Report_ID(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "POST")
+		fmt.Fprintf(w, `{"id": 1}`)
+		w.WriteHeader(http.StatusCreated)
+	})
+	report, err := client.Reports.CreateReport(context.Background(), 1)
+	if report.ID != 1 {
+		t.Errorf("Reports.CreateReport failed Expected reportID %d, Got %d", 1, report.ID)
+	}
+	if err != nil {
+		t.Errorf("Reports.CreateReport returned error: %v", err)
+	}
+}
+
+func TestReportService_CreateReport_Should_Return_0_If_Report_Cant_Be_Generated(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "POST")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, `{"message": "Report can't be generated"}`)
+	})
+	report, err := client.Reports.CreateReport(context.Background(), 1)
+	if report != nil {
+		t.Errorf("Reports.CreateReport should return nil in case of Bad Request")
+	}
+	if err == nil {
+		t.Errorf("Reports.CreateReport should return error message in case of 400 http response")
+	}
+
+}
+func TestReportService_CreateReport_Should_Return_0_If_Server_Error_Occurs(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "POST")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"message": "Report can't be generated"}`)
+	})
+	report, err := client.Reports.CreateReport(context.Background(), 1)
+	if report != nil {
+		t.Errorf("Reports.CreateReport should return nil in case of Internal Server Error")
+	}
+	if err == nil {
+		t.Errorf("Reports.CreateReport should return error message in case of Internal Server Error")
+	}
 
 }
