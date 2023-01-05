@@ -2,68 +2,56 @@ package helper
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"time"
+
+	"github.com/cheynewallace/tabby"
 )
 
-func ProcessDownloadReports(fileID int, allowExperimentalFeatures bool, generate bool, output string) (bool, error) {
-	var reportID int
-
-	if !allowExperimentalFeatures {
-		fmt.Println("Downloading PDF reports is not a fully supported/experimental feature. Please opt-in by specifying --allow-experimental-features in the command.")
-		return false, errors.New("Downloading PDF reports is not a fully supported/experimental feature. Please opt-in by specifying --allow-experimental-features in the command.")
-	}
-
+func ProcessListReports(fileID int) error {
 	ctx := context.Background()
 	client := getClient()
-
-	if generate {
-		// This part of code is to generate reports
-		fmt.Println("Generating reports...")
-		report, err := client.Reports.GenerateReport(ctx, fileID)
-		if err != nil {
-			PrintError(err)
-			return false, err
-		}
-
-		// Assigning result id for later use in download report section
-		reportID = report.ID
-		for report.Progress < 100 {
-			time.Sleep(100 * time.Millisecond)
-			report, err = client.Reports.FetchReportResult(ctx, reportID)
-			if err != nil {
-				PrintError(errors.New("Faild to fetch report result"))
-				return false, err
-			}
-			fmt.Printf("\rGeneration progress: %d%%", report.Progress)
-		}
-		fmt.Println("\nReport generated successfully.")
-	} else {
-		// This part of code will be executed when user want to download report which is already generated.
-		fmt.Println("Fetching reports...")
-		report, err := client.Reports.FetchLastReportResult(ctx, fileID)
-		if err != nil {
-			PrintError(errors.New("No report generated for this file."))
-			return false, err
-		}
-		// Assigning result id for later use in download report section
-		reportID = report.ID
-	}
-
-	report, err := client.Reports.GetReportURL(ctx, reportID)
+	reports, err := client.Reports.List(ctx, fileID)
 	if err != nil {
-		PrintError(err)
-		return false, err
+		return err
 	}
-
-	out, err := client.Reports.DownloadFile(ctx, report.URL, output)
-	if err != nil {
-		PrintError(err)
-		return false, err
+	t := tabby.New()
+	header := []interface{}{
+		"ID",
+		"Generated On",
+		"Language",
+		"Progress",
+		"Rating",
+		"Show API Scan",
+		"Show Manual Scan",
+		"Show Static Scan",
+		"Show Dynamic Scan",
+		"Show Ignored Analyses Scan",
+		"Show HIPAA",
+		"Is HIPAA Inherited",
+		"Show PCIDSS",
+		"Is PCIDSS Inherited",
 	}
+	t.AddHeader(header...)
+	for i := 0; i < len(reports); i++ {
+		row := []interface{}{
+			reports[i].ID,
+			reports[i].GeneratedOn.Format(time.RFC1123),
+			reports[i].Language,
+			reports[i].Progress,
+			reports[i].Rating,
+			reports[i].ReportPreferences.ShowAPIScan,
+			reports[i].ReportPreferences.ShowManualScan,
+			reports[i].ReportPreferences.ShowStaticScan,
+			reports[i].ReportPreferences.ShowDynamicScan,
+			reports[i].ReportPreferences.ShowIgnoredAnalyses,
+			reports[i].ReportPreferences.HIPAAPreferences.ShowHIPPA,
+			reports[i].ReportPreferences.HIPAAPreferences.IsInherited,
+			reports[i].ReportPreferences.PCIDSSPreferences.ShowPCIDSS,
+			reports[i].ReportPreferences.PCIDSSPreferences.IsInherited,
+		}
+		t.AddLine(row...)
+	}
+	t.Print()
+	return nil
 
-	fmt.Println("Report downloaded successfully.")
-	fmt.Println("Report saved to: ", out)
-	return true, nil
 }
