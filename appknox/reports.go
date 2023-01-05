@@ -24,7 +24,7 @@ type ReportPreferences struct {
 	ShowManualScan      bool              `json:"show_manual_scan"`
 	ShowStaticScan      bool              `json:"show_static_scan"`
 	ShowDynamicScan     bool              `json:"show_dynamic_scan"`
-	ShowIgnoredAnalyses bool              `json:"show_ignored_analyses_scan"`
+	ShowIgnoredAnalyses bool              `json:"show_ignored_analyses"`
 	PCIDSSPreferences   PCIDSSPreferences `json:"show_hipaa"`
 	HIPAAPreferences    HIPAAPreferences  `json:"show_pcidss"`
 }
