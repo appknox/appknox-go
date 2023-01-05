@@ -15,28 +15,6 @@ var reportsCmd = &cobra.Command{
 	Long:  `List or create reports for the file ID. Download reports using report ID`,
 }
 
-var reportsListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List Vulnerability Analysis Reports",
-	Args: func(cmd *cobra.Command, args []string) error {
-		if len(args) < 1 {
-			return errors.New("file id is required")
-		}
-		return nil
-	},
-	Run: func(cmd *cobra.Command, args []string) {
-		fileID, err := strconv.Atoi(args[0])
-		if err != nil {
-			err := errors.New("Valid file id is required")
-			helper.PrintError(err)
-		}
-		err = helper.ProcessListReports(fileID)
-		if err != nil {
-			helper.PrintError(err)
-		}
-	},
-}
-
 var reportsDownloadCmd = &cobra.Command{
 	Use:   "download",
 	Short: "Download Reports",
@@ -70,6 +48,5 @@ func init() {
 	reportsDownloadCmd.AddCommand(reportsDownloadCsvCmd)
 	reportsCmd.AddCommand(reportsDownloadCmd)
 	reportsDownloadCmd.PersistentFlags().StringP("output", "o", "", "Output file path to save reports")
-	reportsCmd.AddCommand(reportsListCmd)
 	RootCmd.AddCommand(reportsCmd)
 }
