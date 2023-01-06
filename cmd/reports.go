@@ -19,8 +19,7 @@ var reportsCmd = &cobra.Command{
 var reportsCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create Report for the given file ID.",
-	Long: `Triggers report generation if report doesn't exists or not updated
-	and returns report ID, else last report ID is returned.`,
+	Long:  `Create new Report and returns newly created report ID`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) < 1 {
 			return errors.New("file id is required")
