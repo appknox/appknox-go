@@ -1,9 +1,12 @@
 package appknox
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"path/filepath"
 	"testing"
 )
 
@@ -78,6 +81,65 @@ func TestReportService_DownloadReportData_Should_Throw_Error_If_Not_200(t *testi
 	_, err := client.Reports.DownloadReportData(context.Background(), signedUrl)
 	if err.Error() != "We are facing issues while downloading the report." {
 		t.Error("Reports.DownloadReportData should throw error message if download failed")
+	}
+
+}
+
+func TestReportService_WriteReportDataToFile_Should_Save_Report_To_File(t *testing.T) {
+	client, _, _, teardown := setup()
+	defer teardown()
+	reportContent := `
+	column0, column1, column2
+	data0, data1, data2
+	`
+	reportData := bytes.NewBufferString(reportContent)
+	tempdir := t.TempDir()
+	outputFilePath := filepath.Join(tempdir, "report.csv")
+	filePath, err := client.Reports.WriteReportDataToFile(*reportData, outputFilePath)
+	fileContentBytes, err := ioutil.ReadFile(filePath)
+	if string(fileContentBytes) != reportContent {
+		t.Errorf("Reports.WriteReportDataToFile failed to write exepcted report content to file")
+	}
+	if err != nil {
+		t.Errorf("Reports.WriteReportDataToFile returned error %v", err)
+	}
+
+}
+
+func TestReportService_WriteReportDataToFile_Should_Throw_Error_If_Filename_Is_Dir(t *testing.T) {
+	client, _, _, teardown := setup()
+	defer teardown()
+	reportContent := `
+	column0, column1, column2
+	data0, data1, data2
+	`
+	reportData := bytes.NewBufferString(reportContent)
+	tempdir := t.TempDir()
+	outputFilePath := filepath.Join(tempdir, "/")
+	filePath, err := client.Reports.WriteReportDataToFile(*reportData, outputFilePath)
+	if filePath != "" {
+		t.Errorf("Reports.WriteReportDataToFile should return empty filepath for error")
+	}
+	if err == nil {
+		t.Errorf("Reports.WriteReportDataToFile should returned error details if directory is passed as file name")
+	}
+
+}
+func TestReportService_WriteReportDataToFile_Should_Throw_Error_If_Filename_Is_Empty(t *testing.T) {
+	client, _, _, teardown := setup()
+	defer teardown()
+	reportContent := `
+	column0, column1, column2
+	data0, data1, data2
+	`
+	reportData := bytes.NewBufferString(reportContent)
+	filePath, err := client.Reports.WriteReportDataToFile(*reportData, "")
+	fmt.Println(err)
+	if filePath != "" {
+		t.Errorf("Reports.WriteReportDataToFile should return empty filepath for error")
+	}
+	if err == nil {
+		t.Errorf("Reports.WriteReportDataToFile should returned error details if directory is passed as file name")
 	}
 
 }
