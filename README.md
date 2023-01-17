@@ -125,7 +125,7 @@ Email:      abc@abc.com
 Note that this method will not set the access_token permanently which means that
 each time you run a command you have to pass the flag `access-token`.
 
-### Data fetch & actions
+## Data fetch & actions
 
 | Available commands | Use |
 |--------------------|-----|
@@ -137,6 +137,8 @@ each time you run a command you have to pass the flag `access-token`.
 | `owasp <owasp_id>` | Get OWASP detail |
 | `upload <path_to_app_package>` | Upload app file from given path and get the file_id |
 | `cicheck <file_id>` | Check for vulnerabilities based on risk threshold. |
+| `reports create <file_id>` | Create report for the app file |
+| `reports download summary-csv <report_id>` | Download Summary CSV report for the given report of the file |
 
 ## Example:
 #### For Linux & macOS platform
@@ -237,4 +239,62 @@ ID      RISK    CVSS-VECTOR                                   CVSS-BASE  VULNERA
 
 exit status 1
 
+```
+
+## CI/CD Workflows
+
+### Upload App and Download Summary CSV report
+
+#### Linux & macOS platform
+
+```bash
+fileId=`appknox upload /path/to/app/binary` && appknox cicheck $fileId ; reportId=`appknox reports create $fileId` && appknox reports download summary-csv $reportId  --output /path/to/report.csv
+```
+
+or
+
+#### Run as a bash script
+```
+./appknox-upload-app-download-summary-csv.sh /path/to/app/binary /path/to/summary-report.csv
+```
+
+```
+#!/bin/sh
+fileId=`./appknox-go upload $1`
+./appknox-go cicheck $fileId
+reportId=`./appknox-go reports create $fileId`
+if ! [ -z "$2" ]; then
+  ./appknox-go reports download summary-csv $reportId --output $2
+else
+  ./appknox-go reports download summary-csv $reportId
+fi
+```
+
+#### Windows platform
+
+```
+$fileId = (appknox upload /path/to/app/binary) && (appknox cicheck $fileId) ; ($reportId = appknox reports create $fileId) && (appknox reports download summary-csv $reportId  --output /path/to/report.csv)
+
+```
+
+or 
+#### Run as a powershell script
+```
+.\appknox-upload-app-download-summary-csv.ps1 /path/to/app/binary /path/to/summary-report.csv
+```
+
+```
+param (
+  [string]$appBinaryPath = "",
+  [string]$reportPath = ""
+)
+$fileId = .\appknox-go upload $appBinaryPath
+.\appknox-go cicheck $fileId
+$reportId = .\appknox-go reports create $fileId
+if ($reportPath) {
+  .\appknox-go reports download summary-csv $reportId --output $reportPath
+}
+else {
+  .\appknox-go reports download summary-csv $reportId
+}
 ```
