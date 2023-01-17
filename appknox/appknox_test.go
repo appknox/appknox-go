@@ -209,7 +209,7 @@ func TestNewRequest(t *testing.T) {
 	}
 
 	// test that default user-agent is attached to the request
-	if got, want := req.Header.Get("User-Agent"), userAgent; got != want {
+	if got, want := req.Header.Get("User-Agent"), c.GetUserAgent(); got != want {
 		t.Errorf("NewRequest() User-Agent is %v, want %v", got, want)
 	}
 }
