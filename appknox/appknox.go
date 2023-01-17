@@ -14,13 +14,13 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/appknox/appknox-go/version"
 	"github.com/google/go-querystring/query"
 )
 
 const (
 	// DefaultAPIHost the default host value
 	DefaultAPIHost = "https://api.appknox.com/"
-	userAgent      = "appknox-go"
 )
 
 // A Client manages communication with the Appknox API.
@@ -163,11 +163,14 @@ func (c *Client) NewRequest(method, urlStr string, body interface{}) (*http.Requ
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", c.GetUserAgent())
 	authorization := fmt.Sprintf("Token %s", c.AccessToken)
 	req.Header.Set("Authorization", authorization)
 	return req, nil
+}
+
+func (c *Client) GetUserAgent() string {
+	return "appknox-go/" + version.Version
 }
 
 // NewUploadRequest creates an upload request to upload a file to appknox dashboard.
