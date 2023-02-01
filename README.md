@@ -20,6 +20,7 @@ Available Commands:
   organizations List organizations
   owasp         Fetch OWASP by ID
   projects      List projects
+  reports       Vulnerability Analysis Reports
   upload        Upload and scan package
   vulnerability Get vulnerability
   whoami        Shows current authenticated user
@@ -139,6 +140,7 @@ each time you run a command you have to pass the flag `access-token`.
 | `cicheck <file_id>` | Check for vulnerabilities based on risk threshold. |
 | `reports create <file_id>` | Create report for the app file |
 | `reports download summary-csv <report_id>` | Download Summary CSV report for the given report of the file |
+| `reports download summary-excel <report_id>` | Download Summary Excel report for the given report of the file |
 
 ## Example:
 #### For Linux & macOS platform
