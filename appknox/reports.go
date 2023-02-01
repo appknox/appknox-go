@@ -37,6 +37,18 @@ func (s *ReportsService) GetDownloadUrlCSV(ctx context.Context, reportID int) (s
 	return drfResponseReportDownloadUrl.Url, err
 
 }
+func (s *ReportsService) GetDownloadUrlExcel(ctx context.Context, reportID int) (string, error) {
+	url := fmt.Sprintf("/api/v2/reports/%d/summary_excel", reportID)
+	request, err := s.client.NewRequest("GET", url, nil)
+	var drfResponseReportDownloadUrl DRFResponseReportDownloadUrl
+	resp, err := s.client.Do(ctx, request, &drfResponseReportDownloadUrl)
+	if resp != nil && resp.StatusCode == 404 {
+		id := strconv.Itoa(reportID)
+		return "", errors.New("Report with ID " + id + " doesn't exist. Are you sure " + id + " is a reportID?")
+	}
+	return drfResponseReportDownloadUrl.Url, err
+
+}
 
 //Download Report Data from Url to buffer
 func (s *ReportsService) DownloadReportData(ctx context.Context, downloadUrl string) (bytes.Buffer, error) {

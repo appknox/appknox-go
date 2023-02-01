@@ -29,6 +29,24 @@ func ProcessDownloadReportCSV(reportID int, outputFilePath string) error {
 	return err
 
 }
+func ProcessDownloadReportExcel(reportID int, outputFilePath string) error {
+	ctx := context.Background()
+	client := getClient()
+	downloadUrl, err := client.Reports.GetDownloadUrlExcel(ctx, reportID)
+	if err != nil {
+		return err
+	}
+	reportData, err := client.Reports.DownloadReportData(ctx, downloadUrl)
+	if err != nil {
+		return err
+	}
+	_, err = client.Reports.WriteReportDataToFile(reportData, outputFilePath)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Failed to download report. Error: %v", err))
+	}
+	return nil
+
+}
 
 func ProcessCreateReport(fileID int) (reportID int, err error) {
 	ctx := context.Background()

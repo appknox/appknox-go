@@ -71,8 +71,37 @@ var reportsDownloadCsvCmd = &cobra.Command{
 	},
 }
 
+var reportsDownloadExcelCmd = &cobra.Command{
+	Use:   "summary-excel",
+	Short: "Download Summary Excel report",
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) < 1 {
+			return errors.New("report id is required")
+		}
+		return nil
+	},
+	Run: func(cmd *cobra.Command, args []string) {
+		reportID, err := strconv.Atoi(args[0])
+		if err != nil {
+			err := errors.New("Valid Report id is required")
+			helper.PrintError(err)
+			return
+		}
+		outputFilePath, _ := cmd.Flags().GetString("output")
+		if outputFilePath == "" {
+			helper.PrintError(errors.New(`Error: Required flag "output" not set`))
+			return
+		}
+		err = helper.ProcessDownloadReportExcel(reportID, outputFilePath)
+		if err != nil {
+			helper.PrintError(err)
+		}
+	},
+}
+
 func init() {
 	reportsDownloadCmd.AddCommand(reportsDownloadCsvCmd)
+	reportsDownloadCmd.AddCommand(reportsDownloadExcelCmd)
 	reportsCmd.AddCommand(reportsDownloadCmd)
 	reportsDownloadCmd.PersistentFlags().StringP("output", "o", "", "Output file path to save reports")
 	reportsCmd.AddCommand(reportsCreateCmd)
