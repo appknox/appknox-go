@@ -103,7 +103,8 @@ type Analysis struct {
 	Cwe             []string                `json:"cwe,omitempty"`
 	Gdpr            []string                `json:"gdpr,omitempty"`
 	Mstg            []string                `json:"mstg,omitempty"`
-	Owaspapi2023	[]string				`json:"owaspapi2023,omitempty"`
+	Owaspapi2023    []string                `json:"owaspapi2023,omitempty"`
+	Masvs           []string                `json:"masvs,omitempty"`
 	UpdatedOn       *time.Time              `json:"updated_on,omitempty"`
 	VulnerabilityID int                     `json:"vulnerability,omitempty"`
 }
@@ -118,6 +119,9 @@ type AnalysisListOptions struct {
 func (s *AnalysesService) ListByFile(ctx context.Context, fileID int, opt *AnalysisListOptions) ([]*Analysis, *AnalysisResponse, error) {
 	u := fmt.Sprintf("api/v2/files/%v/analyses", fileID)
 	URL, err := addOptions(u, opt)
+	if err != nil {
+		return nil, nil, err
+	}
 	req, err := s.client.NewRequest("GET", URL, nil)
 	if err != nil {
 		return nil, nil, err
