@@ -45,6 +45,7 @@ func TestAnalysesCompliance_marshall(t *testing.T) {
 		Cwe:             []string{"C_1"},
 		Gdpr:            []string{"G_1", "G_2"},
 		Mstg:            []string{"M_1"},
+		Masvs:            []string{"MASVS_6_3"},
 		VulnerabilityID: 1,
 	}
 	want := `{
@@ -56,6 +57,7 @@ func TestAnalysesCompliance_marshall(t *testing.T) {
 		"cwe": ["C_1"],
 		"gdpr": ["G_1", "G_2"],
 		"mstg": ["M_1"],
+		"masvs": ["MASVS_6_3"],
 		"vulnerability": 1
 	}`
 	testJSONMarshal(t, u, want)
