@@ -46,6 +46,8 @@ func TestAnalysesCompliance_marshall(t *testing.T) {
 		Gdpr:            []string{"G_1", "G_2"},
 		Mstg:            []string{"M_1"},
 		Owaspapi2023:	 []string{"API_2023_8"},
+		Nistsp80053:     []string{"AC_3", "RA_2"},
+		Nistsp800171:    []string{"3_1_1", "3_1_3"},
 		VulnerabilityID: 1,
 	}
 	want := `{
@@ -58,6 +60,8 @@ func TestAnalysesCompliance_marshall(t *testing.T) {
 		"gdpr": ["G_1", "G_2"],
 		"mstg": ["M_1"],
 		"owaspapi2023": ["API_2023_8"],
+		"nistsp80053": ["AC_3", "RA_2"],
+		"nistsp800171": ["3_1_1", "3_1_3"],
 		"vulnerability": 1
 	}`
 	testJSONMarshal(t, u, want)

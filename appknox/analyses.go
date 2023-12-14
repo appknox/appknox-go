@@ -104,6 +104,8 @@ type Analysis struct {
 	Gdpr            []string                `json:"gdpr,omitempty"`
 	Mstg            []string                `json:"mstg,omitempty"`
 	Owaspapi2023	[]string				`json:"owaspapi2023,omitempty"`
+	Nistsp80053     []string                `json:"nistsp80053,omitempty"`
+	Nistsp800171    []string                `json:"nistsp800171,omitempty"`
 	UpdatedOn       *time.Time              `json:"updated_on,omitempty"`
 	VulnerabilityID int                     `json:"vulnerability,omitempty"`
 }
