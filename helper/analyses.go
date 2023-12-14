@@ -36,7 +36,7 @@ func ProcessAnalyses(fileID int) {
 	// header is an interface because t.AddHeader only supports
 	// interface elements
 	header := []interface{}{"ID", "RISK", "STATUS", "CVSS-VECTOR", "CVSS-BASE", "CVSS-VERSION", "OWASP", "ASVS", "CWE",
-		"MSTG", "OWASP API 2023", "OWASP MASVS (v2)"}
+		"MSTG", "OWASP API 2023", "OWASP MASVS (v2)", "NIST SP 800-53", "NIST SP 800-171"}
 	if profileReportPref.ShowPcidss.Value {
 		header = append(header, "PCI-DSS")
 	}
@@ -64,6 +64,8 @@ func ProcessAnalyses(fileID int) {
 			finalAnalyses[i].Mstg,
 			finalAnalyses[i].Owaspapi2023,
 			finalAnalyses[i].Masvs,
+			finalAnalyses[i].Nistsp80053,
+			finalAnalyses[i].Nistsp800171,
 		}
 		if profileReportPref.ShowPcidss.Value {
 			row = append(row, finalAnalyses[i].Pcidss)
