@@ -103,7 +103,8 @@ type Analysis struct {
 	Cwe             []string                `json:"cwe,omitempty"`
 	Gdpr            []string                `json:"gdpr,omitempty"`
 	Mstg            []string                `json:"mstg,omitempty"`
-	Owaspapi2023	[]string				`json:"owaspapi2023,omitempty"`
+	Owaspapi2023    []string                `json:"owaspapi2023,omitempty"`
+	Owaspmobile2024 []string                `json:"owaspmobile2024,omitempty"`
 	UpdatedOn       *time.Time              `json:"updated_on,omitempty"`
 	VulnerabilityID int                     `json:"vulnerability,omitempty"`
 }
