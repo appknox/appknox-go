@@ -24,9 +24,32 @@ func getAppknoxAccessToken() string {
 	return accessToken
 }
 
+// GetHostMappings returns a map of host names to URLs.
+ func GetHostMappings() map[string]string {
+     return map[string]string{
+         "default": "https://api.appknox.com/",
+         "saudi":   "https://sa.secure.appknox.com/",
+         // Add more mappings as needed
+     }
+ }
+
+func getAPIHostMappings() map[string]string {
+    // Instead of using an environment variable, call the new function
+    return GetHostMappings()
+}
+
 func getClient() *appknox.Client {
 	token := getAppknoxAccessToken()
 	host := viper.GetString("host")
+
+	// Get the API host mappings
+        hostMappings := getAPIHostMappings()
+
+        // Check if the provided host is a name in the mappings
+        if mappedHost, exists := hostMappings[host]; exists {
+            host = mappedHost
+        }
+
 	client, err := appknox.NewClient(token)
 	if err != nil {
 		fmt.Println(err)
