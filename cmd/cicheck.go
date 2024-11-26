@@ -52,5 +52,5 @@ var cicheckCmd = &cobra.Command{
 func init() {
 	RootCmd.AddCommand(cicheckCmd)
 	cicheckCmd.Flags().StringP(
-		"risk-threshold", "r", "low", "Risk threshold to fail the command. Available options: low, medium, high")
+		"risk-threshold", "r", "low", "Risk threshold to fail the command. Available options: low, medium, high, critical")
 }
