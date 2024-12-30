@@ -67,6 +67,9 @@ type Client struct {
 
 	// Reports service is used to interact with appknox reports api.
 	Reports *ReportsService
+
+	// Dynamic Scan service is used to interact with appknox DAST related APIs
+	DynamicScans *DynamicScanService
 }
 
 // NewClient returns a new appknox API client.
@@ -102,6 +105,7 @@ func NewClient(accessToken string) (*Client, error) {
 	c.OWASP = (*OWASPService)(&c.common)
 	c.Organizations = (*OrganizationsService)(&c.common)
 	c.Reports = (*ReportsService)(&c.common)
+	c.DynamicScans = (*DynamicScanService)(&c.common)
 	return c, nil
 }
 
