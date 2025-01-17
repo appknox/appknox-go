@@ -1,32 +1,37 @@
 package helper
 
 import (
-	"context"
-	"fmt"
-	//"github.com/appknox/appknox-go/appknox"
+    "context"
+    "fmt"
+    "strconv"
+    "net/http"
+
+    // "github.com/appknox/appknox-go/appknox"
 )
 
-// ScheduleDastAutomation obtains a client, then POSTs to schedule the dynamic scan.
-// It returns nil on success (204), or an error if there's a known/unknown problem.
-func ScheduleDastAutomation(fileID int) error {
-	// 1. Get your client — either an exported or unexported function from clientinitialize.go
-	client := getClient() // or GetClient() if exported
+// ScheduleDastAutomation calls the DynamicScanService.ScheduleDastAutomation
+// to POST /api/v2/files/:file_id/dynamicscans with mode & enable_api_capture.
+func ScheduleDastAutomation(fileID int, mode int, enableAPICapture bool) error {
+    client := getClient()
 
-	resp, err := client.DynamicScans.ScheduleDastAutomation(context.Background(), fileID)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
-	}
+    // Directly call the Dynamic Scans service method
+    resp, err := client.DynamicScans.ScheduleDastAutomation(
+        context.Background(),
+        fileID,
+        mode,
+        enableAPICapture,
+    )
+    if err != nil {
+        return fmt.Errorf("request failed: %w", err)
+    }
+    defer resp.Body.Close()
 
-	// 4. Handle the various known status codes
-	switch resp.StatusCode {
-	case 204:
-		// success => scanning inqueued
-		return nil
-	case 400:
-		return fmt.Errorf("dynamic scan automation is not enabled")
-	case 403:
-		return fmt.Errorf("there is a dynamic scan in progress, cannot schedule automation at the moment")
-	default:
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
+    // The API returns 201 (Created) on success
+    switch resp.StatusCode {
+    case http.StatusCreated: // 201
+        return nil
+    default:
+        // If you'd like to parse any error message from resp.Body, you could do that here.
+        return fmt.Errorf("unexpected status code: %s", strconv.Itoa(resp.StatusCode))
+    }
 }

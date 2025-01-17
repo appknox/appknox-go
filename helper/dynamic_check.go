@@ -11,113 +11,111 @@ import (
     "github.com/cheynewallace/tabby"
 )
 
-// ----------------------- Public Entry Point -----------------------
-//
-// RunDastCheck is the single entry point that the `dastcheck` CLI command calls.
-// It obtains the client from clientinitialize.go, checks dynamic_status, then
-// either prints "in queue" or calls `handleDynamicScan` for further logic.
-func RunDastCheck(fileID int, riskThreshold int) error {
-    client := getClient()
-
-    file, _, err := client.Files.GetByID(context.Background(), fileID)
-    if err != nil {
-        PrintError(err)
-        os.Exit(1)
-        return err
-    }
-
-    switch file.DynamicStatus {
-    case enums.DynamicScanState.InQueue:
-        fmt.Println("Status: inqueue")
-        return nil
-    default:
-        return handleDynamicScan(client, fileID, riskThreshold)
-    }
+// Final/terminating statuses for a dynamic scan (22=AnalysisCompleted, 23=TimedOut, etc.)
+var terminatingStatuses = []enums.DynamicScanStatusType{
+    enums.DynamicScanStatus.AnalysisCompleted, // 22
+    enums.DynamicScanStatus.TimedOut,          // 23
+    enums.DynamicScanStatus.Error,             // 24
+    enums.DynamicScanStatus.Cancelled,         // 25
+    enums.DynamicScanStatus.Terminated,        // 26
 }
 
-// ------------------------ Internal Helpers ------------------------
-//
-// 1) Get the latest dynamic scan
-// 2) If none => print "No dynamic scan" and return
-// 3) If status=22 => "completed", show vulnerabilities
-// 4) If status=23/24/25 => "ended" + error
-// 5) Otherwise => poll
-func handleDynamicScan(client *appknox.Client, fileID int, riskThreshold int) error {
-    timeOut := 3 * time.Minute
-    dynamicScan, err := getFinishedDynamicScan(client, fileID, timeOut)
+// Dynamic scan statuses that indicate the scan hasn't started yet
+var nonStartedStatuses = []enums.DynamicScanStatusType{
+    enums.DynamicScanStatus.InQueue,                    // 3 - Waiting
+    enums.DynamicScanStatus.PreProcessing,              // 4 - Pre-processing
+    enums.DynamicScanStatus.ProcessingScanRequest,      // 5 - Preparing to scan
+    enums.DynamicScanStatus.NotStarted,                 // 6 - Not yet started
+}
+
+// HandleDynamicScan checks the latest scan and acts accordingly.
+func HandleDynamicScan(fileID, riskThreshold int) error {
+    client := getClient()
+
+    // Get the final dynamic scan state
+    dynamicScan, err := getLatestDynamicScan(client, fileID)
     if err != nil {
         PrintError(err)
         os.Exit(1)
         return err
     }
-
     if dynamicScan == nil {
         fmt.Println("No dynamic scan is running for the file.")
         return nil
     }
 
-    switch dynamicScan.Status {
-    case 22:
-        fmt.Println("Dynamic scan has completed successfully.")
+    // Determine action based on scan status
+    switch {
+    case isInStatuses(dynamicScan.Status, nonStartedStatuses):
+        fmt.Println("Dynamic scan is in queue.")
+        return nil
+
+    case dynamicScan.Status == enums.DynamicScanStatus.AnalysisCompleted ||
+        dynamicScan.Status == enums.DynamicScanStatus.TimedOut:
+        fmt.Println("Dynamic scan has completed.")
         return showDynamicVulnerabilities(client, fileID, riskThreshold)
-    case 23, 24, 25:
-        fmt.Printf("Dynamic scan ended with status %d\n", dynamicScan.Status)
+
+    case isInStatuses(dynamicScan.Status, terminatingStatuses):
+        fmt.Printf("Dynamic scan has errored out with status=%d\n", dynamicScan.Status)
         if dynamicScan.ErrorMessage != "" {
             fmt.Printf("Error message: %s\n", dynamicScan.ErrorMessage)
         }
         return nil
+
     default:
-        fmt.Printf("Request timed out for file ID %d\n", fileID)
+        fmt.Println("Request timed out.")
         return nil
     }
 }
 
-// pollUntilFinished polls /api/v2/files/:file_id/dynamicscans every 60s
-// until the scan is in a terminating state (22/23/24/25) or no scan is found.
-func getFinishedDynamicScan(client *appknox.Client, fileID int, timeOut time.Duration) (*appknox.DynamicScan, error) {
+// getLatestDynamicScan handles polling until a final status is reached.
+func getLatestDynamicScan(client *appknox.Client, fileID int) (*appknox.DynamicScan, error) {
+    pollTimeout := 60 * time.Minute
     startTime := time.Now()
+
     for {
-        dynamicScan, err := getLatestDynamicScan(client, fileID)
+        opt := &appknox.DynamicScanListOptions{
+            ListOptions: appknox.ListOptions{Limit: 1},
+        }
+
+        dynamicScans, _, err := client.DynamicScans.ListByFile(context.Background(), fileID, opt)
         if err != nil {
-            PrintError(err)
-            os.Exit(1)
             return nil, err
         }
-        if dynamicScan == nil {
+        if len(dynamicScans) == 0 {
             return nil, nil
         }
 
-        switch dynamicScan.Status {
-        case 22, 23, 24, 25:
-            return dynamicScan, nil
-        default:
-            fmt.Printf("Dynamic scan is still in progress (status=%s)\n", dynamicScan.Status)
+        scan := dynamicScans[0]
+
+        // Exit if scan has reached a final status
+        if isInStatuses(scan.Status, terminatingStatuses) ||
+            isInStatuses(scan.Status, nonStartedStatuses) {
+            return scan, nil
         }
 
-        if time.Since(startTime) > timeOut {
-            return dynamicScan, nil
+        // Continue polling if scan is still in progress
+        fmt.Printf("Dynamic scan is still in progress (status=%d)\n", scan.Status)
+        if time.Since(startTime) > pollTimeout {
+            fmt.Println("DAST check timed out after 60 minutes.")
+            return scan, nil
         }
 
-        time.Sleep(1 * time.Minute)
+        time.Sleep(60 * time.Second)
     }
 }
 
-// getLatestDynamicScan calls GET /api/v2/files/:file_id/dynamicscans
-func getLatestDynamicScan(client *appknox.Client, fileID int) (*appknox.DynamicScan, error) {
-    dynamicScans, _, err := client.DynamicScans.ListByFile(context.Background(), fileID)
-    if err != nil {
-        PrintError(err)
-        os.Exit(1)
-        return nil, err
+// isInStatuses checks if a given scan status belongs to a list of statuses.
+func isInStatuses(status enums.DynamicScanStatusType, statusList []enums.DynamicScanStatusType) bool {
+    for _, s := range statusList {
+        if s == status {
+            return true
+        }
     }
-
-    if len(dynamicScans) == 0 {
-        return nil, nil
-    }
-    return dynamicScans[0], nil
+    return false
 }
 
-// showDynamicVulnerabilities fetches and filters dynamic vulnerabilities
+// showDynamicVulnerabilities fetches & filters vulnerabilities from /files/:id/analyses
 func showDynamicVulnerabilities(client *appknox.Client, fileID int, riskThreshold int) error {
     analyses, err := getDynamicAnalyses(client, fileID)
     if err != nil {
@@ -126,20 +124,22 @@ func showDynamicVulnerabilities(client *appknox.Client, fileID int, riskThreshol
         return err
     }
 
-    filteredAnalysis := make([]appknox.Analysis, 0)
+    var filtered []appknox.Analysis
     for _, a := range analyses {
         if int(a.ComputedRisk) >= riskThreshold {
-            filteredAnalysis = append(filteredAnalysis, *a)
+            filtered = append(filtered, *a)
         }
     }
 
-    if len(filteredAnalysis) == 0 {
-        fmt.Printf("\nNo vulnerabilities found with risk threshold >= %s\n", enums.RiskType(riskThreshold))
+    if len(filtered) == 0 {
+        fmt.Printf("\nNo vulnerabilities found with risk threshold >= %s\n",
+            enums.RiskType(riskThreshold))
         fmt.Printf("\nCheck file ID %d on Appknox dashboard for more details.\n", fileID)
         return nil
     }
 
-    fmt.Printf("Found %d vulnerabilities with risk >= %s\n", len(filteredAnalysis), enums.RiskType(riskThreshold))
+    fmt.Printf("Found %d vulnerabilities with risk >= %s\n",
+        len(filtered), enums.RiskType(riskThreshold))
 
     t := tabby.New()
     t.AddHeader(
@@ -150,10 +150,8 @@ func showDynamicVulnerabilities(client *appknox.Client, fileID int, riskThreshol
         "VULNERABILITY-ID",
         "VULNERABILITY-NAME",
     )
-    for _, analysis := range filteredAnalysis {
-        vulnerability, _, err := client.Vulnerabilities.GetByID(
-            context.Background(), analysis.VulnerabilityID,
-        )
+    for _, analysis := range filtered {
+        vulnerability, _, err := client.Vulnerabilities.GetByID(context.Background(), analysis.VulnerabilityID)
         if err != nil {
             PrintError(err)
             os.Exit(1)
@@ -179,17 +177,16 @@ func getDynamicAnalyses(client *appknox.Client, fileID int) ([]*appknox.Analysis
     options := &appknox.AnalysisListOptions{
         VulnerabilityType: 2,
     }
-    _, dynamicAnalysesResponse, err := client.Analyses.ListByFile(ctx, fileID, options)
+    _, dynAnalysisResp, err := client.Analyses.ListByFile(ctx, fileID, options)
     if err != nil {
         PrintError(err)
         os.Exit(1)
         return nil, err
     }
 
-    analysisCount := dynamicAnalysesResponse.GetCount()
-    options.ListOptions = appknox.ListOptions{
-        Limit: analysisCount,
-    }
+    analysisCount := dynAnalysisResp.GetCount()
+    options.ListOptions = appknox.ListOptions{Limit: analysisCount}
+
     dynamicAnalyses, _, err := client.Analyses.ListByFile(ctx, fileID, options)
     if err != nil {
         PrintError(err)

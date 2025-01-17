@@ -1,6 +1,6 @@
 package enums
 
-// PlatformType represents platform for a project
+// DynamicScanModeType represents the mode in which a dynamic scan can run.
 type DynamicScanModeType int
 
 const (
@@ -8,13 +8,16 @@ const (
 	dynamicScanModeAutomated DynamicScanModeType = 1
 )
 
+// dynamicScanModeStruct holds references to each dynamic scan mode
+// and a map from code => human-readable string.
 type dynamicScanModeStruct struct {
 	Manual          DynamicScanModeType
 	Automated       DynamicScanModeType
 	mappingHumanize map[DynamicScanModeType]string
 }
 
-// Platform represents the platfrom type
+// DynamicScanMode provides the enumerations and the human-readable strings
+// for Appknox dynamic scan modes (manual or automated).
 var DynamicScanMode = dynamicScanModeStruct{
 	Manual:    dynamicScanModeManual,
 	Automated: dynamicScanModeAutomated,
@@ -24,6 +27,7 @@ var DynamicScanMode = dynamicScanModeStruct{
 	},
 }
 
+// String returns the human-readable name for a given DynamicScanModeType.
 func (d DynamicScanModeType) String() string {
 	return DynamicScanMode.mappingHumanize[d]
 }
