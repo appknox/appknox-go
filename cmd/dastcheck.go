@@ -11,7 +11,6 @@ import (
     "github.com/spf13/cobra"
 )
 
-// dastCheckCmd represents the "dastcheck" command
 var dastCheckCmd = &cobra.Command{
     Use:   "dastcheck <file_id>",
     Short: "Check the status of a DAST scan for the specified file",
@@ -23,14 +22,12 @@ You can also filter vulnerabilities by using --risk-threshold <string>
 
     Args: cobra.ExactArgs(1), // exactly 1 argument: file_id
     RunE: func(cmd *cobra.Command, args []string) error {
-        // 1) Parse file_id
         fileID, err := strconv.Atoi(args[0])
         if err != nil {
             helper.PrintError(errors.New("valid file id is required (integer)"))
             os.Exit(1)
         }
 
-        // 2) Parse risk-threshold ("low", "medium", "high", "critical")
         riskInput, _ := cmd.Flags().GetString("risk-threshold")
         riskInputLower := strings.ToLower(riskInput)
 
@@ -49,8 +46,6 @@ You can also filter vulnerabilities by using --risk-threshold <string>
             os.Exit(1)
         }
 
-        // 3) Call the deeper logic directly,
-        //    previously was "RunDastCheck" but we unify into "HandleDynamicScan"
         err = helper.HandleDynamicScan(fileID, riskThresholdInt)
         if err != nil {
             err = fmt.Errorf("dastcheck command failed: %v", err)
@@ -65,7 +60,6 @@ You can also filter vulnerabilities by using --risk-threshold <string>
 func init() {
     RootCmd.AddCommand(dastCheckCmd)
 
-    // Add a --risk-threshold flag for risk levels
     dastCheckCmd.Flags().StringP(
         "risk-threshold", "r",
         "low",

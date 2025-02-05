@@ -10,11 +10,6 @@ import (
     "github.com/appknox/appknox-go/helper"
 )
 
-// We'll store user input for --enable-api-capture
-var enableAPICapture bool
-
-// Also allow the user to override mode from CLI, if needed. By default, "1" = Automated
-var dastMode int
 
 var scheduleDastAutomationCmd = &cobra.Command{
     Use:   "schedule-dast-automation <file_id>",
@@ -31,19 +26,16 @@ for the specified file ID in Appknox. This command enqueues a dynamic scan proce
             os.Exit(1)
         }
 
-        // Show a quick message
         fmt.Printf("Scheduling DAST automation for file: %d\n", fileID)
-        fmt.Printf("Mode: %d (1=Automated)\n", dastMode)
-        fmt.Printf("API Capture enabled: %v\n", enableAPICapture)
 
-        // Pass fileID + mode + enableAPICapture to the helper
-        if err := helper.ScheduleDastAutomation(fileID, dastMode, enableAPICapture); err != nil {
+        // Pass fileID to the helper
+        if err := helper.ScheduleDastAutomation(fileID); err != nil {
             errNew := fmt.Errorf("failed to schedule DAST: %v", err)
             helper.PrintError(errNew)
             os.Exit(1)
         }
 
-        fmt.Println("Dynamic scan has been inqueued successfully.")
+        fmt.Println("Dynamic scan has been enqueued successfully.")
         return nil
     },
 }
@@ -51,19 +43,4 @@ for the specified file ID in Appknox. This command enqueues a dynamic scan proce
 func init() {
     RootCmd.AddCommand(scheduleDastAutomationCmd)
 
-    // Add the --enable-api-capture bool flag (default false)
-    scheduleDastAutomationCmd.Flags().BoolVar(
-        &enableAPICapture,
-        "enable-api-capture",
-        false,
-        "Set to true or false to enable API capture for the dynamic scan",
-    )
-
-    // Add an optional --mode int flag (default 1) to represent "automated"=1, "manual"=0, etc.
-    scheduleDastAutomationCmd.Flags().IntVar(
-        &dastMode,
-        "mode",
-        1,
-        "Mode for the DAST scan (1=Automated, 0=Manual, etc.)",
-    )
 }

@@ -6,20 +6,21 @@ import (
     "strconv"
     "net/http"
 
-    // "github.com/appknox/appknox-go/appknox"
+    "github.com/appknox/appknox-go/appknox/enums"
 )
 
 // ScheduleDastAutomation calls the DynamicScanService.ScheduleDastAutomation
-// to POST /api/v2/files/:file_id/dynamicscans with mode & enable_api_capture.
-func ScheduleDastAutomation(fileID int, mode int, enableAPICapture bool) error {
+// to POST /api/v2/files/:file_id/dynamicscans with mode=Automated.
+func ScheduleDastAutomation(fileID int) error {
     client := getClient()
+
+    mode := int(enums.DynamicScanMode.Automated)
 
     // Directly call the Dynamic Scans service method
     resp, err := client.DynamicScans.ScheduleDastAutomation(
         context.Background(),
         fileID,
         mode,
-        enableAPICapture,
     )
     if err != nil {
         return fmt.Errorf("request failed: %w", err)
@@ -31,7 +32,6 @@ func ScheduleDastAutomation(fileID int, mode int, enableAPICapture bool) error {
     case http.StatusCreated: // 201
         return nil
     default:
-        // If you'd like to parse any error message from resp.Body, you could do that here.
         return fmt.Errorf("unexpected status code: %s", strconv.Itoa(resp.StatusCode))
     }
 }

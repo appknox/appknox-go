@@ -11,7 +11,6 @@ import (
     "github.com/cheynewallace/tabby"
 )
 
-// Final/terminating statuses for a dynamic scan (22=AnalysisCompleted, 23=TimedOut, etc.)
 var terminatingStatuses = []enums.DynamicScanStatusType{
     enums.DynamicScanStatus.AnalysisCompleted, // 22
     enums.DynamicScanStatus.TimedOut,          // 23
@@ -20,12 +19,11 @@ var terminatingStatuses = []enums.DynamicScanStatusType{
     enums.DynamicScanStatus.Terminated,        // 26
 }
 
-// Dynamic scan statuses that indicate the scan hasn't started yet
 var nonStartedStatuses = []enums.DynamicScanStatusType{
-    enums.DynamicScanStatus.InQueue,                    // 3 - Waiting
-    enums.DynamicScanStatus.PreProcessing,              // 4 - Pre-processing
-    enums.DynamicScanStatus.ProcessingScanRequest,      // 5 - Preparing to scan
-    enums.DynamicScanStatus.NotStarted,                 // 6 - Not yet started
+    enums.DynamicScanStatus.InQueue,                    // 3 - In queue
+    enums.DynamicScanStatus.PreProcessing,              // 1 - Pre-processing
+    enums.DynamicScanStatus.ProcessingScanRequest,      // 2 - Preparing to scan
+    enums.DynamicScanStatus.NotStarted,                 // 0 - Not yet started
 }
 
 // HandleDynamicScan checks the latest scan and acts accordingly.
