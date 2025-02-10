@@ -54,7 +54,7 @@ func HandleDynamicScan(fileID, riskThreshold int) error {
         return showDynamicVulnerabilities(client, fileID, riskThreshold)
 
     case isInStatuses(dynamicScan.Status, terminatingStatuses):
-        fmt.Printf("Dynamic scan has errored out with status=%d\n", dynamicScan.Status)
+        fmt.Printf("Dynamic scan has errored out with status=%s (%d)\n", dynamicScan.Status, dynamicScan.Status)
         if dynamicScan.ErrorMessage != "" {
             fmt.Printf("Error message: %s\n", dynamicScan.ErrorMessage)
         }
@@ -93,7 +93,7 @@ func getLatestDynamicScan(client *appknox.Client, fileID int) (*appknox.DynamicS
         }
 
         // Continue polling if scan is still in progress
-        fmt.Printf("Dynamic scan is still in progress (status=%d)\n", scan.Status)
+        fmt.Printf("Dynamic scan is still in progress (status=%s)\n", scan.Status)
         if time.Since(startTime) > pollTimeout {
             fmt.Println("DAST check timed out after 60 minutes.")
             return scan, nil

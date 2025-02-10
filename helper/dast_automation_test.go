@@ -12,7 +12,7 @@ import (
 // TestScheduleDastAutomation_400 checks a 400 response => "request failed: POST ...: 400"
 func TestScheduleDastAutomation_400(t *testing.T) {
     server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        if r.URL.Path == "/api/dynamicscan/123/schedule_automation" && r.Method == http.MethodPost {
+        if r.URL.Path == "/api/v2/files/123/dynamicscans" && r.Method == http.MethodPost {
             w.WriteHeader(http.StatusBadRequest) // 400
         } else {
             http.NotFound(w, r)
@@ -31,15 +31,14 @@ func TestScheduleDastAutomation_400(t *testing.T) {
 
     err := ScheduleDastAutomation(123)
     assert.Error(t, err)
-    errStr := err.Error()
-    assert.Contains(t, errStr, "request failed: POST ")
-    assert.Contains(t, errStr, "/api/dynamicscan/123/schedule_automation: 400")
+    assert.Contains(t, err.Error(), "request failed: POST")
+    assert.Contains(t, err.Error(), "/api/v2/files/123/dynamicscans: 400")
 }
 
 // TestScheduleDastAutomation_403 checks a 403 response => "request failed: POST ...: 403"
 func TestScheduleDastAutomation_403(t *testing.T) {
     server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        if r.URL.Path == "/api/dynamicscan/999/schedule_automation" && r.Method == http.MethodPost {
+        if r.URL.Path == "/api/v2/files/999/dynamicscans" && r.Method == http.MethodPost {
             w.WriteHeader(http.StatusForbidden) // 403
         } else {
             http.NotFound(w, r)
@@ -58,16 +57,15 @@ func TestScheduleDastAutomation_403(t *testing.T) {
 
     err := ScheduleDastAutomation(999)
     assert.Error(t, err)
-    errStr := err.Error()
-    assert.Contains(t, errStr, "request failed: POST ")
-    assert.Contains(t, errStr, "/api/dynamicscan/999/schedule_automation: 403")
+    assert.Contains(t, err.Error(), "request failed: POST")
+    assert.Contains(t, err.Error(), "/api/v2/files/999/dynamicscans: 403")
 }
 
-// TestScheduleDastAutomation_204 => success => no error
-func TestScheduleDastAutomation_204(t *testing.T) {
+// TestScheduleDastAutomation_201 => success => no error
+func TestScheduleDastAutomation_201(t *testing.T) {
     server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        if r.URL.Path == "/api/dynamicscan/555/schedule_automation" && r.Method == http.MethodPost {
-            w.WriteHeader(http.StatusNoContent) // 204
+        if r.URL.Path == "/api/v2/files/555/dynamicscans" && r.Method == http.MethodPost {
+            w.WriteHeader(http.StatusCreated) // 201
         } else {
             http.NotFound(w, r)
         }
@@ -90,7 +88,7 @@ func TestScheduleDastAutomation_204(t *testing.T) {
 // TestScheduleDastAutomation_500 => "request failed: POST ...: 500"
 func TestScheduleDastAutomation_500(t *testing.T) {
     server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        if r.URL.Path == "/api/dynamicscan/9999/schedule_automation" && r.Method == http.MethodPost {
+        if r.URL.Path == "/api/v2/files/9999/dynamicscans" && r.Method == http.MethodPost {
             w.WriteHeader(http.StatusInternalServerError) // 500
         } else {
             http.NotFound(w, r)
@@ -109,7 +107,6 @@ func TestScheduleDastAutomation_500(t *testing.T) {
 
     err := ScheduleDastAutomation(9999)
     assert.Error(t, err)
-    errStr := err.Error()
-    assert.Contains(t, errStr, "request failed: POST ")
-    assert.Contains(t, errStr, "/api/dynamicscan/9999/schedule_automation: 500")
+    assert.Contains(t, err.Error(), "request failed: POST")
+    assert.Contains(t, err.Error(), "/api/v2/files/9999/dynamicscans: 500")
 }
