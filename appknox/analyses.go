@@ -122,6 +122,7 @@ type Finding struct {
 // AnalysisListOptions specifies the optional parameters to the
 // AnalysesService.List method.
 type AnalysisListOptions struct {
+	VulnerabilityType int `url:"vulnerability_type,omitempty"`
 	ListOptions
 }
 

@@ -25,86 +25,83 @@ func getAppknoxAccessToken() string {
 }
 
 // GetHostMappings returns a map of host names to URLs.
- func GetHostMappings() map[string]string {
-     return map[string]string{
-         "global": "https://api.appknox.com/",
-         "saudi":   "https://sa.secure.appknox.com/",
-         // Add more mappings as needed
-     }
- }
+func GetHostMappings() map[string]string {
+	return map[string]string{
+		"global": "https://api.appknox.com/",
+		"saudi":  "https://sa.secure.appknox.com/",
+		// Add more mappings as needed
+	}
+}
 
 // ResolveHostAndRegion checks the host and region and returns the resolved base URL
 func ResolveHostAndRegion(host, region string, hostMappings map[string]string) (string, error) {
-    // If both region and host are provided, prioritize host and ignore region
-    if host != "" {
-        // Validate the host is a proper URL
-        _, err := url.ParseRequestURI(host)
-        if err != nil {
-            return "", fmt.Errorf("invalid host URL: %s", host)
-        }
-        return host, nil
-    }
+	// If both region and host are provided, prioritize host and ignore region
+	if host != "" {
+		// Validate the host is a proper URL
+		_, err := url.ParseRequestURI(host)
+		if err != nil {
+			return "", fmt.Errorf("invalid host URL: %s", host)
+		}
+		return host, nil
+	}
 
-    // If region is provided, map it to the host URL
-    if region != "" {
-        if mappedHost, exists := hostMappings[region]; exists {
-            return mappedHost, nil
-        }
-        // Invalid region, return error and show available regions
-        availableRegions := make([]string, 0, len(hostMappings))
-        for key := range hostMappings {
-            availableRegions = append(availableRegions, key)
-        }
-        return "", fmt.Errorf("Invalid region name: %s. Available regions: %s", region, strings.Join(availableRegions, ", "))
-    }
+	// If region is provided, map it to the host URL
+	if region != "" {
+		if mappedHost, exists := hostMappings[region]; exists {
+			return mappedHost, nil
+		}
+		// Invalid region, return error and show available regions
+		availableRegions := make([]string, 0, len(hostMappings))
+		for key := range hostMappings {
+			availableRegions = append(availableRegions, key)
+		}
+		return "", fmt.Errorf("Invalid region name: %s. Available regions: %s", region, strings.Join(availableRegions, ", "))
+	}
 
-    // If neither host nor region are provided, default to the global host
-    return hostMappings["global"], nil
+	// If neither host nor region are provided, default to the global host
+	return hostMappings["global"], nil
 }
 
-
 func getClient() *appknox.Client {
-    token := getAppknoxAccessToken()
+	token := getAppknoxAccessToken()
 
-    // Check for region and host first
-    region := viper.GetString("region")
-    host := viper.GetString("host")
+	// Check for region and host first
+	region := viper.GetString("region")
+	host := viper.GetString("host")
 
-    // Get the host mappings
-    hostMappings := GetHostMappings()
+	// Get the host mappings
+	hostMappings := GetHostMappings()
 
-    // Use the new function to resolve the host and region
+	// Use the new function to resolve the host and region
 	resolvedHost, err := ResolveHostAndRegion(host, region, hostMappings)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
 
-    client, err := appknox.NewClient(token)
-    if err != nil {
-        fmt.Println(err)
-        os.Exit(1)
-    }
+	client, err := appknox.NewClient(token)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 
-    proxyURL, err := GetProxy()
-    if err != nil {
-        fmt.Println(err)
-        os.Exit(1)
-    }
+	proxyURL, err := GetProxy()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 
-    insecure := viper.GetBool("insecure")
-    client = client.SetHTTPTransportParams(proxyURL, insecure)
+	insecure := viper.GetBool("insecure")
+	client = client.SetHTTPTransportParams(proxyURL, insecure)
 
-    baseHost, err := url.Parse(resolvedHost)
-    if err != nil {
-        fmt.Println(err)
-        os.Exit(1)
-    }
-    client.BaseURL = baseHost
-    return client
+	baseHost, err := url.Parse(resolvedHost)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	client.BaseURL = baseHost
+	return client
 }
-
-
 
 // CheckToken checks if access token is valid.
 func CheckToken() (*appknox.Me, error) {

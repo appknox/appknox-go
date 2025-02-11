@@ -4,51 +4,59 @@ package enums
 type DynamicScanStateType int
 
 const (
-	dynamicScanStateUnknown      DynamicScanStateType = -1
+	dynamicScanStateError        DynamicScanStateType = -1
 	dynamicScanStateNone         DynamicScanStateType = 0
-	dynamicScanStateBooting      DynamicScanStateType = 1
-	dynamicScanStateReady        DynamicScanStateType = 2
-	dynamicScanStateShuttingDown DynamicScanStateType = 3
-	dynamicScanStateDownloading  DynamicScanStateType = 4
-	dynamicScanStateInstalling   DynamicScanStateType = 5
-	dynamicScanStateLaunching    DynamicScanStateType = 6
-	dynamicScanStateHooking      DynamicScanStateType = 7
+	dynamicScanStateInQueue      DynamicScanStateType = 1
+	dynamicScanStateBooting      DynamicScanStateType = 2
+	dynamicScanStateDownloading  DynamicScanStateType = 3
+	dynamicScanStateInstalling   DynamicScanStateType = 4
+	dynamicScanStateLaunching    DynamicScanStateType = 5
+	dynamicScanStateHooking      DynamicScanStateType = 6
+	dynamicScanStateReady        DynamicScanStateType = 7
+	dynamicScanStateShuttingDown DynamicScanStateType = 8
+	dynamicScanStateCompleted    DynamicScanStateType = 9
 )
 
 type dynamicScanStateStruct struct {
-	Unknown         DynamicScanStateType
+	Error           DynamicScanStateType
 	None            DynamicScanStateType
+	InQueue         DynamicScanStateType
 	Booting         DynamicScanStateType
-	Ready           DynamicScanStateType
-	ShuttingDown    DynamicScanStateType
 	Downloading     DynamicScanStateType
 	Installing      DynamicScanStateType
 	Launching       DynamicScanStateType
 	Hooking         DynamicScanStateType
+	Ready           DynamicScanStateType
+	ShuttingDown    DynamicScanStateType
+	Completed       DynamicScanStateType
 	mappingHumanize map[DynamicScanStateType]string
 }
 
 // DynamicScanState represents the dynamic scan status
 var DynamicScanState = dynamicScanStateStruct{
-	Unknown:      dynamicScanStateUnknown,
+	Error:        dynamicScanStateError,
 	None:         dynamicScanStateNone,
+	InQueue:      dynamicScanStateInQueue,
 	Booting:      dynamicScanStateBooting,
-	Ready:        dynamicScanStateReady,
-	ShuttingDown: dynamicScanStateShuttingDown,
 	Downloading:  dynamicScanStateDownloading,
 	Installing:   dynamicScanStateInstalling,
 	Launching:    dynamicScanStateLaunching,
 	Hooking:      dynamicScanStateHooking,
+	Ready:        dynamicScanStateReady,
+	ShuttingDown: dynamicScanStateShuttingDown,
+	Completed:    dynamicScanStateCompleted,
 	mappingHumanize: map[DynamicScanStateType]string{
-		dynamicScanStateUnknown:      "Unknown",
+		dynamicScanStateError:        "Error",
 		dynamicScanStateNone:         "None",
+		dynamicScanStateInQueue:      "In Queue",
 		dynamicScanStateBooting:      "Booting",
-		dynamicScanStateReady:        "Ready",
-		dynamicScanStateShuttingDown: "ShuttingDown",
-		dynamicScanStateDownloading:  "Downloading",
-		dynamicScanStateInstalling:   "Installing",
-		dynamicScanStateLaunching:    "Launching",
+		dynamicScanStateDownloading:  "Downloading Package",
+		dynamicScanStateInstalling:   "Installing Package",
+		dynamicScanStateLaunching:    "Launching App",
 		dynamicScanStateHooking:      "Hooking",
+		dynamicScanStateReady:        "Ready",
+		dynamicScanStateShuttingDown: "Shutting Down",
+		dynamicScanStateCompleted:    "Completed",
 	},
 }
 
