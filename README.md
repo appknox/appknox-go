@@ -12,19 +12,22 @@ Usage:
   appknox [command]
 
 Available Commands:
-  analyses      List analyses for file
-  cicheck       Check for vulnerabilities based on risk threshold.
-  files         List files for project
-  help          Help about any command
-  init          Used to initialize Appknox CLI
-  sarif         Create SARIF report
-  organizations List organizations
-  owasp         Fetch OWASP by ID
-  projects      List projects
-  reports       Vulnerability Analysis Reports
-  upload        Upload and scan package
-  vulnerability Get vulnerability
-  whoami        Shows current authenticated user
+  analyses                  List analyses for file
+  cicheck                   Check for vulnerabilities based on risk threshold.
+  files                     List files for project
+  help                      Help about any command
+  init                      Used to initialize Appknox CLI
+  sarif                     Create SARIF report
+  organizations             List organizations
+  owasp                     Fetch OWASP by ID
+  projects                  List projects
+  reports                   Vulnerability Analysis Reports
+  upload                    Upload and scan package
+  vulnerability             Get vulnerability
+  whoami                    Shows current authenticated user
+  schedule-dast-automation  Schedules automated dynamic scan for a file
+  dastcheck                 Checks the latest dynamic scan status and print dynamic vulnerabilities
+
 
 Flags:
   -a, --access-token string   Appknox Access Token
@@ -144,6 +147,9 @@ each time you run a command you have to pass the flag `access-token`.
 | `reports create <file_id>` | Create report for the app file |
 | `reports download summary-csv <report_id>` | Download Summary CSV report for the given report of the file |
 | `reports download summary-excel <report_id>` | Download Summary Excel report for the given report of the file |
+| `schedule-dast-automation <file_id>` | Schedules Automated Dynamic Scan for a file |
+| `dastcheck <file_id>` | Checks status of latest dynamic scan and print dynamic vulnerabilities upon completion |
+
 
 ## Example:
 #### For Linux & macOS platform
