@@ -60,6 +60,7 @@ func ProcessCiCheck(fileID, riskThreshold int, staticScanTimeout time.Duration) 
 			PrintError(err)
 			os.Exit(1)
 		}
+		time.Sleep(5 * time.Second)
 	}
 
 	_, analysisResponse, err := client.Analyses.ListByFile(ctx, fileID, nil)

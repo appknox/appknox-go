@@ -105,6 +105,9 @@ func (s *UploadService) CheckSubmission(ctx context.Context, submissionID int) (
 			return nil, nil, errors.New("Request timed out")
 		}
 		fileID = submission.File
+		if fileID == 0 {
+			time.Sleep(5 * time.Second)
+		}
 	}
 	file, resp, err := s.client.Files.GetByID(ctx, fileID)
 	if err != nil {
