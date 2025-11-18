@@ -1,0 +1,66 @@
+name: Run External Automation Tests
+
+on:
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  run-tests:
+    name: Run external Appknox CLI automation tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout appknox-go (PR code)
+        uses: actions/checkout@v3
+
+      - name: Checkout automation tests repo
+        uses: actions/checkout@v3
+        with:
+          repository: appknox/appknox-cli-automation 
+          path: tests-repo
+          ref: main
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v3
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Install Appknox CLI (Linux)
+        run: |
+          echo "Fetching latest Appknox CLI release..."
+          
+          latest=$(curl -s https://api.github.com/repos/appknox/appknox-go/releases/latest)
+
+          url=$(echo "$latest" | grep browser_download_url | grep -E "linux|Linux|amd64" | head -n1 | cut -d '"' -f 4)
+
+          if [ -z "$url" ]; then
+            echo "Could not find Linux binary in latest release!"
+            exit 1
+          fi
+
+          echo "Downloading: $url"
+          curl -L -o appknox "$url"
+
+          chmod +x appknox
+          sudo mv appknox /usr/local/bin/appknox || sudo mv appknox /usr/bin/appknox
+
+          echo "Verifying installation..."
+          which appknox || echo "appknox not found"
+          appknox --version
+
+      - name: Run automation tests
+        working-directory: ./tests-repo
+        run: |
+          mvn --batch-mode -DskipTests=false clean test -Dtest=com.appknox.tests.TestSuite
+        env:
+          APPKNOX_API_HOST: ${{ secrets.APPKNOX_HOST }}
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_TOKEN }}
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-test-artifacts
+          path: tests-repo/target
