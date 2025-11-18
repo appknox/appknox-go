@@ -10,16 +10,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout appknox-go (PR code)
+
+      # Checkout PR code (appknox-go)
+      - name: Checkout appknox-go
         uses: actions/checkout@v3
 
-      - name: Checkout automation tests repo
+      # Checkout automation tests repo
+      - name: Checkout automation tests repository
         uses: actions/checkout@v3
         with:
-          repository: appknox/appknox-cli-automation 
+          repository: appknox/appknox-cli-automation
           path: tests-repo
           ref: main
 
+      # Java setup
       - name: Set up JDK 21
         uses: actions/setup-java@v3
         with:
@@ -27,16 +31,17 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      # Install Appknox CLI
       - name: Install Appknox CLI (Linux)
         run: |
           echo "Fetching latest Appknox CLI release..."
-          
+
           latest=$(curl -s https://api.github.com/repos/appknox/appknox-go/releases/latest)
 
-          url=$(echo "$latest" | grep browser_download_url | grep -E "linux|Linux|amd64" | head -n1 | cut -d '"' -f 4)
+          url=$(echo "$latest" | grep browser_download_url | grep -Ei "linux|amd64" | head -n1 | cut -d '"' -f 4)
 
           if [ -z "$url" ]; then
-            echo "Could not find Linux binary in latest release!"
+            echo "❌ Could not find Linux binary in latest release!"
             exit 1
           fi
 
@@ -47,10 +52,11 @@ jobs:
           sudo mv appknox /usr/local/bin/appknox || sudo mv appknox /usr/bin/appknox
 
           echo "Verifying installation..."
-          which appknox || echo "appknox not found"
+          which appknox || echo "❌ appknox binary not found"
           appknox --version
 
-      - name: Run automation tests
+      # Run automation tests
+      - name: Run Automation Tests
         working-directory: ./tests-repo
         run: |
           mvn --batch-mode -DskipTests=false clean test -Dtest=com.appknox.tests.TestSuite
@@ -58,9 +64,49 @@ jobs:
           APPKNOX_API_HOST: ${{ secrets.APPKNOX_HOST }}
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_TOKEN }}
 
+      # Upload test outputs
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: automation-test-artifacts
           path: tests-repo/target
+
+      # Install XML tools for summary parsing
+      - name: Install XML Tools
+        run: sudo apt-get install -y libxml2-utils
+
+      # Pretty Test Summary – shows Passed/Failed/Error on PR
+      - name: Automation Test Summary
+        if: always()
+        working-directory: ./tests-repo
+        run: |
+          echo "## Automation Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          xml_files=$(ls target/surefire-reports/*.xml 2>/dev/null | wc -l)
+
+          if [ "$xml_files" -gt 0 ]; then
+            total=0
+            fail=0
+            err=0
+
+            for f in target/surefire-reports/*.xml; do
+              tests=$(xmllint --xpath "string(/testsuite/@tests)" "$f")
+              failures=$(xmllint --xpath "string(/testsuite/@failures)" "$f")
+              errors=$(xmllint --xpath "string(/testsuite/@errors)" "$f")
+
+              total=$((total + tests))
+              fail=$((fail + failures))
+              err=$((err + errors))
+            done
+
+            pass=$((total - fail - err))
+
+            echo "**Total Tests:** $total" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **Passed:** $pass" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Failed:** $fail" >> $GITHUB_STEP_SUMMARY
+            echo "💥 **Errors:** $err" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ No XML test reports found" >> $GITHUB_STEP_SUMMARY
+          fi
