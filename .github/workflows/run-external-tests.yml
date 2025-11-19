@@ -31,29 +31,29 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      # Install Appknox CLI
       - name: Install Appknox CLI (Linux)
         run: |
-          echo "Fetching latest Appknox CLI release..."
+            echo "Fetching latest Appknox CLI release..."
+            latest=$(curl -s https://api.github.com/repos/appknox/appknox-go/releases/latest) url=$(echo "$latest" | grep browser_download_url | grep "linux-amd64.deb" | cut -d '"' -f 4)
 
-          latest=$(curl -s https://api.github.com/repos/appknox/appknox-go/releases/latest)
+            if [ -z "$url" ]; then
+              echo "❌ Linux .deb package not found in latest release!"
+              exit 1
+            fi
 
-          url=$(echo "$latest" | grep browser_download_url | grep -Ei "linux|amd64" | head -n1 | cut -d '"' -f 4)
+            echo "Downloading: $url"
+            wget "$url" -O appknox.deb
 
-          if [ -z "$url" ]; then
-            echo "❌ Could not find Linux binary in latest release!"
-            exit 1
-          fi
+            echo "Installing..."
+            sudo dpkg -i appknox.deb || sudo apt-get install -f -y
 
-          echo "Downloading: $url"
-          curl -L -o appknox "$url"
+            echo "Adding Appknox to PATH..."
+            echo "/usr/bin" >> $GITHUB_PATH
 
-          chmod +x appknox
-          sudo mv appknox /usr/local/bin/appknox || sudo mv appknox /usr/bin/appknox
-
-          echo "Verifying installation..."
-          which appknox || echo "❌ appknox binary not found"
-          appknox --version
+            echo "Verifying..."
+            ls -l /usr/bin/appknox
+            which appknox || echo "❌ still not found"
+            appknox --version
 
       # Run automation tests
       - name: Run Automation Tests
