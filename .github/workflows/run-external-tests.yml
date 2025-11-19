@@ -31,12 +31,12 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      
       - name: Install Appknox CLI (Linux)
         run: |
           echo "Fetching latest Appknox CLI release..."
 
           latest=$(curl -s https://api.github.com/repos/appknox/appknox-go/releases/latest)
-
           url=$(echo "$latest" | grep browser_download_url | grep "linux-amd64.deb" | cut -d '"' -f 4)
 
           if [ -z "$url" ]; then
@@ -57,7 +57,6 @@ jobs:
           ls -l /usr/bin/appknox
           which appknox || echo "❌ still not found"
           appknox --version
-
 
       # Run automation tests
       - name: Run Automation Tests
