@@ -305,5 +305,7 @@ if ($reportPath) {
 }
 else {
   .\appknox-go reports download summary-csv $reportId
+
 }
+#Appknox Cli Test
 ```
