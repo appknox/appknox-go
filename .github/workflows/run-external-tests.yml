@@ -2,7 +2,7 @@ name: Run External Automation Tests
 
 on:
   pull_request:
-    branches: [ main, master, develop ]
+    branches: [ main, master, develop, Test-Automation]
 
 jobs:
   run-tests:
@@ -31,28 +31,31 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      # Install Appknox CLI
+      #insatll appknox cli 2
       - name: Install Appknox CLI (Linux)
         run: |
           echo "Fetching latest Appknox CLI release..."
 
           latest=$(curl -s https://api.github.com/repos/appknox/appknox-go/releases/latest)
-
-          url=$(echo "$latest" | grep browser_download_url | grep -Ei "linux|amd64" | head -n1 | cut -d '"' -f 4)
+          url=$(echo "$latest" | grep browser_download_url | grep "linux-amd64.deb" | cut -d '"' -f 4)
 
           if [ -z "$url" ]; then
-            echo "❌ Could not find Linux binary in latest release!"
+            echo "Linux .deb package not found in latest release!"
             exit 1
           fi
 
           echo "Downloading: $url"
-          curl -L -o appknox "$url"
+          wget "$url" -O appknox.deb
 
-          chmod +x appknox
-          sudo mv appknox /usr/local/bin/appknox || sudo mv appknox /usr/bin/appknox
+          echo "Installing..."
+          sudo dpkg -i appknox.deb || sudo apt-get install -f -y
 
-          echo "Verifying installation..."
-          which appknox || echo "❌ appknox binary not found"
+          echo "Adding Appknox to PATH..."
+          echo "/usr/bin" >> $GITHUB_PATH
+
+          echo "Verifying..."
+          ls -l /usr/bin/appknox
+          which appknox || echo "still not found"
           appknox --version
 
       # Run automation tests
@@ -64,19 +67,21 @@ jobs:
           APPKNOX_API_HOST: ${{ secrets.APPKNOX_HOST }}
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_TOKEN }}
 
-      # Upload test outputs
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: automation-test-artifacts
-          path: tests-repo/target
+          path: |
+            tests-repo/target/surefire-reports
+            tests-repo/target/site/allure-maven-plugin
+          retention-days: 30
 
       # Install XML tools for summary parsing
       - name: Install XML Tools
         run: sudo apt-get install -y libxml2-utils
 
-      # Pretty Test Summary – shows Passed/Failed/Error on PR
+      # Test Summary – shows Passed/Failed on PR
       - name: Automation Test Summary
         if: always()
         working-directory: ./tests-repo
@@ -89,24 +94,23 @@ jobs:
           if [ "$xml_files" -gt 0 ]; then
             total=0
             fail=0
-            err=0
+          
 
             for f in target/surefire-reports/*.xml; do
               tests=$(xmllint --xpath "string(/testsuite/@tests)" "$f")
               failures=$(xmllint --xpath "string(/testsuite/@failures)" "$f")
-              errors=$(xmllint --xpath "string(/testsuite/@errors)" "$f")
+              
 
               total=$((total + tests))
               fail=$((fail + failures))
-              err=$((err + errors))
+              
             done
 
-            pass=$((total - fail - err))
+            pass=$((total - fail))
 
             echo "**Total Tests:** $total" >> $GITHUB_STEP_SUMMARY
             echo "✅ **Passed:** $pass" >> $GITHUB_STEP_SUMMARY
             echo "❌ **Failed:** $fail" >> $GITHUB_STEP_SUMMARY
-            echo "💥 **Errors:** $err" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ No XML test reports found" >> $GITHUB_STEP_SUMMARY
           fi
