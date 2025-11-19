@@ -37,21 +37,25 @@ jobs:
 
           latest=$(curl -s https://api.github.com/repos/appknox/appknox-go/releases/latest)
 
-          url=$(echo "$latest" | grep browser_download_url | grep -Ei "linux|amd64" | head -n1 | cut -d '"' -f 4)
+          url=$(echo "$latest" | grep browser_download_url | grep "linux-amd64.deb" | cut -d '"' -f 4)
 
           if [ -z "$url" ]; then
-            echo "❌ Could not find Linux binary in latest release!"
+            echo "❌ Linux .deb package not found in latest release!"
             exit 1
           fi
 
           echo "Downloading: $url"
-          curl -L -o appknox-cli "$url"
+          wget "$url" -O appknox.deb
 
-          chmod +x appknox-cli
-          sudo mv appknox-cli /usr/local/bin/appknox
+          echo "Installing..."
+          sudo dpkg -i appknox.deb || sudo apt-get install -f -y
 
-          echo "Verifying installation..."
-          which appknox || echo "❌ appknox binary not found"
+          echo "Adding Appknox to PATH..."
+          echo "/usr/bin" >> $GITHUB_PATH
+
+          echo "Verifying..."
+          ls -l /usr/bin/appknox
+          which appknox || echo "❌ still not found"
           appknox --version
 
 
