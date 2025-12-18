@@ -98,6 +98,20 @@ type File struct {
 	ProfileID          int                        `json:"profile,omitempty"`
 }
 
+// ScanStatusSummary represents a compact scans status summary returned by
+// the API endpoint /api/v3/files/{id}/scans_status_summary
+type ScanStatusSummary struct {
+	IsManualDone       bool `json:"is_manual_done,omitempty"`
+	IsStaticDone       bool `json:"is_static_done,omitempty"`
+	IsAPIDone          bool `json:"is_api_done,omitempty"`
+	IsDynamicDone      bool `json:"is_dynamic_done,omitempty"`
+	StaticScanProgress int  `json:"static_scan_progress,omitempty"`
+	APIScanProgress    int  `json:"api_scan_progress,omitempty"`
+	DynamicStatus      int  `json:"dynamic_status,omitempty"`
+	APIScanStatus      int  `json:"api_scan_status,omitempty"`
+	ManualStatus       int  `json:"manual_status,omitempty"`
+}
+
 // FileListOptions specifies the optional parameters to the
 // FilesService.List method.
 type FileListOptions struct {
@@ -138,4 +152,17 @@ func (s *FilesService) GetByID(ctx context.Context, fileID int) (*File, *Respons
 	var fileResponse File
 	resp, err := s.client.Do(ctx, req, &fileResponse)
 	return &fileResponse, resp, err
+}
+
+// GetScansStatusSummary fetches a compact summary of scan statuses for the
+// given file using the v3 endpoint /api/v3/files/{id}/scans_status_summary.
+func (s *FilesService) GetScansStatusSummary(ctx context.Context, fileID int) (*ScanStatusSummary, *Response, error) {
+	u := fmt.Sprintf("api/v3/files/%v/scans_status_summary", fileID)
+	req, err := s.client.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var summary ScanStatusSummary
+	resp, err := s.client.Do(ctx, req, &summary)
+	return &summary, resp, err
 }
