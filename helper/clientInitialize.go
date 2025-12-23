@@ -10,6 +10,7 @@ import (
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/jackwakefield/gopac"
 	"github.com/spf13/viper"
+	"sort"
 )
 
 func getAppknoxAccessToken() string {
@@ -55,6 +56,7 @@ func ResolveHostAndRegion(host, region string, hostMappings map[string]string) (
 		for key := range hostMappings {
 			availableRegions = append(availableRegions, key)
 		}
+		sort.Strings(availableRegions)
 		return "", fmt.Errorf("Invalid region name: %s. Available regions: %s", region, strings.Join(availableRegions, ", "))
 	}
 

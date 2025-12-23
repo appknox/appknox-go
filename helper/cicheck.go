@@ -47,14 +47,14 @@ func ProcessCiCheck(fileID, riskThreshold int, staticScanTimeout time.Duration) 
 	)
 
 	for staticScanProgess < 100 {
-		file, _, err := client.Files.GetByID(ctx, fileID)
+		summary, _, err := client.Files.GetScansStatusSummary(ctx, fileID)
 		if err != nil {
 			PrintError(err)
 			os.Exit(1)
 		}
-		staticScanProgess = file.StaticScanProgress
+		staticScanProgess = summary.StaticScanProgress
 		bar.SetCurrent(int64(staticScanProgess), time.Since(start))
-		
+
 		if time.Since(start) > staticScanTimeout {
 			err := errors.New("Request timed out")
 			PrintError(err)

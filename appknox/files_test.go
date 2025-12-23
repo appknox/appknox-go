@@ -159,3 +159,71 @@ func TestFilesService_GetByID(t *testing.T) {
 		t.Errorf("Files.GetByID returned %+v, want %+v", me, want)
 	}
 }
+
+func TestFilesService_GetScansStatusSummary(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/v3/files/37/scans_status_summary", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		fmt.Fprint(w, `{
+			"is_manual_done": false,
+			"is_static_done": true,
+			"is_api_done": false,
+			"is_dynamic_done": false,
+			"static_scan_progress": 100,
+			"api_scan_progress": 0,
+			"dynamic_status": 0,
+			"api_scan_status": -1,
+			"manual_status": 0
+		}`)
+	})
+
+	summary, _, err := client.Files.GetScansStatusSummary(context.Background(), 37)
+	if err != nil {
+		t.Errorf("Files.GetScansStatusSummary returned error: %v", err)
+	}
+
+	want := &ScanStatusSummary{
+		IsManualDone:       false,
+		IsStaticDone:       true,
+		IsAPIDone:          false,
+		IsDynamicDone:      false,
+		StaticScanProgress: 100,
+		APIScanProgress:    0,
+		DynamicStatus:      0,
+		APIScanStatus:      -1,
+		ManualStatus:       0,
+	}
+	if !reflect.DeepEqual(summary, want) {
+		t.Errorf("Files.GetScansStatusSummary returned %+v, want %+v", summary, want)
+	}
+
+    // 403 Forbidden test
+    mux.HandleFunc("/api/v3/files/403/scans_status_summary", func(w http.ResponseWriter, r *http.Request) {
+        testMethod(t, r, "GET")
+        w.WriteHeader(http.StatusForbidden)
+        fmt.Fprint(w, `{"detail": "You do not have permission to perform this action."}`)
+    })
+    _, resp, err := client.Files.GetScansStatusSummary(context.Background(), 403)
+    if err == nil {
+        t.Errorf("Expected error for 403 Forbidden, got nil")
+    }
+    if resp == nil || resp.StatusCode != http.StatusForbidden {
+        t.Errorf("Expected response status 403, got %+v", resp)
+    }
+
+    // 404 Not Found test
+    mux.HandleFunc("/api/v3/files/404/scans_status_summary", func(w http.ResponseWriter, r *http.Request) {
+        testMethod(t, r, "GET")
+        w.WriteHeader(http.StatusNotFound)
+        fmt.Fprint(w, `{"detail": "Not found."}`)
+    })
+    _, resp, err = client.Files.GetScansStatusSummary(context.Background(), 404)
+    if err == nil {
+        t.Errorf("Expected error for 404 Not Found, got nil")
+    }
+    if resp == nil || resp.StatusCode != http.StatusNotFound {
+        t.Errorf("Expected response status 404, got %+v", resp)
+    }
+}

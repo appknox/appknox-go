@@ -111,14 +111,14 @@ func GenerateSARIFGivenFileID(client *Client, fileID int, riskThreshold int,stat
 	)
 	
 	for sarifReportProgess < 100 {
-		file, _, err := client.Files.GetByID(ctx, fileID)
+		summary, _, err := client.Files.GetScansStatusSummary(ctx, fileID)
 		if err != nil {
 			PrintError(err)
 			os.Exit(1)
 		}
-		sarifReportProgess = file.StaticScanProgress
+		sarifReportProgess = summary.StaticScanProgress
 		bar.SetCurrent(int64(sarifReportProgess), time.Since(start))
-		
+
 		if time.Since(start) > staticScanTimeout {
 			err := errors.New("Request timed out")
 			PrintError(err)
