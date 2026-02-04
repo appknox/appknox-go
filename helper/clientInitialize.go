@@ -30,7 +30,7 @@ func GetHostMappings() map[string]string {
 	return map[string]string{
 		"global": "https://api.appknox.com/",
 		"saudi":  "https://sa.secure.appknox.com/",
-		// Add more mappings as needed
+		"uae":    "https://secure.uae.appknox.com/",
 	}
 }
 

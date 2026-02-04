@@ -23,13 +23,16 @@ func TestResolveHostAndRegion(t *testing.T) {
 		{"Empty host, valid region", "", "global", hostMappings["global"], false, ""},
 
 		// Case: Empty host, invalid region
-		{"Empty host, invalid region", "", "invalid-region", "", true, "Invalid region name: invalid-region. Available regions: global, saudi"},
+		{"Empty host, invalid region", "", "invalid-region", "", true, "Invalid region name: invalid-region. Available regions: global, saudi, uae"},
 
 		// Case: Valid host, ignore region
 		{"Valid host, ignore region", "http://custom-host.com", "global", "http://custom-host.com", false, ""},
 
 		// Case: Empty host, valid region 'saudi'
 		{"Empty host, valid saudi region", "", "saudi", hostMappings["saudi"], false, ""},
+
+		// Case: Empty host, valid region 'uae'
+		{"Empty host, valid uae region", "", "uae", hostMappings["uae"], false, ""},
 
 		// Case: Invalid host URL format
 		{"Invalid host URL format", "invalid_url", "", "", true, "invalid host URL: invalid_url"},
