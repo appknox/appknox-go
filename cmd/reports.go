@@ -32,7 +32,7 @@ var reportsCreateCmd = &cobra.Command{
 			err := errors.New("Valid file id is required")
 			helper.PrintError(err)
 		}
-		reportId, err := helper.ProcessCreateReport(fileID)
+		reportId, _, err := helper.ProcessCreateReport(fileID)
 		if err != nil {
 			helper.PrintError(err)
 			return
@@ -99,9 +99,44 @@ var reportsDownloadExcelCmd = &cobra.Command{
 	},
 }
 
+var reportsDownloadPdfCmd = &cobra.Command{
+	Use:   "pdf <report_id>",
+	Short: "Download PDF report",
+	Long: `Download a PDF VAPT report along with its password file.
+
+  appknox reports download pdf <report_id>
+
+Files are saved to {output}/{report_id}/report_{report_id}.pdf and report_{report_id}_password.txt.
+Default output directory is ./reports/
+
+Use 'appknox reports create <file_id>' to generate a report and get the report ID.`,
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) < 1 {
+			return errors.New("report id is required")
+		}
+		return nil
+	},
+	Run: func(cmd *cobra.Command, args []string) {
+		reportID, err := strconv.Atoi(args[0])
+		if err != nil {
+			helper.PrintError(errors.New("valid report id is required"))
+			return
+		}
+		outputDir, _ := cmd.Flags().GetString("output")
+		if outputDir == "" {
+			outputDir = "./reports"
+		}
+		err = helper.ProcessDownloadReportPDF(reportID, outputDir)
+		if err != nil {
+			helper.PrintError(err)
+		}
+	},
+}
+
 func init() {
 	reportsDownloadCmd.AddCommand(reportsDownloadCsvCmd)
 	reportsDownloadCmd.AddCommand(reportsDownloadExcelCmd)
+	reportsDownloadCmd.AddCommand(reportsDownloadPdfCmd)
 	reportsCmd.AddCommand(reportsDownloadCmd)
 	reportsDownloadCmd.PersistentFlags().StringP("output", "o", "", "Output file path to save reports")
 	reportsCmd.AddCommand(reportsCreateCmd)

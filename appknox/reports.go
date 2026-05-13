@@ -15,6 +15,7 @@ type ReportsService service
 
 type ReportResult struct {
 	ID          int        `json:"id"`
+	FileID      int        `json:"file_id"`
 	GeneratedOn *time.Time `json:"generated_on"`
 	Language    string     `json:"language"`
 	Progress    int        `json:"progress"`
@@ -24,7 +25,12 @@ type DRFResponseReportDownloadUrl struct {
 	Url string `json:"url"`
 }
 
-//Get Signed URL to download Summary CSV report Data
+type DRFResponseReportDownloadPDF struct {
+	Url      string `json:"url"`
+	Password string `json:"password"`
+}
+
+// Get Signed URL to download Summary CSV report Data
 func (s *ReportsService) GetDownloadUrlCSV(ctx context.Context, reportID int) (string, error) {
 	url := fmt.Sprintf("/api/v2/reports/%d/summary_csv", reportID)
 	request, err := s.client.NewRequest("GET", url, nil)
@@ -50,7 +56,27 @@ func (s *ReportsService) GetDownloadUrlExcel(ctx context.Context, reportID int) 
 
 }
 
-//Download Report Data from Url to buffer
+// GetDownloadUrlPDF fetches the presigned PDF download URL and password for a report.
+// Returns 404-style error if report is not yet generated (progress < 100).
+func (s *ReportsService) GetDownloadUrlPDF(ctx context.Context, reportID int) (string, string, error) {
+	url := fmt.Sprintf("/api/v2/reports/%d/pdf/", reportID)
+	request, err := s.client.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", "", err
+	}
+	var drfResponseReportDownloadPDF DRFResponseReportDownloadPDF
+	resp, err := s.client.Do(ctx, request, &drfResponseReportDownloadPDF)
+	if resp != nil && resp.StatusCode == 404 {
+		id := strconv.Itoa(reportID)
+		return "", "", errors.New("Report with ID " + id + " is not ready yet. Please wait for PDF generation to complete.")
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return drfResponseReportDownloadPDF.Url, drfResponseReportDownloadPDF.Password, nil
+}
+
+// Download Report Data from Url to buffer
 func (s *ReportsService) DownloadReportData(ctx context.Context, downloadUrl string) (bytes.Buffer, error) {
 
 	request, err := s.client.NewRequest("GET", downloadUrl, nil)
@@ -63,7 +89,7 @@ func (s *ReportsService) DownloadReportData(ctx context.Context, downloadUrl str
 
 }
 
-//Output report from buffer to file
+// Output report from buffer to file
 func (s *ReportsService) WriteReportDataToFile(reportData bytes.Buffer, outputFilePath string) (string, error) {
 
 	filePath := filepath.FromSlash(outputFilePath)
@@ -81,11 +107,60 @@ func (s *ReportsService) WriteReportDataToFile(reportData bytes.Buffer, outputFi
 	return outputFilePath, err
 }
 
-func (s *ReportsService) CreateReport(ctx context.Context, fileID int) (report *ReportResult, err error) {
+func (s *ReportsService) CreateReport(ctx context.Context, fileID int) (report *ReportResult, alreadyExists bool, err error) {
 	url := fmt.Sprintf("api/v2/files/%d/reports", fileID)
 	request, err := s.client.NewRequest("POST", url, nil)
+	if err != nil {
+		return nil, false, err
+	}
 	var reportResult ReportResult
 	_, err = s.client.Do(ctx, request, &reportResult)
+	if err != nil {
+		if errResp, ok := err.(*ErrorResponse); ok && errResp.Response.StatusCode == 400 {
+			// 400 means a report already exists and is up-to-date
+			return nil, true, nil
+		}
+		return nil, false, err
+	}
+	return &reportResult, false, nil
+}
+
+type DRFListResponseReportResult struct {
+	Results []ReportResult `json:"results"`
+}
+
+// GetLatestReport fetches the latest completed report for a file.
+// Used as fallback when CreateReport returns 400 (report already up-to-date).
+func (s *ReportsService) GetLatestReport(ctx context.Context, fileID int) (*ReportResult, error) {
+	url := fmt.Sprintf("api/v2/files/%d/reports", fileID)
+	request, err := s.client.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	var listResponse DRFListResponseReportResult
+	_, err = s.client.Do(ctx, request, &listResponse)
+	if err != nil {
+		return nil, err
+	}
+	if len(listResponse.Results) == 0 {
+		return nil, errors.New("no reports found for file " + strconv.Itoa(fileID))
+	}
+	return &listResponse.Results[0], nil
+}
+
+// GetReport fetches the current state of a report (used for polling progress).
+func (s *ReportsService) GetReport(ctx context.Context, reportID int) (*ReportResult, error) {
+	url := fmt.Sprintf("/api/v2/reports/%d/", reportID)
+	request, err := s.client.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	var reportResult ReportResult
+	resp, err := s.client.Do(ctx, request, &reportResult)
+	if resp != nil && resp.StatusCode == 404 {
+		id := strconv.Itoa(reportID)
+		return nil, errors.New("Report with ID " + id + " doesn't exist")
+	}
 	if err != nil {
 		return nil, err
 	}
