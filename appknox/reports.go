@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -76,17 +78,35 @@ func (s *ReportsService) GetDownloadUrlPDF(ctx context.Context, reportID int) (s
 	return drfResponseReportDownloadPDF.Url, drfResponseReportDownloadPDF.Password, nil
 }
 
-// Download Report Data from Url to buffer
+// Download Report Data from Url to buffer.
+// Absolute URLs (e.g. S3 presigned URLs) are fetched with a plain HTTP client
+// to avoid sending an Authorization header alongside the presigned signature,
+// which S3 rejects as having two auth mechanisms.
 func (s *ReportsService) DownloadReportData(ctx context.Context, downloadUrl string) (bytes.Buffer, error) {
+	var reportData bytes.Buffer
+
+	if strings.HasPrefix(downloadUrl, "http://") || strings.HasPrefix(downloadUrl, "https://") {
+		resp, err := http.Get(downloadUrl)
+		if err != nil {
+			return reportData, errors.New("We are facing issues while downloading the report.")
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return reportData, errors.New("We are facing issues while downloading the report.")
+		}
+		_, err = reportData.ReadFrom(resp.Body)
+		return reportData, err
+	}
 
 	request, err := s.client.NewRequest("GET", downloadUrl, nil)
-	var reportData bytes.Buffer
+	if err != nil {
+		return reportData, err
+	}
 	resp, err := s.client.Reports.client.Do(ctx, request, &reportData)
 	if resp != nil && resp.StatusCode != 200 {
 		return reportData, errors.New("We are facing issues while downloading the report.")
 	}
 	return reportData, err
-
 }
 
 // Output report from buffer to file
