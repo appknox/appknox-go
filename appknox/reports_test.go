@@ -184,19 +184,21 @@ func TestReportService_CreateReport_Should_Return_New_Report_ID(t *testing.T) {
 	defer teardown()
 	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
 		testMethod(t, r, "POST")
-		fmt.Fprintf(w, `{"id": 1}`)
-		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintf(w, `{"id": 1, "file_id": 1, "progress": 0}`)
 	})
-	report, err := client.Reports.CreateReport(context.Background(), 1)
+	report, alreadyExists, err := client.Reports.CreateReport(context.Background(), 1)
 	if report.ID != 1 {
 		t.Errorf("Reports.CreateReport failed Expected reportID %d, Got %d", 1, report.ID)
+	}
+	if alreadyExists {
+		t.Errorf("Reports.CreateReport should return alreadyExists=false for new report")
 	}
 	if err != nil {
 		t.Errorf("Reports.CreateReport returned error: %v", err)
 	}
 }
 
-func TestReportService_CreateReport_Should_Return_0_If_Report_Cant_Be_Generated(t *testing.T) {
+func TestReportService_CreateReport_Should_Return_AlreadyExists_On_400(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()
 	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
@@ -204,29 +206,141 @@ func TestReportService_CreateReport_Should_Return_0_If_Report_Cant_Be_Generated(
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, `{"message": "Report can't be generated"}`)
 	})
-	report, err := client.Reports.CreateReport(context.Background(), 1)
+	report, alreadyExists, err := client.Reports.CreateReport(context.Background(), 1)
 	if report != nil {
-		t.Errorf("Reports.CreateReport should return nil in case of Bad Request")
+		t.Errorf("Reports.CreateReport should return nil report on 400")
 	}
-	if err == nil {
-		t.Errorf("Reports.CreateReport should return error message in case of 400 http response")
+	if !alreadyExists {
+		t.Errorf("Reports.CreateReport should return alreadyExists=true on 400")
 	}
-
+	if err != nil {
+		t.Errorf("Reports.CreateReport should return nil error on 400 (alreadyExists handles it)")
+	}
 }
-func TestReportService_CreateReport_Should_Return_0_If_Server_Error_Occurs(t *testing.T) {
+
+func TestReportService_CreateReport_Should_Return_Error_On_Server_Error(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()
 	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
 		testMethod(t, r, "POST")
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, `{"message": "Report can't be generated"}`)
+		fmt.Fprintf(w, `{"message": "Internal server error"}`)
 	})
-	report, err := client.Reports.CreateReport(context.Background(), 1)
+	report, alreadyExists, err := client.Reports.CreateReport(context.Background(), 1)
 	if report != nil {
-		t.Errorf("Reports.CreateReport should return nil in case of Internal Server Error")
+		t.Errorf("Reports.CreateReport should return nil report on server error")
+	}
+	if alreadyExists {
+		t.Errorf("Reports.CreateReport should return alreadyExists=false on server error")
 	}
 	if err == nil {
-		t.Errorf("Reports.CreateReport should return error message in case of Internal Server Error")
+		t.Errorf("Reports.CreateReport should return error on 500 response")
 	}
+}
 
+func TestReportService_GetLatestReport_Should_Return_First_Report(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		fmt.Fprint(w, `{"results": [{"id": 7, "file_id": 1, "progress": 100}]}`)
+	})
+	report, err := client.Reports.GetLatestReport(context.Background(), 1)
+	if err != nil {
+		t.Errorf("Reports.GetLatestReport returned error %v", err)
+	}
+	if report.ID != 7 {
+		t.Errorf("Reports.GetLatestReport returned incorrect ID. Expected 7, Got %d", report.ID)
+	}
+}
+
+func TestReportService_GetLatestReport_Should_Return_Error_If_No_Reports(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+	mux.HandleFunc("/api/v2/files/1/reports", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		fmt.Fprint(w, `{"results": []}`)
+	})
+	report, err := client.Reports.GetLatestReport(context.Background(), 1)
+	if report != nil {
+		t.Errorf("Reports.GetLatestReport should return nil when no reports exist")
+	}
+	if err == nil {
+		t.Errorf("Reports.GetLatestReport should return error when no reports exist")
+	}
+}
+
+func TestReportService_GetReport_Should_Return_Report_With_Progress(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+	mux.HandleFunc("/api/v2/reports/1/", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		fmt.Fprint(w, `{"id": 1, "progress": 75, "rating": "A"}`)
+	})
+	report, err := client.Reports.GetReport(context.Background(), 1)
+	if err != nil {
+		t.Errorf("Reports.GetReport returned error %v", err)
+	}
+	if report.ID != 1 {
+		t.Errorf("Reports.GetReport returned incorrect report ID. Expected 1, Got %d", report.ID)
+	}
+	if report.Progress != 75 {
+		t.Errorf("Reports.GetReport returned incorrect progress. Expected 75, Got %d", report.Progress)
+	}
+}
+
+func TestReportService_GetReport_Should_Throw_Error_For_404(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+	mux.HandleFunc("/api/v2/reports/999/", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"detail":"Not found."}`)
+	})
+	report, err := client.Reports.GetReport(context.Background(), 999)
+	if report != nil {
+		t.Errorf("Report should be nil for invalid report id")
+	}
+	if err.Error() != "Report with ID 999 doesn't exist" {
+		t.Errorf("Error message should be displayed for invalid reportID. Got: %s", err.Error())
+	}
+}
+
+func TestReportService_GetDownloadUrlPDF_Should_Return_URL_And_Password(t *testing.T) {
+	client, mux, _, teardown := setup()
+	signedUrl := "http://example.com/signed/download/url/pdf"
+	password := "test_password"
+	defer teardown()
+	mux.HandleFunc("/api/v2/reports/1/pdf/", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		respBody := fmt.Sprintf(`{"url": "%s", "password": "%s"}`, signedUrl, password)
+		fmt.Fprint(w, respBody)
+	})
+	url, pwd, err := client.Reports.GetDownloadUrlPDF(context.Background(), 1)
+	if err != nil {
+		t.Errorf("Reports.GetDownloadUrlPDF returned error %v", err)
+	}
+	if url != signedUrl {
+		t.Errorf("Reports.GetDownloadUrlPDF returned incorrect url. Expected %s Got %s", signedUrl, url)
+	}
+	if pwd != password {
+		t.Errorf("Reports.GetDownloadUrlPDF returned incorrect password. Expected %s Got %s", password, pwd)
+	}
+}
+
+func TestReportService_GetDownloadUrlPDF_Should_Throw_Error_For_404(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+	mux.HandleFunc("/api/v2/reports/999/pdf/", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"detail":"Not found."}`)
+	})
+	url, pwd, err := client.Reports.GetDownloadUrlPDF(context.Background(), 999)
+	if url != "" || pwd != "" {
+		t.Errorf("Url and password should be empty for invalid report id")
+	}
+	if err.Error() != "Report with ID 999 is not ready yet. Please wait for PDF generation to complete." {
+		t.Errorf("Error message should be displayed for invalid reportID. Got: %s", err.Error())
+	}
 }

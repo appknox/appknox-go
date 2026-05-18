@@ -147,6 +147,7 @@ each time you run a command you have to pass the flag `access-token`.
 | `reports create <file_id>` | Create report for the app file |
 | `reports download summary-csv <report_id>` | Download Summary CSV report for the given report of the file |
 | `reports download summary-excel <report_id>` | Download Summary Excel report for the given report of the file |
+| `reports download pdf <report_id>` | Download PDF report with password file |
 | `schedule-dast-automation <file_id>` | Schedules Automated Dynamic Scan for a file |
 | `dastcheck <file_id>` | Checks status of latest dynamic scan and print dynamic vulnerabilities upon completion |
 
@@ -251,6 +252,47 @@ exit status 1
 ```
 
 ## CI/CD Workflows
+
+### Download PDF Report
+
+Use `reports create <file_id>` to generate a report and get the report ID, then `reports download pdf <report_id>` to download it.
+
+The `reports download pdf` command:
+- Waits (polls every 5s) if the report is still being generated
+- Downloads both the encrypted PDF and a `password.txt` file once ready
+
+Files are saved to `./reports/{file_id}/` by default, or to `{output}/{file_id}/` if `--output` is specified.
+
+#### For Linux & macOS platform
+
+```bash
+# Download PDF report by report ID
+# Saved to: ./reports/{report_id}/report_{report_id}.pdf + report_{report_id}_password.txt
+appknox reports download pdf 1
+
+# Download to custom directory
+appknox reports download pdf 1 --output /tmp/
+
+# Upload app, create report, then download PDF
+fileId=`appknox upload /path/to/app.apk` && appknox cicheck $fileId && reportId=`appknox reports create $fileId` && appknox reports download pdf $reportId --output /path/to/reports/
+```
+
+#### For windows platform
+
+```
+# Download PDF report by report ID
+.\appknox reports download pdf 1
+
+# Download to custom directory
+.\appknox reports download pdf 1 --output C:\reports\
+
+# Upload app, create report, then download PDF
+$fileId = (.\appknox upload /path/to/app.apk); .\appknox cicheck $fileId; $reportId = (.\appknox reports create $fileId); .\appknox reports download pdf $reportId --output C:\reports\
+```
+
+> **Note:** The PDF is password-protected. Use the password from `report_{file_id}_password.txt` to open it. Use `reports create <file_id>` first if you don't have a report ID yet.
+
+---
 
 ### Upload App and Download Summary CSV report
 
