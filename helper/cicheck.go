@@ -14,11 +14,11 @@ import (
 	"github.com/vbauerster/mpb/v4/decor"
 )
 
-// ProcessCiCheck takes the list of analyses and print it to CLI.
-func ProcessCiCheck(fileID, riskThreshold int, staticScanTimeout time.Duration) {
-	// Add timeout validation
-	const minTimeout=1;//1 minute
-	const maxTimeout=240;//4 hours
+// waitForStaticScan polls the static scan status summary until the static
+// scan completes or the timeout is reached. It exits the process on failure.
+func waitForStaticScan(fileID int, staticScanTimeout time.Duration) {
+	const minTimeout = 1   // 1 minute
+	const maxTimeout = 240 // 4 hours
 
 	if staticScanTimeout < minTimeout*time.Minute || staticScanTimeout > maxTimeout*time.Minute {
 		errMsg := fmt.Sprintf("Error: timeout must be between %v minute and %v minutes", minTimeout, maxTimeout)
@@ -62,7 +62,13 @@ func ProcessCiCheck(fileID, riskThreshold int, staticScanTimeout time.Duration) 
 		}
 		time.Sleep(5 * time.Second)
 	}
+}
 
+// ProcessCiCheck takes the list of analyses and print it to CLI.
+func ProcessCiCheck(fileID, riskThreshold int, staticScanTimeout time.Duration) {
+	waitForStaticScan(fileID, staticScanTimeout)
+	ctx := context.Background()
+	client := getClient()
 	_, analysisResponse, err := client.Analyses.ListByFile(ctx, fileID, nil)
 	analysisCount := analysisResponse.GetCount()
 	options := &appknox.AnalysisListOptions{
@@ -117,5 +123,32 @@ func ProcessCiCheck(fileID, riskThreshold int, staticScanTimeout time.Duration) 
 	} else {
 		fmt.Println("\nNo vulnerabilities found with risk threshold >= ", enums.RiskType(riskThreshold))
 		fmt.Printf(msg)
+	}
+}
+
+// ProcessHealthScoreCiCheck waits for the static scan to complete and then
+// compares the file's health score against the provided threshold. The build
+// passes if the score is greater than or equal to the threshold.
+func ProcessHealthScoreCiCheck(fileID, healthScoreThreshold int, staticScanTimeout time.Duration) {
+	waitForStaticScan(fileID, staticScanTimeout)
+	ctx := context.Background()
+	client := getClient()
+
+	healthScoreResponse, _, err := client.Files.GetHealthScore(ctx, fileID)
+	if err != nil {
+		PrintError(err)
+		os.Exit(1)
+	}
+
+	score := healthScoreResponse.HealthScore
+	msg := fmt.Sprintf("\nCheck file ID %d on appknox dashboard for more details.\n", fileID)
+	if score >= healthScoreThreshold {
+		fmt.Printf("\nHealth score %d is greater than or equal to threshold %d. Build passed.\n", score, healthScoreThreshold)
+		fmt.Printf(msg)
+	} else {
+		errmsg := fmt.Sprintf("Health score %d is below the threshold %d. Build failed.\n", score, healthScoreThreshold)
+		PrintError(errmsg)
+		fmt.Printf(msg)
+		os.Exit(1)
 	}
 }
