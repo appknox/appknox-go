@@ -239,7 +239,7 @@ func TestFilesService_GetHealthScore(t *testing.T) {
 		}`)
 	})
 
-	healthScore, _, err := client.Files.GetHealthScore(context.Background(), 37)
+	healthScore, _, err := client.Files.GetHealthScore(context.Background(), 37, "")
 	if err != nil {
 		t.Errorf("Files.GetHealthScore returned error: %v", err)
 	}
@@ -249,13 +249,31 @@ func TestFilesService_GetHealthScore(t *testing.T) {
 		t.Errorf("Files.GetHealthScore returned %+v, want %+v", healthScore, want)
 	}
 
+	// Test with event_type parameter
+	mux.HandleFunc("/api/v3/files/38/health_score", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		eventType := r.URL.Query().Get("event_type")
+		if eventType != "sast_completed" {
+			t.Errorf("Expected event_type=sast_completed, got %s", eventType)
+		}
+		fmt.Fprint(w, `{"health_score": 90}`)
+	})
+	healthScore, _, err = client.Files.GetHealthScore(context.Background(), 38, "sast_completed")
+	if err != nil {
+		t.Errorf("Files.GetHealthScore with event_type returned error: %v", err)
+	}
+	want = &HealthScore{HealthScore: 90}
+	if !reflect.DeepEqual(healthScore, want) {
+		t.Errorf("Files.GetHealthScore with event_type returned %+v, want %+v", healthScore, want)
+	}
+
 	// 403 Forbidden test
 	mux.HandleFunc("/api/v3/files/403/health_score", func(w http.ResponseWriter, r *http.Request) {
 		testMethod(t, r, "GET")
 		w.WriteHeader(http.StatusForbidden)
 		fmt.Fprint(w, `{"detail": "You do not have permission to perform this action."}`)
 	})
-	_, resp, err := client.Files.GetHealthScore(context.Background(), 403)
+	_, resp, err := client.Files.GetHealthScore(context.Background(), 403, "")
 	if err == nil {
 		t.Errorf("Expected error for 403 Forbidden, got nil")
 	}
@@ -269,7 +287,7 @@ func TestFilesService_GetHealthScore(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"detail": "Not found."}`)
 	})
-	_, resp, err = client.Files.GetHealthScore(context.Background(), 404)
+	_, resp, err = client.Files.GetHealthScore(context.Background(), 404, "")
 	if err == nil {
 		t.Errorf("Expected error for 404 Not Found, got nil")
 	}

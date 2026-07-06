@@ -175,8 +175,12 @@ func (s *FilesService) GetScansStatusSummary(ctx context.Context, fileID int) (*
 
 // GetHealthScore fetches the security health score for the given file using
 // the v3 endpoint /api/v3/files/{id}/health_score.
-func (s *FilesService) GetHealthScore(ctx context.Context, fileID int) (*HealthScore, *Response, error) {
+// If eventType is provided, it is sent as a query parameter and stores an audit entry.
+func (s *FilesService) GetHealthScore(ctx context.Context, fileID int, eventType string) (*HealthScore, *Response, error) {
 	u := fmt.Sprintf("api/v3/files/%v/health_score", fileID)
+	if eventType != "" {
+		u = fmt.Sprintf("%s?event_type=%s", u, eventType)
+	}
 	req, err := s.client.NewRequest("GET", u, nil)
 	if err != nil {
 		return nil, nil, err

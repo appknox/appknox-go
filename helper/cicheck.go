@@ -134,7 +134,7 @@ func ProcessHealthScoreCiCheck(fileID, healthScoreThreshold int, staticScanTimeo
 	ctx := context.Background()
 	client := getClient()
 
-	healthScoreResponse, _, err := client.Files.GetHealthScore(ctx, fileID)
+	healthScoreResponse, _, err := client.Files.GetHealthScore(ctx, fileID, "sast_completed")
 	if err != nil {
 		PrintError(err)
 		os.Exit(1)
