@@ -70,6 +70,10 @@ func ProcessCiCheck(fileID, riskThreshold int, staticScanTimeout time.Duration) 
 	ctx := context.Background()
 	client := getClient()
 	_, analysisResponse, err := client.Analyses.ListByFile(ctx, fileID, nil)
+	if err != nil {
+		PrintError(err)
+		os.Exit(1)
+	}
 	analysisCount := analysisResponse.GetCount()
 	options := &appknox.AnalysisListOptions{
 		ListOptions: appknox.ListOptions{
@@ -134,7 +138,10 @@ func ProcessHealthScoreCiCheck(fileID, healthScoreThreshold int, staticScanTimeo
 	ctx := context.Background()
 	client := getClient()
 
-	healthScoreResponse, _, err := client.Files.GetHealthScore(ctx, fileID, "sast_completed")
+	options := &appknox.HealthScoreOptions{
+		EventType: string(enums.EventTypeSASTCompleted),
+	}
+	healthScoreResponse, _, err := client.Files.GetHealthScore(ctx, fileID, options)
 	if err != nil {
 		PrintError(err)
 		os.Exit(1)

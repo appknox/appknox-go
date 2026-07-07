@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
+
+	"github.com/appknox/appknox-go/appknox/enums"
 )
 
 func TestFiles_marshall(t *testing.T) {
@@ -239,7 +241,7 @@ func TestFilesService_GetHealthScore(t *testing.T) {
 		}`)
 	})
 
-	healthScore, _, err := client.Files.GetHealthScore(context.Background(), 37, "")
+	healthScore, _, err := client.Files.GetHealthScore(context.Background(), 37, nil)
 	if err != nil {
 		t.Errorf("Files.GetHealthScore returned error: %v", err)
 	}
@@ -258,7 +260,8 @@ func TestFilesService_GetHealthScore(t *testing.T) {
 		}
 		fmt.Fprint(w, `{"health_score": 90}`)
 	})
-	healthScore, _, err = client.Files.GetHealthScore(context.Background(), 38, "sast_completed")
+	options := &HealthScoreOptions{EventType: string(enums.EventTypeSASTCompleted)}
+	healthScore, _, err = client.Files.GetHealthScore(context.Background(), 38, options)
 	if err != nil {
 		t.Errorf("Files.GetHealthScore with event_type returned error: %v", err)
 	}
@@ -273,7 +276,7 @@ func TestFilesService_GetHealthScore(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 		fmt.Fprint(w, `{"detail": "You do not have permission to perform this action."}`)
 	})
-	_, resp, err := client.Files.GetHealthScore(context.Background(), 403, "")
+	_, resp, err := client.Files.GetHealthScore(context.Background(), 403, nil)
 	if err == nil {
 		t.Errorf("Expected error for 403 Forbidden, got nil")
 	}
@@ -287,7 +290,7 @@ func TestFilesService_GetHealthScore(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"detail": "Not found."}`)
 	})
-	_, resp, err = client.Files.GetHealthScore(context.Background(), 404, "")
+	_, resp, err = client.Files.GetHealthScore(context.Background(), 404, nil)
 	if err == nil {
 		t.Errorf("Expected error for 404 Not Found, got nil")
 	}

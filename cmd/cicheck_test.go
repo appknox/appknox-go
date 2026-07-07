@@ -9,6 +9,11 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// NOTE: These tests validate flag parsing and validation logic.
+// They do not execute cicheckCmd.Run() as that requires real API calls
+// and would need mocking infrastructure. The Run() validation logic
+// (mutual exclusivity, range checks) is tested indirectly through flag state.
+
 func executeCommand(root *cobra.Command, args ...string) (output string, err error) {
 	buf := new(bytes.Buffer)
 	root.SetOut(buf)
