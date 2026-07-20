@@ -70,6 +70,9 @@ type Client struct {
 
 	// Dynamic Scan service is used to interact with appknox DAST related APIs
 	DynamicScans *DynamicScanService
+
+	// KnoxIQ service is used to interact with appknox KnoxIQ APIs.
+	KnoxIQ *KnoxIQService
 }
 
 // NewClient returns a new appknox API client.
@@ -106,6 +109,7 @@ func NewClient(accessToken string) (*Client, error) {
 	c.Organizations = (*OrganizationsService)(&c.common)
 	c.Reports = (*ReportsService)(&c.common)
 	c.DynamicScans = (*DynamicScanService)(&c.common)
+	c.KnoxIQ = (*KnoxIQService)(&c.common)
 	return c, nil
 }
 

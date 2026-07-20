@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"time"
-	
+
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/appknox/appknox-go/appknox/enums"
 	"github.com/cheynewallace/tabby"
@@ -64,70 +64,90 @@ func waitForStaticScan(fileID int, staticScanTimeout time.Duration) {
 	}
 }
 
-// ProcessCiCheck takes the list of analyses and print it to CLI.
+// ProcessCiCheck runs the standard risk gate, or the KnoxIQ flow when KnoxIQ
+// auto-runs for the file.
 func ProcessCiCheck(fileID, riskThreshold int, staticScanTimeout time.Duration) {
 	waitForStaticScan(fileID, staticScanTimeout)
 	ctx := context.Background()
 	client := getClient()
+
+	file, _, err := client.Files.GetByIDV3(ctx, fileID)
+	if err == nil && file.IsKnoxIQAutomated {
+		processKnoxIQCiCheck(ctx, client, fileID, riskThreshold)
+		return
+	}
+	analyses := listAllAnalyses(ctx, client, fileID)
+	runStandardRiskCheck(ctx, client, fileID, riskThreshold, analyses)
+}
+
+func listAllAnalyses(ctx context.Context, client *appknox.Client, fileID int) []*appknox.Analysis {
 	_, analysisResponse, err := client.Analyses.ListByFile(ctx, fileID, nil)
 	if err != nil {
 		PrintError(err)
 		os.Exit(1)
 	}
-	analysisCount := analysisResponse.GetCount()
 	options := &appknox.AnalysisListOptions{
-		ListOptions: appknox.ListOptions{
-			Limit: analysisCount},
+		ListOptions: appknox.ListOptions{Limit: analysisResponse.GetCount()},
 	}
-	finalAnalyses, _, err := client.Analyses.ListByFile(ctx, fileID, options)
+	analyses, _, err := client.Analyses.ListByFile(ctx, fileID, options)
 	if err != nil {
 		PrintError(err)
 		os.Exit(1)
 	}
-	t := tabby.New()
-	t.AddHeader(
-		"ANALYSIS-ID",
-		"RISK",
-		"CVSS-VECTOR",
-		"CVSS-BASE",
-		"VULNERABILITY-ID",
-		"VULNERABILITY-NAME",
-	)
-	vulnerableAnalyses := make([]appknox.Analysis, 0)
-	for _, analysis := range finalAnalyses {
+	return analyses
+}
+
+func filterAnalysesByRisk(analyses []*appknox.Analysis, riskThreshold int) []*appknox.Analysis {
+	vulnerable := make([]*appknox.Analysis, 0)
+	for _, analysis := range analyses {
 		if int(analysis.ComputedRisk) >= riskThreshold {
-			vulnerableAnalyses = append(vulnerableAnalyses, *analysis)
+			vulnerable = append(vulnerable, analysis)
 		}
 	}
-	for _, analysis := range vulnerableAnalyses {
-		vulnerability, _, err := client.Vulnerabilities.GetByID(
-			ctx, analysis.VulnerabilityID,
-		)
+	return vulnerable
+}
+
+func printStandardTable(ctx context.Context, client *appknox.Client, analyses []*appknox.Analysis) {
+	t := tabby.New()
+	t.AddHeader(
+		"ANALYSIS-ID", "RISK", "CVSS-VECTOR", "CVSS-BASE",
+		"VULNERABILITY-ID", "VULNERABILITY-NAME",
+	)
+	for _, analysis := range analyses {
+		vulnerability, _, err := client.Vulnerabilities.GetByID(ctx, analysis.VulnerabilityID)
 		if err != nil {
 			PrintError(err)
 			os.Exit(1)
 		}
 		t.AddLine(
-			analysis.ID,
-			analysis.ComputedRisk,
-			analysis.CvssVector,
-			analysis.CvssBase,
-			analysis.VulnerabilityID,
-			vulnerability.Name,
+			analysis.ID, analysis.ComputedRisk, analysis.CvssVector,
+			analysis.CvssBase, analysis.VulnerabilityID, vulnerability.Name,
 		)
 	}
-	vulLen := len(vulnerableAnalyses)
+	t.Print()
+}
+
+// riskDecision prints the pass/fail summary and exits non-zero when any
+// vulnerability met the threshold.
+func riskDecision(fileID, vulnCount, riskThreshold int) {
 	msg := fmt.Sprintf("\nCheck file ID %d on appknox dashboard for more details.\n", fileID)
-	if vulLen > 0 {
-		errmsg := fmt.Sprintf("Found %d vulnerabilities with risk >= %s\n", vulLen, enums.RiskType(riskThreshold))
-		PrintError(errmsg)
-		t.Print()
-		fmt.Printf(msg)
+	if vulnCount > 0 {
+		PrintError(fmt.Sprintf(
+			"Found %d vulnerabilities with risk >= %s\n",
+			vulnCount, enums.RiskType(riskThreshold)))
+		fmt.Print(msg)
 		os.Exit(1)
-	} else {
-		fmt.Println("\nNo vulnerabilities found with risk threshold >= ", enums.RiskType(riskThreshold))
-		fmt.Printf(msg)
 	}
+	fmt.Println("\nNo vulnerabilities found with risk threshold >= ", enums.RiskType(riskThreshold))
+	fmt.Print(msg)
+}
+
+func runStandardRiskCheck(ctx context.Context, client *appknox.Client, fileID, riskThreshold int, analyses []*appknox.Analysis) {
+	vulnerable := filterAnalysesByRisk(analyses, riskThreshold)
+	if len(vulnerable) > 0 {
+		printStandardTable(ctx, client, vulnerable)
+	}
+	riskDecision(fileID, len(vulnerable), riskThreshold)
 }
 
 // ProcessHealthScoreCiCheck waits for the static scan to complete and then

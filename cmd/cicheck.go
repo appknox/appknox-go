@@ -9,6 +9,7 @@ import (
 
 	"github.com/appknox/appknox-go/helper"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 // cicheckCmd represents the cicheck command
@@ -81,4 +82,12 @@ func init() {
 		"health-score-threshold", 0, "Health score threshold (0-100) to pass the command")
 	cicheckCmd.Flags().IntP(
 		"timeout", "t", 30, "Static scan timeout in minutes for the CI check (default: 30)")
+
+	cicheckCmd.Flags().Bool(
+		"include-needs-review", false,
+		"Include KnoxIQ needs-review vulnerabilities in the CI check results and build decision")
+	viper.BindPFlag(
+		"include-needs-review", cicheckCmd.Flags().Lookup("include-needs-review"))
+	viper.BindEnv("include-needs-review", "APPKNOX_INCLUDE_NEEDS_REVIEW")
+	viper.SetDefault("include-needs-review", false)
 }
