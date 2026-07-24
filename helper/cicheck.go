@@ -62,22 +62,38 @@ func waitForStaticScan(fileID int, staticScanTimeout time.Duration) {
 		}
 		time.Sleep(5 * time.Second)
 	}
+	// Stop the progress bar's render goroutine so it does not keep redrawing
+	// over subsequent output (e.g. the KnoxIQ status lines).
+	p.Wait()
 }
 
-// ProcessCiCheck runs the standard risk gate, or the KnoxIQ flow when KnoxIQ
-// auto-runs for the file.
-func ProcessCiCheck(fileID, riskThreshold int, staticScanTimeout time.Duration) {
-	waitForStaticScan(fileID, staticScanTimeout)
+// CiPolicy describes the active build-failure gates for a CI check. A threshold
+// of -1 means that gate is inactive.
+type CiPolicy struct {
+	RiskThreshold        int
+	LikelihoodThreshold  int
+	HealthScoreThreshold int
+	StaticScanTimeout    time.Duration
+	KnoxIQTimeout        time.Duration
+}
+
+// ProcessCiCheck runs the standard risk/likelihood gates, or the KnoxIQ flow
+// when KnoxIQ auto-runs for the file.
+func ProcessCiCheck(fileID int, policy CiPolicy) {
+	waitForStaticScan(fileID, policy.StaticScanTimeout)
 	ctx := context.Background()
 	client := getClient()
 
 	file, _, err := client.Files.GetByIDV3(ctx, fileID)
 	if err == nil && file.IsKnoxIQAutomated {
-		processKnoxIQCiCheck(ctx, client, fileID, riskThreshold)
+		processKnoxIQCiCheck(ctx, client, fileID, policy)
 		return
 	}
+	if policy.LikelihoodThreshold >= 0 {
+		PrintError("exploit-likelihood gating requires KnoxIQ triage — skipping (KnoxIQ not enabled for this file)")
+	}
 	analyses := listAllAnalyses(ctx, client, fileID)
-	runStandardRiskCheck(ctx, client, fileID, riskThreshold, analyses)
+	runStandardRiskCheck(ctx, client, fileID, policy, analyses)
 }
 
 func listAllAnalyses(ctx context.Context, client *appknox.Client, fileID int) []*appknox.Analysis {
@@ -127,34 +143,44 @@ func printStandardTable(ctx context.Context, client *appknox.Client, analyses []
 	t.Print()
 }
 
-// riskDecision prints the pass/fail summary and exits non-zero when any
-// vulnerability met the threshold.
-func riskDecision(fileID, vulnCount, riskThreshold int) {
+// decideGates prints the pass/fail summary for the risk and likelihood gates
+// and exits non-zero when any active gate is breached.
+func decideGates(fileID int, policy CiPolicy, riskCount, likelihoodCount int) {
 	msg := fmt.Sprintf("\nCheck file ID %d on appknox dashboard for more details.\n", fileID)
-	if vulnCount > 0 {
-		PrintError(fmt.Sprintf(
-			"Found %d vulnerabilities with risk >= %s\n",
-			vulnCount, enums.RiskType(riskThreshold)))
+	riskFail := policy.RiskThreshold >= 0 && riskCount > 0
+	likelihoodFail := policy.LikelihoodThreshold >= 0 && likelihoodCount > 0
+	if riskFail {
+		PrintError(fmt.Sprintf("Found %d vulnerabilities with risk >= %s",
+			riskCount, enums.RiskType(policy.RiskThreshold)))
+	}
+	if likelihoodFail {
+		PrintError(fmt.Sprintf("Found %d vulnerabilities with exploit likelihood >= %s",
+			likelihoodCount, enums.ExploitabilityType(policy.LikelihoodThreshold)))
+	}
+	if riskFail || likelihoodFail {
 		fmt.Print(msg)
 		os.Exit(1)
 	}
-	fmt.Println("\nNo vulnerabilities found with risk threshold >= ", enums.RiskType(riskThreshold))
+	fmt.Println("\nNo vulnerabilities found breaching the configured thresholds.")
 	fmt.Print(msg)
 }
 
-func runStandardRiskCheck(ctx context.Context, client *appknox.Client, fileID, riskThreshold int, analyses []*appknox.Analysis) {
-	vulnerable := filterAnalysesByRisk(analyses, riskThreshold)
-	if len(vulnerable) > 0 {
-		printStandardTable(ctx, client, vulnerable)
+func runStandardRiskCheck(ctx context.Context, client *appknox.Client, fileID int, policy CiPolicy, analyses []*appknox.Analysis) {
+	riskCount := 0
+	if policy.RiskThreshold >= 0 {
+		vulnerable := filterAnalysesByRisk(analyses, policy.RiskThreshold)
+		riskCount = len(vulnerable)
+		if riskCount > 0 {
+			printStandardTable(ctx, client, vulnerable)
+		}
 	}
-	riskDecision(fileID, len(vulnerable), riskThreshold)
+	decideGates(fileID, policy, riskCount, 0)
 }
 
-// ProcessHealthScoreCiCheck waits for the static scan to complete and then
-// compares the file's health score against the provided threshold. The build
-// passes if the score is greater than or equal to the threshold.
-func ProcessHealthScoreCiCheck(fileID, healthScoreThreshold int, staticScanTimeout time.Duration) {
-	waitForStaticScan(fileID, staticScanTimeout)
+// ProcessHealthScoreCiCheck gates on the file health score, plus the optional
+// exploit-likelihood gate when configured.
+func ProcessHealthScoreCiCheck(fileID int, policy CiPolicy) {
+	waitForStaticScan(fileID, policy.StaticScanTimeout)
 	ctx := context.Background()
 	client := getClient()
 
@@ -167,15 +193,35 @@ func ProcessHealthScoreCiCheck(fileID, healthScoreThreshold int, staticScanTimeo
 		os.Exit(1)
 	}
 
-	score := healthScoreResponse.HealthScore
+	likelihoodCount := 0
+	if policy.LikelihoodThreshold >= 0 {
+		likelihoodCount = countLikelihoodOffenders(ctx, client, fileID, policy)
+	}
+	decideHealthScore(fileID, policy, healthScoreResponse.HealthScore, likelihoodCount)
+}
+
+// decideHealthScore prints the health-score (and optional likelihood) verdict
+// and exits non-zero when the score is below threshold or the likelihood gate
+// is breached.
+func decideHealthScore(fileID int, policy CiPolicy, score, likelihoodCount int) {
 	msg := fmt.Sprintf("\nCheck file ID %d on appknox dashboard for more details.\n", fileID)
-	if score >= healthScoreThreshold {
-		fmt.Printf("\nHealth score %d is greater than or equal to threshold %d. Build passed.\n", score, healthScoreThreshold)
-		fmt.Printf(msg)
+	healthFail := score < policy.HealthScoreThreshold
+	likelihoodFail := policy.LikelihoodThreshold >= 0 && likelihoodCount > 0
+	if healthFail {
+		PrintError(fmt.Sprintf("Health score %d is below the threshold %d.",
+			score, policy.HealthScoreThreshold))
 	} else {
-		errmsg := fmt.Sprintf("Health score %d is below the threshold %d. Build failed.\n", score, healthScoreThreshold)
-		PrintError(errmsg)
-		fmt.Printf(msg)
+		fmt.Printf("\nHealth score %d is greater than or equal to threshold %d.\n",
+			score, policy.HealthScoreThreshold)
+	}
+	if likelihoodFail {
+		PrintError(fmt.Sprintf("Found %d vulnerabilities with exploit likelihood >= %s",
+			likelihoodCount, enums.ExploitabilityType(policy.LikelihoodThreshold)))
+	}
+	if healthFail || likelihoodFail {
+		fmt.Print(msg)
 		os.Exit(1)
 	}
+	fmt.Println("Build passed.")
+	fmt.Print(msg)
 }

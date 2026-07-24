@@ -71,6 +71,29 @@ func ProcessCreateReport(fileID int) (reportID int, isNew bool, err error) {
 	return report.ID, true, nil
 }
 
+// ProcessKnoxIQReport generates and downloads the KnoxIQ PDF report for a file.
+// When KnoxIQ auto-runs for the file it first waits for triage to complete so
+// the report includes KnoxIQ results.
+func ProcessKnoxIQReport(fileID int, outputDir string, knoxiqTimeout time.Duration) error {
+	ctx := context.Background()
+	client := getClient()
+
+	file, _, err := client.Files.GetByIDV3(ctx, fileID)
+	if err == nil && file.IsKnoxIQAutomated {
+		if !waitForKnoxIQ(ctx, client, fileID, knoxiqTimeout) {
+			PrintError("KnoxIQ triage did not complete; the report may not include KnoxIQ results.")
+		}
+	} else {
+		PrintError("KnoxIQ is not enabled for this file; generating a standard report.")
+	}
+
+	reportID, _, err := ProcessCreateReport(fileID)
+	if err != nil {
+		return err
+	}
+	return ProcessDownloadReportPDF(reportID, outputDir)
+}
+
 // ProcessDownloadReportPDF downloads a PDF VAPT report and its password file by report ID.
 func ProcessDownloadReportPDF(reportID int, outputDir string) error {
 	ctx := context.Background()
@@ -130,4 +153,3 @@ func ProcessDownloadReportPDF(reportID int, outputDir string) error {
 
 	return nil
 }
-

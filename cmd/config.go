@@ -12,6 +12,7 @@ import (
 
 var knownConfigKeys = []string{
 	"include-needs-review",
+	"knoxiq-timeout",
 }
 
 func isKnownConfigKey(key string) bool {

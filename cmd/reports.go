@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/appknox/appknox-go/helper"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 // reportsCmd is the command to generate reports
@@ -133,6 +135,37 @@ Use 'appknox reports create <file_id>' to generate a report and get the report I
 	},
 }
 
+var reportsKnoxIQCmd = &cobra.Command{
+	Use:   "knoxiq <file_id>",
+	Short: "Generate and download the KnoxIQ PDF report for a file.",
+	Long: `Generate and download the KnoxIQ PDF report for a file in one step.
+
+When KnoxIQ auto-runs for the file, this waits for triage to complete so the
+report includes KnoxIQ results, then downloads the PDF and its password file.
+Files are saved to {output}/{file_id}/. Default output directory is ./reports/`,
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) < 1 {
+			return errors.New("file id is required")
+		}
+		return nil
+	},
+	Run: func(cmd *cobra.Command, args []string) {
+		fileID, err := strconv.Atoi(args[0])
+		if err != nil {
+			helper.PrintError(errors.New("valid file id is required"))
+			return
+		}
+		outputDir, _ := cmd.Flags().GetString("output")
+		if outputDir == "" {
+			outputDir = "./reports"
+		}
+		knoxiqTimeout := time.Duration(viper.GetInt("knoxiq-timeout")) * time.Minute
+		if err := helper.ProcessKnoxIQReport(fileID, outputDir, knoxiqTimeout); err != nil {
+			helper.PrintError(err)
+		}
+	},
+}
+
 func init() {
 	reportsDownloadCmd.AddCommand(reportsDownloadCsvCmd)
 	reportsDownloadCmd.AddCommand(reportsDownloadExcelCmd)
@@ -140,5 +173,7 @@ func init() {
 	reportsCmd.AddCommand(reportsDownloadCmd)
 	reportsDownloadCmd.PersistentFlags().StringP("output", "o", "", "Output file path to save reports")
 	reportsCmd.AddCommand(reportsCreateCmd)
+	reportsKnoxIQCmd.Flags().StringP("output", "o", "", "Output directory to save the report")
+	reportsCmd.AddCommand(reportsKnoxIQCmd)
 	RootCmd.AddCommand(reportsCmd)
 }

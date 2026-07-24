@@ -22,6 +22,7 @@ type ReportResult struct {
 	Language    string     `json:"language"`
 	Progress    int        `json:"progress"`
 	Rating      string     `json:"rating"`
+	IsKnoxIQ    bool       `json:"is_knoxiq"`
 }
 type DRFResponseReportDownloadUrl struct {
 	Url string `json:"url"`
