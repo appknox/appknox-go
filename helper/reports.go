@@ -80,7 +80,9 @@ func ProcessKnoxIQReport(fileID int, outputDir string, knoxiqTimeout time.Durati
 
 	file, _, err := client.Files.GetByIDV3(ctx, fileID)
 	if err == nil && file.IsKnoxIQAutomated {
-		if !waitForKnoxIQ(ctx, client, fileID, knoxiqTimeout) {
+		// Standalone command, so the KnoxIQ wait starts now — there is no
+		// preceding static-scan wait to carry time over from.
+		if !waitForKnoxIQ(ctx, client, fileID, time.Now().Add(knoxiqTimeout)) {
 			PrintError("KnoxIQ triage did not complete; the report may not include KnoxIQ results.")
 		}
 	} else {

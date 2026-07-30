@@ -15,11 +15,13 @@ import (
 )
 
 // waitForStaticScan polls the static scan status summary until the static
-// scan completes or the timeout is reached. It exits the process on failure.
-func waitForStaticScan(fileID int, staticScanTimeout time.Duration) {
+// scan completes or the budget's static deadline passes. It exits the process on
+// failure.
+func waitForStaticScan(fileID int, budget ScanBudget) {
 	const minTimeout = 1   // 1 minute
 	const maxTimeout = 240 // 4 hours
 
+	staticScanTimeout := budget.SastTimeout
 	if staticScanTimeout < minTimeout*time.Minute || staticScanTimeout > maxTimeout*time.Minute {
 		errMsg := fmt.Sprintf("Error: timeout must be between %v minute and %v minutes", minTimeout, maxTimeout)
 		fmt.Println(errMsg) // Print error message to standard output
@@ -28,7 +30,8 @@ func waitForStaticScan(fileID int, staticScanTimeout time.Duration) {
 	ctx := context.Background()
 	client := getClient()
 	var staticScanProgess int
-	start := time.Now()
+	start := budget.Start
+	deadline := budget.SastDeadline()
 	fmt.Printf("Starting scan at: %v with timeout of %v\n", start.Format(time.RFC3339), staticScanTimeout)
 	p := mpb.New(
 		mpb.WithWidth(60),
@@ -55,7 +58,7 @@ func waitForStaticScan(fileID int, staticScanTimeout time.Duration) {
 		staticScanProgess = summary.StaticScanProgress
 		bar.SetCurrent(int64(staticScanProgess), time.Since(start))
 
-		if time.Since(start) > staticScanTimeout {
+		if time.Now().After(deadline) {
 			err := errors.New("Request timed out")
 			PrintError(err)
 			os.Exit(1)
@@ -73,14 +76,13 @@ type CiPolicy struct {
 	RiskThreshold        int
 	LikelihoodThreshold  int
 	HealthScoreThreshold int
-	StaticScanTimeout    time.Duration
-	KnoxIQTimeout        time.Duration
+	Budget               ScanBudget
 }
 
 // ProcessCiCheck runs the standard risk/likelihood gates, or the KnoxIQ flow
 // when KnoxIQ auto-runs for the file.
 func ProcessCiCheck(fileID int, policy CiPolicy) {
-	waitForStaticScan(fileID, policy.StaticScanTimeout)
+	waitForStaticScan(fileID, policy.Budget)
 	ctx := context.Background()
 	client := getClient()
 
@@ -180,7 +182,7 @@ func runStandardRiskCheck(ctx context.Context, client *appknox.Client, fileID in
 // ProcessHealthScoreCiCheck gates on the file health score, plus the optional
 // exploit-likelihood gate when configured.
 func ProcessHealthScoreCiCheck(fileID int, policy CiPolicy) {
-	waitForStaticScan(fileID, policy.StaticScanTimeout)
+	waitForStaticScan(fileID, policy.Budget)
 	ctx := context.Background()
 	client := getClient()
 

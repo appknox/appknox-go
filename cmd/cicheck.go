@@ -48,13 +48,16 @@ func parseCiPolicy(cmd *cobra.Command) (helper.CiPolicy, error) {
 	policy := helper.CiPolicy{RiskThreshold: -1, LikelihoodThreshold: -1, HealthScoreThreshold: -1}
 
 	staticMinutes, _ := cmd.Flags().GetInt("timeout")
-	policy.StaticScanTimeout = time.Duration(staticMinutes) * time.Minute
-
 	knoxiqMinutes := viper.GetInt("knoxiq-timeout")
 	if knoxiqMinutes < 1 || knoxiqMinutes > 240 {
 		return policy, errors.New("knoxiq-timeout must be between 1 and 240 minutes")
 	}
-	policy.KnoxIQTimeout = time.Duration(knoxiqMinutes) * time.Minute
+	// One budget shared by both waits, so time the static scan does not use is
+	// available to KnoxIQ.
+	policy.Budget = helper.NewScanBudget(
+		time.Duration(staticMinutes)*time.Minute,
+		time.Duration(knoxiqMinutes)*time.Minute,
+	)
 
 	healthChanged := cmd.Flags().Changed("health-score-threshold")
 	riskChanged := cmd.Flags().Changed("risk-threshold")

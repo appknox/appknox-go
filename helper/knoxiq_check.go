@@ -30,7 +30,7 @@ func processKnoxIQCiCheck(ctx context.Context, client *appknox.Client, fileID in
 		fmt.Println("No SAST vulnerabilities at or above the threshold.")
 	}
 
-	if !waitForKnoxIQ(ctx, client, fileID, policy.KnoxIQTimeout) {
+	if !waitForKnoxIQ(ctx, client, fileID, policy.Budget.KnoxIQDeadline()) {
 		fmt.Println("\nKnoxIQ did not complete; falling back to SAST results for the build decision.")
 		decideOnSASTFallback(fileID, policy, analyses)
 		return
@@ -59,10 +59,11 @@ func decideOnSASTFallback(fileID int, policy CiPolicy, analyses []*appknox.Analy
 	decideGates(fileID, policy, riskCount, 0)
 }
 
-// waitForKnoxIQ polls the scan status and returns true only when triage
-// completes; false on error, a terminal non-running state, or timeout.
-func waitForKnoxIQ(ctx context.Context, client *appknox.Client, fileID int, timeout time.Duration) bool {
-	start := time.Now()
+// waitForKnoxIQ polls the scan status until the given deadline and returns true
+// only when triage completes; false on error, a terminal non-running state, or
+// when the deadline passes. Takes an absolute deadline rather than a duration so
+// the caller's budget (which carries over unused static-scan time) is respected.
+func waitForKnoxIQ(ctx context.Context, client *appknox.Client, fileID int, deadline time.Time) bool {
 	lastStatus := enums.KnoxIQScanStatusType(-99)
 	fmt.Println("\nKnoxIQ triage status:")
 	for {
@@ -84,7 +85,7 @@ func waitForKnoxIQ(ctx context.Context, client *appknox.Client, fileID int, time
 			enums.KnoxIQStatusLegacy:
 			return false
 		}
-		if time.Since(start) > timeout {
+		if time.Now().After(deadline) {
 			fmt.Println("  KnoxIQ timed out.")
 			return false
 		}
@@ -101,7 +102,7 @@ func countLikelihoodOffenders(ctx context.Context, client *appknox.Client, fileI
 		PrintError("exploit-likelihood gating requires KnoxIQ triage — skipping (KnoxIQ not enabled for this file)")
 		return 0
 	}
-	if !waitForKnoxIQ(ctx, client, fileID, policy.KnoxIQTimeout) {
+	if !waitForKnoxIQ(ctx, client, fileID, policy.Budget.KnoxIQDeadline()) {
 		PrintError("KnoxIQ did not complete — skipping exploit-likelihood gate")
 		return 0
 	}

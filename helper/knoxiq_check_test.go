@@ -116,7 +116,7 @@ func TestWaitForKnoxIQ_Completed(t *testing.T) {
 	client, teardown := knoxIQStatusServer(t, int(enums.KnoxIQStatusCompleted))
 	defer teardown()
 	captureOutput(func() {
-		assert.True(t, waitForKnoxIQ(context.Background(), client, 1, time.Minute))
+		assert.True(t, waitForKnoxIQ(context.Background(), client, 1, time.Now().Add(time.Minute)))
 	})
 }
 
@@ -124,6 +124,6 @@ func TestWaitForKnoxIQ_Errored(t *testing.T) {
 	client, teardown := knoxIQStatusServer(t, int(enums.KnoxIQStatusErrored))
 	defer teardown()
 	captureOutput(func() {
-		assert.False(t, waitForKnoxIQ(context.Background(), client, 1, time.Minute))
+		assert.False(t, waitForKnoxIQ(context.Background(), client, 1, time.Now().Add(time.Minute)))
 	})
 }
