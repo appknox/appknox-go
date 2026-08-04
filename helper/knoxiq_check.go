@@ -76,13 +76,28 @@ func processKnoxIQCiCheck(ctx context.Context, client *appknox.Client, fileID in
 	reportKnoxIQGate(fileID, policy, triaged)
 }
 
-// decideOnSASTFallback gates on SAST risk only, used when KnoxIQ triage is
-// unavailable. The likelihood gate is skipped (with a warning) since there is
-// no triage data.
-func decideOnSASTFallback(fileID int, policy CiPolicy, analyses []*appknox.Analysis) {
-	if policy.LikelihoodThreshold >= 0 {
-		PrintError("exploit-likelihood gate skipped — KnoxIQ triage unavailable")
+// warnLikelihoodUnavailable explains that the likelihood gate could not be
+// evaluated because KnoxIQ triage is unavailable. If no risk threshold was
+// explicitly requested, it also restores the default risk gate (Low) —
+// otherwise a likelihood-only cicheck against a file with no KnoxIQ triage
+// would end up with zero active gates and pass having checked nothing.
+func warnLikelihoodUnavailable(policy *CiPolicy) {
+	if policy.LikelihoodThreshold < 0 {
+		return
 	}
+	if policy.RiskThreshold >= 0 {
+		PrintError("exploit-likelihood gate skipped — KnoxIQ triage unavailable")
+		return
+	}
+	PrintError("exploit-likelihood gate unavailable (no KnoxIQ triage) — falling back to risk-threshold=low")
+	policy.RiskThreshold = int(enums.Risk.Low)
+}
+
+// decideOnSASTFallback gates on SAST risk only, used when KnoxIQ triage is
+// unavailable. See warnLikelihoodUnavailable for how the likelihood gate
+// degrades.
+func decideOnSASTFallback(fileID int, policy CiPolicy, analyses []*appknox.Analysis) {
+	warnLikelihoodUnavailable(&policy)
 	riskCount := 0
 	if policy.RiskThreshold >= 0 {
 		riskCount = len(filterAnalysesByRisk(analyses, policy.RiskThreshold))

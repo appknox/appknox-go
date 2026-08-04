@@ -127,3 +127,44 @@ func TestWaitForKnoxIQ_Errored(t *testing.T) {
 		assert.False(t, waitForKnoxIQ(context.Background(), client, 1, time.Now().Add(time.Minute)))
 	})
 }
+
+// TestWarnLikelihoodUnavailable_RestoresRiskGate is the fail-open regression:
+// a likelihood-only cicheck (RiskThreshold left at -1 by parseCiPolicy) against
+// a file with no KnoxIQ triage used to leave zero active gates and pass having
+// checked nothing. It must fall back to the default risk gate instead.
+func TestWarnLikelihoodUnavailable_RestoresRiskGate(t *testing.T) {
+	policy := CiPolicy{RiskThreshold: -1, LikelihoodThreshold: int(enums.Exploitability.High)}
+	warnLikelihoodUnavailable(&policy)
+	assert.Equal(t, int(enums.Risk.Low), policy.RiskThreshold)
+}
+
+func TestWarnLikelihoodUnavailable_KeepsExplicitRiskGate(t *testing.T) {
+	policy := CiPolicy{RiskThreshold: int(enums.Risk.High), LikelihoodThreshold: int(enums.Exploitability.High)}
+	warnLikelihoodUnavailable(&policy)
+	assert.Equal(t, int(enums.Risk.High), policy.RiskThreshold)
+}
+
+func TestWarnLikelihoodUnavailable_NoOpWithoutLikelihoodGate(t *testing.T) {
+	policy := CiPolicy{RiskThreshold: -1, LikelihoodThreshold: -1}
+	warnLikelihoodUnavailable(&policy)
+	assert.Equal(t, -1, policy.RiskThreshold)
+}
+
+func TestPrintActiveGates(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy CiPolicy
+		want   string
+	}{
+		{"no gates", CiPolicy{RiskThreshold: -1, LikelihoodThreshold: -1}, "Active gates: none"},
+		{"risk only", CiPolicy{RiskThreshold: int(enums.Risk.Low), LikelihoodThreshold: -1}, "Active gates: risk >= Low"},
+		{"likelihood only", CiPolicy{RiskThreshold: -1, LikelihoodThreshold: int(enums.Exploitability.High)}, "Active gates: exploit likelihood >= High"},
+		{"both", CiPolicy{RiskThreshold: int(enums.Risk.Low), LikelihoodThreshold: int(enums.Exploitability.High)}, "Active gates: risk >= Low, exploit likelihood >= High"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := captureOutput(func() { printActiveGates(tt.policy) })
+			assert.Contains(t, out, tt.want)
+		})
+	}
+}

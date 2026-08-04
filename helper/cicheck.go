@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/appknox/appknox-go/appknox"
@@ -90,9 +91,7 @@ func ProcessCiCheck(fileID int, policy CiPolicy) {
 		processKnoxIQCiCheck(ctx, client, fileID, policy)
 		return
 	}
-	if policy.LikelihoodThreshold >= 0 {
-		PrintError("exploit-likelihood gating requires KnoxIQ triage — skipping (no KnoxIQ results for this file)")
-	}
+	warnLikelihoodUnavailable(&policy)
 	analyses := listAllAnalyses(ctx, client, fileID)
 	runStandardRiskCheck(ctx, client, fileID, policy, analyses)
 }
@@ -144,9 +143,29 @@ func printStandardTable(ctx context.Context, client *appknox.Client, analyses []
 	t.Print()
 }
 
+// printActiveGates prints which build-failure gates are actually in effect,
+// so a passing build can't be misread as "everything was checked" when a gate
+// silently ended up disabled (e.g. a likelihood gate requested on a file with
+// no KnoxIQ triage — see warnLikelihoodUnavailable).
+func printActiveGates(policy CiPolicy) {
+	var gates []string
+	if policy.RiskThreshold >= 0 {
+		gates = append(gates, fmt.Sprintf("risk >= %s", enums.RiskType(policy.RiskThreshold)))
+	}
+	if policy.LikelihoodThreshold >= 0 {
+		gates = append(gates, fmt.Sprintf("exploit likelihood >= %s", enums.ExploitabilityType(policy.LikelihoodThreshold)))
+	}
+	if len(gates) == 0 {
+		fmt.Println("\nActive gates: none")
+		return
+	}
+	fmt.Printf("\nActive gates: %s\n", strings.Join(gates, ", "))
+}
+
 // decideGates prints the pass/fail summary for the risk and likelihood gates
 // and exits non-zero when any active gate is breached.
 func decideGates(fileID int, policy CiPolicy, riskCount, likelihoodCount int) {
+	printActiveGates(policy)
 	msg := fmt.Sprintf("\nCheck file ID %d on appknox dashboard for more details.\n", fileID)
 	riskFail := policy.RiskThreshold >= 0 && riskCount > 0
 	likelihoodFail := policy.LikelihoodThreshold >= 0 && likelihoodCount > 0
