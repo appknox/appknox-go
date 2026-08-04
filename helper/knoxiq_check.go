@@ -13,6 +13,37 @@ import (
 
 const knoxIQPollInterval = 5 * time.Second
 
+// knoxIQAvailable reports the KnoxIQ SAST state for a file and whether there is
+// triage worth surfacing — i.e. results exist or are on their way. It asks "does
+// this file have KnoxIQ?" rather than "will KnoxIQ auto-run?", so files whose
+// triage was started manually are included.
+//
+// 403 (org without the KnoxIQ feature) and 404 (backend without the KnoxIQ
+// endpoints) both mean "not available", so the CLI silently falls back to the
+// plain SAST flow. Anything else is surfaced before falling back.
+func knoxIQAvailable(
+	ctx context.Context, client *appknox.Client, fileID int,
+) (enums.KnoxIQScanStatusType, bool) {
+	scanStatus, _, err := client.KnoxIQ.GetScanStatus(ctx, fileID)
+	if err != nil {
+		switch appknox.StatusCodeOf(err) {
+		case 403, 404:
+			// Expected for non-KnoxIQ orgs and older backends.
+		default:
+			PrintError(err)
+		}
+		return enums.KnoxIQStatusDisabled, false
+	}
+	status := enums.KnoxIQScanStatusType(scanStatus.SastStatus)
+	switch status {
+	case enums.KnoxIQStatusPending,
+		enums.KnoxIQStatusRunning,
+		enums.KnoxIQStatusCompleted:
+		return status, true
+	}
+	return status, false
+}
+
 // processKnoxIQCiCheck shows intermediary SAST results, waits for triage, then
 // gates on the triaged results, falling back to SAST results if KnoxIQ does
 // not complete.
@@ -97,9 +128,8 @@ func waitForKnoxIQ(ctx context.Context, client *appknox.Client, fileID int, dead
 // analyses meet the likelihood threshold; 0 (with a warning) when the file has
 // no KnoxIQ triage.
 func countLikelihoodOffenders(ctx context.Context, client *appknox.Client, fileID int, policy CiPolicy) int {
-	file, _, err := client.Files.GetByIDV3(ctx, fileID)
-	if err != nil || !file.IsKnoxIQAutomated {
-		PrintError("exploit-likelihood gating requires KnoxIQ triage — skipping (KnoxIQ not enabled for this file)")
+	if _, available := knoxIQAvailable(ctx, client, fileID); !available {
+		PrintError("exploit-likelihood gating requires KnoxIQ triage — skipping (no KnoxIQ results for this file)")
 		return 0
 	}
 	if !waitForKnoxIQ(ctx, client, fileID, policy.Budget.KnoxIQDeadline()) {

@@ -274,6 +274,17 @@ func (r *ErrorResponse) Error() string {
 		r.Response.StatusCode, r.Detail)
 }
 
+// StatusCodeOf returns the HTTP status code carried by an API error, or 0 when
+// the error did not come from an API response (transport failure, etc). Lets
+// callers distinguish "the server said no" from "we never reached the server".
+func StatusCodeOf(err error) int {
+	var errResp *ErrorResponse
+	if errors.As(err, &errResp) && errResp.Response != nil {
+		return errResp.Response.StatusCode
+	}
+	return 0
+}
+
 // Error is custom error object.
 type Error struct {
 	Message string `json:"message"`

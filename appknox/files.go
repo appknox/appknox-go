@@ -96,8 +96,6 @@ type File struct {
 	IsAPIDone          bool                       `json:"is_api_done,omitempty"`
 	CreatedOn          *time.Time                 `json:"created_on,omitempty"`
 	ProfileID          int                        `json:"profile,omitempty"`
-	IsKnoxIQAutomated  bool                       `json:"is_knoxiq_automated,omitempty"`
-	KnoxIQStatus       int                        `json:"knoxiq_status,omitempty"`
 }
 
 // ScanStatusSummary represents a compact scans status summary returned by
@@ -159,19 +157,6 @@ func (s *FilesService) ListByProject(ctx context.Context, projectID int, opt *Fi
 // GetByID get the file with it's id.
 func (s *FilesService) GetByID(ctx context.Context, fileID int) (*File, *Response, error) {
 	u := fmt.Sprintf("api/v2/files/%v", fileID)
-	req, err := s.client.NewRequest("GET", u, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	var fileResponse File
-	resp, err := s.client.Do(ctx, req, &fileResponse)
-	return &fileResponse, resp, err
-}
-
-// GetByIDV3 gets the file with its id using the v3 endpoint, which carries the
-// KnoxIQ gate fields.
-func (s *FilesService) GetByIDV3(ctx context.Context, fileID int) (*File, *Response, error) {
-	u := fmt.Sprintf("api/v3/files/%v", fileID)
 	req, err := s.client.NewRequest("GET", u, nil)
 	if err != nil {
 		return nil, nil, err

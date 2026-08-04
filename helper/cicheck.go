@@ -80,19 +80,18 @@ type CiPolicy struct {
 }
 
 // ProcessCiCheck runs the standard risk/likelihood gates, or the KnoxIQ flow
-// when KnoxIQ auto-runs for the file.
+// when the file has KnoxIQ triage.
 func ProcessCiCheck(fileID int, policy CiPolicy) {
 	waitForStaticScan(fileID, policy.Budget)
 	ctx := context.Background()
 	client := getClient()
 
-	file, _, err := client.Files.GetByIDV3(ctx, fileID)
-	if err == nil && file.IsKnoxIQAutomated {
+	if _, available := knoxIQAvailable(ctx, client, fileID); available {
 		processKnoxIQCiCheck(ctx, client, fileID, policy)
 		return
 	}
 	if policy.LikelihoodThreshold >= 0 {
-		PrintError("exploit-likelihood gating requires KnoxIQ triage — skipping (KnoxIQ not enabled for this file)")
+		PrintError("exploit-likelihood gating requires KnoxIQ triage — skipping (no KnoxIQ results for this file)")
 	}
 	analyses := listAllAnalyses(ctx, client, fileID)
 	runStandardRiskCheck(ctx, client, fileID, policy, analyses)
