@@ -10,8 +10,9 @@ import (
 	"github.com/vbauerster/mpb/v4/decor"
 )
 
-// ProcessUpload takes the filePath and upload it to the appknox dashboard.
-func ProcessUpload(file *os.File) {
+// ProcessUpload takes the filePath and uploads it to the appknox dashboard.
+// knoxiq requests KnoxIQ triage for this build once SAST completes.
+func ProcessUpload(file *os.File, knoxiq bool) {
 	ctx := context.Background()
 	client := getClient()
 	stat, _ := file.Stat()
@@ -32,7 +33,7 @@ func ProcessUpload(file *os.File) {
 		),
 	)
 	filewithbar := bar.ProxyReader(file)
-	submissionID, err := client.Upload.UploadFileUsingReader(ctx, filewithbar, fileSize)
+	submissionID, err := client.Upload.UploadFileUsingReader(ctx, filewithbar, fileSize, knoxiq)
 	if err != nil {
 		PrintError(err)
 		os.Exit(1)
