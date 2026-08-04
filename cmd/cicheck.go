@@ -48,9 +48,9 @@ func parseCiPolicy(cmd *cobra.Command) (helper.CiPolicy, error) {
 	policy := helper.CiPolicy{RiskThreshold: -1, LikelihoodThreshold: -1, HealthScoreThreshold: -1}
 
 	staticMinutes, _ := cmd.Flags().GetInt("timeout")
-	knoxiqMinutes := viper.GetInt("knoxiq-timeout")
-	if knoxiqMinutes < 1 || knoxiqMinutes > 240 {
-		return policy, errors.New("knoxiq-timeout must be between 1 and 240 minutes")
+	knoxiqMinutes, err := knoxIQTimeoutMinutes()
+	if err != nil {
+		return policy, err
 	}
 	// One budget shared by both waits, so time the static scan does not use is
 	// available to KnoxIQ.
@@ -150,10 +150,4 @@ func init() {
 		"include-needs-review", cicheckCmd.Flags().Lookup("include-needs-review"))
 	viper.BindEnv("include-needs-review", "APPKNOX_INCLUDE_NEEDS_REVIEW")
 	viper.SetDefault("include-needs-review", false)
-
-	cicheckCmd.Flags().Int(
-		"knoxiq-timeout", 30, "KnoxIQ triage timeout in minutes (default: 30)")
-	viper.BindPFlag("knoxiq-timeout", cicheckCmd.Flags().Lookup("knoxiq-timeout"))
-	viper.BindEnv("knoxiq-timeout", "APPKNOX_KNOXIQ_TIMEOUT")
-	viper.SetDefault("knoxiq-timeout", 30)
 }

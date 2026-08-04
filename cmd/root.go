@@ -1,10 +1,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	
+
 	// "github.com/appknox/appknox-go/appknox"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -60,7 +61,28 @@ func init() {
 	viper.BindEnv("insecure")
 	viper.SetDefault("insecure", false)
 
+	// Shared by cicheck, sarif and reports knoxiq — a single persistent flag
+	// (rather than one local flag per command) so there is exactly one pflag
+	// object for viper to bind to; binding the same viper key to two separate
+	// local flags would make the second binding silently win regardless of
+	// which command actually ran.
+	RootCmd.PersistentFlags().Int(
+		"knoxiq-timeout", 30, "KnoxIQ triage timeout in minutes, shared by cicheck and sarif (default: 30)")
+	viper.BindPFlag("knoxiq-timeout", RootCmd.PersistentFlags().Lookup("knoxiq-timeout"))
+	viper.BindEnv("knoxiq-timeout", "APPKNOX_KNOXIQ_TIMEOUT")
+	viper.SetDefault("knoxiq-timeout", 30)
+
 	RootCmd.InitDefaultVersionFlag()
+}
+
+// knoxIQTimeoutMinutes reads and validates the shared --knoxiq-timeout
+// setting (1-240 minutes), used by both cicheck and sarif.
+func knoxIQTimeoutMinutes() (int, error) {
+	minutes := viper.GetInt("knoxiq-timeout")
+	if minutes < 1 || minutes > 240 {
+		return 0, errors.New("knoxiq-timeout must be between 1 and 240 minutes")
+	}
+	return minutes, nil
 }
 
 // initConfig reads in config file and ENV variables if set.

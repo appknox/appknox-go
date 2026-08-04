@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/appknox/appknox-go/appknox/enums"
 )
 
 // MockClient is a mock implementation of the Client interface for testing.
@@ -168,5 +171,54 @@ func TestFunctionGenerateSARIFGivenFileID(t *testing.T) {
 	// Example: Check the first rule ID
 	if sarif.Runs[0].Tool.Driver.Rules[0].ID != "APX001" {
 		t.Errorf("Expected rule ID 'APX001', got '%s'", sarif.Runs[0].Tool.Driver.Rules[0].ID)
+	}
+}
+
+// TestBuildSARIF exercises the real (non-mock) SARIF builder against a live
+// httptest client: CWE tags render as SARIF rule tags, and a result only
+// carries a Properties block (aeisScore/exploitLikelihood) when the caller
+// supplied one — i.e. when the analysis has KnoxIQ triage.
+func TestBuildSARIF(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/v2/vulnerabilities/101", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"id":101,"name":"Example Vulnerability","intro":"intro text","description":"desc","cvss_base":7.5}`)
+	})
+
+	analyses := []*Analysis{
+		{ID: 1, ComputedRisk: enums.Risk.High, VulnerabilityID: 101, CvssBase: 7.5, Cwe: []string{"CWE_79"}},
+		{ID: 2, ComputedRisk: enums.Risk.Low, VulnerabilityID: 101, CvssBase: 3.3},
+	}
+	score := 8.2
+	properties := map[int]*ResultProperties{
+		1: {AEISScore: &score, ExploitLikelihood: "High"},
+	}
+
+	sarif, err := BuildSARIF(context.Background(), client, analyses, properties)
+	if err != nil {
+		t.Fatalf("BuildSARIF returned unexpected error: %v", err)
+	}
+	results := sarif.Runs[0].Results
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	if results[0].Properties == nil || results[0].Properties.ExploitLikelihood != "High" {
+		t.Errorf("expected result 1 to carry KnoxIQ properties, got %+v", results[0].Properties)
+	}
+	if results[1].Properties != nil {
+		t.Errorf("expected result 2 to have no KnoxIQ properties, got %+v", results[1].Properties)
+	}
+
+	tags := sarif.Runs[0].Tool.Driver.Rules[0].Properties.Tags
+	foundCWE := false
+	for _, tag := range tags {
+		if tag == "CWE-79" {
+			foundCWE = true
+		}
+	}
+	if !foundCWE {
+		t.Errorf("expected CWE-79 tag on rule, got %v", tags)
 	}
 }
