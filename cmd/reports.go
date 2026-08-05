@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -153,7 +154,7 @@ Files are saved to {output}/{file_id}/. Default output directory is ./reports/`,
 		fileID, err := strconv.Atoi(args[0])
 		if err != nil {
 			helper.PrintError(errors.New("valid file id is required"))
-			return
+			os.Exit(1)
 		}
 		outputDir, _ := cmd.Flags().GetString("output")
 		if outputDir == "" {
@@ -162,6 +163,7 @@ Files are saved to {output}/{file_id}/. Default output directory is ./reports/`,
 		knoxiqTimeout := time.Duration(viper.GetInt("knoxiq-timeout")) * time.Minute
 		if err := helper.ProcessKnoxIQReport(fileID, outputDir, knoxiqTimeout); err != nil {
 			helper.PrintError(err)
+			os.Exit(1)
 		}
 	},
 }
