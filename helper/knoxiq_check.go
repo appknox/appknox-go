@@ -77,20 +77,24 @@ func processKnoxIQCiCheck(ctx context.Context, client *appknox.Client, fileID in
 }
 
 // warnLikelihoodUnavailable explains that the likelihood gate could not be
-// evaluated because KnoxIQ triage is unavailable. If no risk threshold was
-// explicitly requested, it also restores the default risk gate (Low) —
-// otherwise a likelihood-only cicheck against a file with no KnoxIQ triage
-// would end up with zero active gates and pass having checked nothing.
+// evaluated because KnoxIQ triage is unavailable, and marks it inactive
+// (RiskThreshold is never re-evaluated after this call, so leaving it "on"
+// would make the active-gates line lie about what was actually checked). If
+// no risk threshold was explicitly requested, it also restores the default
+// risk gate (Low) — otherwise a likelihood-only cicheck against a file with
+// no KnoxIQ triage would end up with zero active gates and pass having
+// checked nothing.
 func warnLikelihoodUnavailable(policy *CiPolicy) {
 	if policy.LikelihoodThreshold < 0 {
 		return
 	}
 	if policy.RiskThreshold >= 0 {
 		PrintError("exploit-likelihood gate skipped — KnoxIQ triage unavailable")
-		return
+	} else {
+		PrintError("exploit-likelihood gate unavailable (no KnoxIQ triage) — falling back to risk-threshold=low")
+		policy.RiskThreshold = int(enums.Risk.Low)
 	}
-	PrintError("exploit-likelihood gate unavailable (no KnoxIQ triage) — falling back to risk-threshold=low")
-	policy.RiskThreshold = int(enums.Risk.Low)
+	policy.LikelihoodThreshold = -1
 }
 
 // decideOnSASTFallback gates on SAST risk only, used when KnoxIQ triage is

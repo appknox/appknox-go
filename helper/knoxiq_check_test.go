@@ -136,12 +136,14 @@ func TestWarnLikelihoodUnavailable_RestoresRiskGate(t *testing.T) {
 	policy := CiPolicy{RiskThreshold: -1, LikelihoodThreshold: int(enums.Exploitability.High)}
 	warnLikelihoodUnavailable(&policy)
 	assert.Equal(t, int(enums.Risk.Low), policy.RiskThreshold)
+	assert.Equal(t, -1, policy.LikelihoodThreshold, "likelihood gate must be marked inactive — it is never evaluated after this call")
 }
 
 func TestWarnLikelihoodUnavailable_KeepsExplicitRiskGate(t *testing.T) {
 	policy := CiPolicy{RiskThreshold: int(enums.Risk.High), LikelihoodThreshold: int(enums.Exploitability.High)}
 	warnLikelihoodUnavailable(&policy)
 	assert.Equal(t, int(enums.Risk.High), policy.RiskThreshold)
+	assert.Equal(t, -1, policy.LikelihoodThreshold, "likelihood gate must be marked inactive — it is never evaluated after this call")
 }
 
 func TestWarnLikelihoodUnavailable_NoOpWithoutLikelihoodGate(t *testing.T) {
