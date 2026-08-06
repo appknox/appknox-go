@@ -82,7 +82,7 @@ func initConfig() {
 	} else {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			fmt.Printf(err.Error())
+			fmt.Print(err.Error())
 			os.Exit(1)
 		}
 		path := "/.config/appknox.json"

@@ -112,10 +112,10 @@ func ProcessCiCheck(fileID, riskThreshold int, staticScanTimeout time.Duration) 
 		errmsg := fmt.Sprintf("Found %d vulnerabilities with risk >= %s\n", vulLen, enums.RiskType(riskThreshold))
 		PrintError(errmsg)
 		t.Print()
-		fmt.Printf(msg)
+		fmt.Print(msg)
 		os.Exit(1)
 	} else {
 		fmt.Println("\nNo vulnerabilities found with risk threshold >= ", enums.RiskType(riskThreshold))
-		fmt.Printf(msg)
+		fmt.Print(msg)
 	}
 }
