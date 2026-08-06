@@ -89,6 +89,10 @@ func deps(path string, res fixservice.Result, in FindingInputs) autofixDeps {
 		locate: func(context.Context, agent.Config, agent.Request) (string, error) { return path, nil },
 		fetch:  func(context.Context, int, int) (FindingInputs, error) { return in, nil },
 		submit: func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) { return res, nil },
+		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
+			// client-side agent fix: returns patched content, reads no /v1/fix
+			return agent.FixResult{Changed: true, PatchedContent: "agent-fixed\n", Diff: "-old\n+new"}, nil
+		},
 		deliver: func(context.Context, AutofixOptions, string, string, FindingInputs) (string, error) {
 			return "https://github.com/appknox/mfva/compare/master...appknox-autofix/analysis-1?expand=1", nil
 		},
@@ -176,6 +180,20 @@ func TestRunAutofix_PushBranch(t *testing.T) {
 	require.Contains(t, out.BranchURL, "compare")
 	got, _ := os.ReadFile(filepath.Join(root, rel))
 	require.Equal(t, "orig\n", string(got)) // local file untouched — delivered as a branch
+}
+
+func TestRunAutofix_AgentFixMode(t *testing.T) {
+	root, rel := repoWithFile(t, "orig\n")
+	d := deps(rel, fixservice.Result{}, FindingInputs{Finding: "f", Remediation: "r"})
+	d.submit = func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
+		return fixservice.Result{}, errors.New("server /v1/fix must NOT be called in agent mode")
+	}
+	out, err := runAutofix(context.Background(),
+		AutofixOptions{RepoPath: root, FileID: 1, AnalysisID: 1, FixToken: "tok", FixMode: "agent"}, d)
+	require.NoError(t, err)
+	require.True(t, out.Applied)
+	got, _ := os.ReadFile(filepath.Join(root, rel))
+	require.Equal(t, "agent-fixed\n", string(got)) // agent's patch applied, no server upload
 }
 
 func TestRunAutofix_EmptyPatchNotApplied(t *testing.T) {
