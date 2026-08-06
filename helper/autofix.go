@@ -23,9 +23,10 @@ type AutofixOptions struct {
 	Finding     string // manual finding detail (when not using file/analysis id)
 	ClassHint   string // manual class/symbol hint
 	FixURL      string // Appknox fix-service/gateway base URL
-	FixToken    string // scoped fix-service token
-	GithubToken string // GitHub token for the --repo fetch
-	DryRun      bool   // locate + fix but do not write the patch
+	FixToken     string // scoped fix-service token
+	GithubToken  string // GitHub token for the --repo fetch
+	DryRun       bool   // locate + fix but do not write the patch
+	ListAnalyses bool   // print the file's analyses + class hints, then exit
 }
 
 // autofixDeps are the injectable collaborators (seams for cost-free tests).
@@ -53,6 +54,13 @@ type Outcome struct {
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
 func ProcessAutofix(opts AutofixOptions) {
+	if opts.ListAnalyses {
+		if err := listAnalyses(opts.FileID); err != nil {
+			PrintError(err)
+			os.Exit(1)
+		}
+		return
+	}
 	out, err := runAutofix(context.Background(), opts, defaultDeps())
 	if err != nil {
 		PrintError(err)
@@ -166,14 +174,20 @@ func fetchAppknoxInputs(ctx context.Context, fileID, analysisID int) (FindingInp
 	return deriveFindingInputs(analysis, vuln), nil
 }
 
-// findAnalysis fetches the file's analyses and returns the one matching analysisID.
-func findAnalysis(ctx context.Context, client *appknox.Client, fileID, analysisID int) (*appknox.Analysis, error) {
+// allAnalyses fetches every analysis for a file (count, then the full list).
+func allAnalyses(ctx context.Context, client *appknox.Client, fileID int) ([]*appknox.Analysis, error) {
 	_, resp, err := client.Analyses.ListByFile(ctx, fileID, nil)
 	if err != nil {
 		return nil, err
 	}
 	opt := &appknox.AnalysisListOptions{ListOptions: appknox.ListOptions{Limit: resp.GetCount()}}
 	all, _, err := client.Analyses.ListByFile(ctx, fileID, opt)
+	return all, err
+}
+
+// findAnalysis returns the analysis matching analysisID for the file.
+func findAnalysis(ctx context.Context, client *appknox.Client, fileID, analysisID int) (*appknox.Analysis, error) {
+	all, err := allAnalyses(ctx, client, fileID)
 	if err != nil {
 		return nil, err
 	}
@@ -183,6 +197,28 @@ func findAnalysis(ctx context.Context, client *appknox.Client, fileID, analysisI
 		}
 	}
 	return nil, fmt.Errorf("analysis %d not found for file %d", analysisID, fileID)
+}
+
+// listAnalyses prints each analysis with its derived class hint ("*" marks the
+// locatable ones), so the user can pick a good autofix target.
+func listAnalyses(fileID int) error {
+	if fileID <= 0 {
+		return errors.New("--list-analyses needs --file-id")
+	}
+	all, err := allAnalyses(context.Background(), getClient(), fileID)
+	if err != nil {
+		return err
+	}
+	for _, a := range all {
+		hint := classHintFromFindings(findingsText(a))
+		marker := " "
+		if hint != "" {
+			marker = "*"
+		}
+		fmt.Printf("%s id=%-6d risk=%-8v vuln=%-4d hint=%q\n",
+			marker, a.ID, a.ComputedRisk, a.VulnerabilityID, hint)
+	}
+	return nil
 }
 
 // printOutcome renders the run result to stdout.

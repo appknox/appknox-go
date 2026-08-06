@@ -28,6 +28,7 @@ gateway (which holds the provider key). No provider key is needed here.`,
 		opts.FixToken, _ = f.GetString("fix-token")
 		opts.GithubToken, _ = f.GetString("github-token")
 		opts.DryRun, _ = f.GetBool("dry-run")
+		opts.ListAnalyses, _ = f.GetBool("list-analyses")
 		helper.ProcessAutofix(opts)
 	},
 }
@@ -46,4 +47,5 @@ func init() {
 	f.String("fix-token", "", "Scoped fix-service token (or env APPKNOX_AUTOFIX_FIX_TOKEN)")
 	f.String("github-token", "", "GitHub token for --repo fetch (or env GITHUB_TOKEN)")
 	f.Bool("dry-run", false, "Locate + generate the fix but do not write the patch")
+	f.Bool("list-analyses", false, "List the file's analyses + derived class hints, then exit (needs --file-id)")
 }

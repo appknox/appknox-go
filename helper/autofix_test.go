@@ -69,6 +69,10 @@ func TestResolveInputs_RequiresSomething(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestListAnalyses_RequiresFileID(t *testing.T) {
+	require.Error(t, listAnalyses(0)) // must error before hitting the API
+}
+
 // repoWithFile makes a checkout with one file and returns (root, relpath).
 func repoWithFile(t *testing.T, body string) (string, string) {
 	t.Helper()
