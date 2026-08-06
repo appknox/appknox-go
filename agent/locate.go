@@ -84,8 +84,14 @@ func sdkLocate(ctx context.Context, cfg Config, req Request) (string, error) {
 	return extractText(final), nil
 }
 
-// locateParams builds the Tool Runner params (model, prompts, iteration cap).
+// locateParams builds the Tool Runner params for the locate pass.
 func locateParams(cfg Config, req Request) anthropic.BetaToolRunnerParams {
+	return runnerParams(cfg, locateSystemPrompt, locateUserPrompt(req))
+}
+
+// runnerParams builds Tool Runner params with cfg's model/token/iteration
+// defaults and the given system + user prompts. Shared by locate and fix.
+func runnerParams(cfg Config, system, user string) anthropic.BetaToolRunnerParams {
 	model := cfg.Model
 	if model == "" {
 		model = string(anthropic.ModelClaudeSonnet5)
@@ -102,10 +108,8 @@ func locateParams(cfg Config, req Request) anthropic.BetaToolRunnerParams {
 		BetaMessageNewParams: anthropic.BetaMessageNewParams{
 			Model:     anthropic.Model(model),
 			MaxTokens: maxTokens,
-			System:    []anthropic.BetaTextBlockParam{{Text: locateSystemPrompt}},
-			Messages: []anthropic.BetaMessageParam{
-				anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(locateUserPrompt(req))),
-			},
+			System:    []anthropic.BetaTextBlockParam{{Text: system}},
+			Messages:  []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(user))},
 		},
 		MaxIterations: maxIter,
 	}

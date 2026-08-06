@@ -28,23 +28,26 @@ type AutofixOptions struct {
 	GithubToken  string // GitHub token for the --repo fetch
 	DryRun       bool   // locate + fix but do not write the patch
 	PushBranch   bool   // push the fix to a new GitHub branch instead of local apply
+	FixMode      string // "server" (default, /v1/fix) or "agent" (client-side Edit, no upload)
 	ListAnalyses bool   // print the file's analyses + class hints, then exit
 }
 
 // autofixDeps are the injectable collaborators (seams for cost-free tests).
 type autofixDeps struct {
-	locate  func(ctx context.Context, cfg agent.Config, req agent.Request) (string, error)
-	fetch   func(ctx context.Context, fileID, analysisID int) (FindingInputs, error)
-	submit  func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
-	deliver func(ctx context.Context, opts AutofixOptions, path, content string, inputs FindingInputs) (string, error)
+	locate   func(ctx context.Context, cfg agent.Config, req agent.Request) (string, error)
+	fetch    func(ctx context.Context, fileID, analysisID int) (FindingInputs, error)
+	submit   func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
+	agentFix func(ctx context.Context, cfg agent.Config, req agent.FixRequest) (agent.FixResult, error)
+	deliver  func(ctx context.Context, opts AutofixOptions, path, content string, inputs FindingInputs) (string, error)
 }
 
 func defaultDeps() autofixDeps {
 	return autofixDeps{
-		locate:  agent.LocateFile,
-		fetch:   fetchAppknoxInputs,
-		submit:  fixservice.SubmitAndAwait,
-		deliver: deliverBranch,
+		locate:   agent.LocateFile,
+		fetch:    fetchAppknoxInputs,
+		submit:   fixservice.SubmitAndAwait,
+		agentFix: agent.FixFile,
+		deliver:  deliverBranch,
 	}
 }
 
@@ -121,17 +124,10 @@ type fixJob struct {
 	fixCfg fixservice.Config
 }
 
-// generate reads the located file, calls /v1/fix, and delivers the patch.
+// generate produces the patch (agent or server) and delivers it.
 func (j fixJob) generate(ctx context.Context) (Outcome, error) {
 	out := Outcome{Located: true, LocatedPath: j.path}
-	content, err := readUnderRoot(j.root, j.path)
-	if err != nil {
-		return out, err
-	}
-	res, err := j.d.submit(ctx, j.fixCfg, fixservice.Request{
-		Filename: j.path, FileContent: content, Remediation: j.inputs.Remediation,
-		Finding: j.inputs.Finding, Language: detectLanguage(j.path),
-	})
+	res, err := j.produceFix(ctx)
 	if err != nil {
 		return out, err
 	}
@@ -140,6 +136,28 @@ func (j fixJob) generate(ctx context.Context) (Outcome, error) {
 		return out, nil // no change / empty / dry-run → nothing to deliver
 	}
 	return j.deliverOrApply(ctx, out, res.PatchedContent)
+}
+
+// produceFix generates the patch client-side via the agent's Edit tool
+// (--fix-mode agent — NO file uploaded), or server-side via /v1/fix (default).
+func (j fixJob) produceFix(ctx context.Context) (fixservice.Result, error) {
+	if j.opts.FixMode == "agent" {
+		fr, err := j.d.agentFix(ctx, agent.Config{FixURL: j.fixCfg.URL, Token: j.fixCfg.Token},
+			agent.FixRequest{RepoRoot: j.root, Path: j.path,
+				Finding: j.inputs.Finding, Remediation: j.inputs.Remediation})
+		if err != nil {
+			return fixservice.Result{}, err
+		}
+		return fixservice.Result{Changed: fr.Changed, PatchedContent: fr.PatchedContent, UnifiedDiff: fr.Diff}, nil
+	}
+	content, err := readUnderRoot(j.root, j.path)
+	if err != nil {
+		return fixservice.Result{}, err
+	}
+	return j.d.submit(ctx, j.fixCfg, fixservice.Request{
+		Filename: j.path, FileContent: content, Remediation: j.inputs.Remediation,
+		Finding: j.inputs.Finding, Language: detectLanguage(j.path),
+	})
 }
 
 // deliverOrApply pushes a branch (--push-branch) or writes the patch locally.
@@ -268,7 +286,10 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 		fmt.Println("Fix service returned no change (advisory only).")
 		return
 	}
-	fmt.Printf("\nconfidence: %.2f\n\n%s\n", out.Result.Confidence, out.Result.UnifiedDiff)
+	if out.Result.Confidence > 0 {
+		fmt.Printf("\nconfidence: %.2f\n", out.Result.Confidence)
+	}
+	fmt.Printf("\n%s\n", out.Result.UnifiedDiff)
 	if opts.DryRun {
 		fmt.Println("[dry-run] not writing the patched file.")
 		return

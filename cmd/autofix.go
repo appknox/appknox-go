@@ -29,6 +29,7 @@ gateway (which holds the provider key). No provider key is needed here.`,
 		opts.GithubToken, _ = f.GetString("github-token")
 		opts.DryRun, _ = f.GetBool("dry-run")
 		opts.PushBranch, _ = f.GetBool("push-branch")
+		opts.FixMode, _ = f.GetString("fix-mode")
 		opts.ListAnalyses, _ = f.GetBool("list-analyses")
 		helper.ProcessAutofix(opts)
 	},
@@ -49,5 +50,6 @@ func init() {
 	f.String("github-token", "", "GitHub token for --repo fetch (or env GITHUB_TOKEN)")
 	f.Bool("dry-run", false, "Locate + generate the fix but do not write the patch")
 	f.Bool("push-branch", false, "Push the fix to a new GitHub branch (needs --repo + GITHUB_TOKEN) instead of local apply")
+	f.String("fix-mode", "server", "How to generate the fix: 'server' (/v1/fix, uploads the file) or 'agent' (client-side Edit, no upload)")
 	f.Bool("list-analyses", false, "List the file's analyses + derived class hints, then exit (needs --file-id)")
 }
