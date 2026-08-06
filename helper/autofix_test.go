@@ -17,7 +17,8 @@ func TestSplitRepo(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "appknox", o)
 	require.Equal(t, "mfva", n)
-	for _, bad := range []string{"", "noslash", "/name", "owner/"} {
+	// rejects empty parts AND injection chars (/, ?, space) in either component
+	for _, bad := range []string{"", "noslash", "/name", "owner/", "o/r/x", "o/r?x=1", "o/r evil", "o/r\n"} {
 		_, _, err := splitRepo(bad)
 		require.Error(t, err, "expected error for %q", bad)
 	}
@@ -88,6 +89,9 @@ func deps(path string, res fixservice.Result, in FindingInputs) autofixDeps {
 		locate: func(context.Context, agent.Config, agent.Request) (string, error) { return path, nil },
 		fetch:  func(context.Context, int, int) (FindingInputs, error) { return in, nil },
 		submit: func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) { return res, nil },
+		deliver: func(context.Context, AutofixOptions, string, string, FindingInputs) (string, error) {
+			return "https://github.com/appknox/mfva/compare/master...appknox-autofix/analysis-1?expand=1", nil
+		},
 	}
 }
 
@@ -158,6 +162,20 @@ func TestRunAutofix_NoChange_LeavesFile(t *testing.T) {
 	require.NotNil(t, out.Result)
 	got, _ := os.ReadFile(filepath.Join(root, rel))
 	require.Equal(t, "orig\n", string(got))
+}
+
+func TestRunAutofix_PushBranch(t *testing.T) {
+	root, rel := repoWithFile(t, "orig\n")
+	res := fixservice.Result{Changed: true, PatchedContent: "patched\n"}
+	out, err := runAutofix(context.Background(),
+		AutofixOptions{RepoPath: root, FileID: 1, AnalysisID: 1, FixToken: "tok",
+			Repo: "appknox/mfva", PushBranch: true},
+		deps(rel, res, FindingInputs{Finding: "f", Remediation: "r"}))
+	require.NoError(t, err)
+	require.False(t, out.Applied)          // did NOT write locally
+	require.Contains(t, out.BranchURL, "compare")
+	got, _ := os.ReadFile(filepath.Join(root, rel))
+	require.Equal(t, "orig\n", string(got)) // local file untouched — delivered as a branch
 }
 
 func TestRunAutofix_EmptyPatchNotApplied(t *testing.T) {

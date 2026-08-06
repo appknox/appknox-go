@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/appknox/appknox-go/agent"
@@ -26,21 +27,24 @@ type AutofixOptions struct {
 	FixToken     string // scoped fix-service token
 	GithubToken  string // GitHub token for the --repo fetch
 	DryRun       bool   // locate + fix but do not write the patch
+	PushBranch   bool   // push the fix to a new GitHub branch instead of local apply
 	ListAnalyses bool   // print the file's analyses + class hints, then exit
 }
 
 // autofixDeps are the injectable collaborators (seams for cost-free tests).
 type autofixDeps struct {
-	locate func(ctx context.Context, cfg agent.Config, req agent.Request) (string, error)
-	fetch  func(ctx context.Context, fileID, analysisID int) (FindingInputs, error)
-	submit func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
+	locate  func(ctx context.Context, cfg agent.Config, req agent.Request) (string, error)
+	fetch   func(ctx context.Context, fileID, analysisID int) (FindingInputs, error)
+	submit  func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
+	deliver func(ctx context.Context, opts AutofixOptions, path, content string, inputs FindingInputs) (string, error)
 }
 
 func defaultDeps() autofixDeps {
 	return autofixDeps{
-		locate: agent.LocateFile,
-		fetch:  fetchAppknoxInputs,
-		submit: fixservice.SubmitAndAwait,
+		locate:  agent.LocateFile,
+		fetch:   fetchAppknoxInputs,
+		submit:  fixservice.SubmitAndAwait,
+		deliver: deliverBranch,
 	}
 }
 
@@ -50,6 +54,7 @@ type Outcome struct {
 	LocatedPath string
 	Result      *fixservice.Result // nil in locate-only mode or advisory
 	Applied     bool
+	BranchURL   string // set when --push-branch delivered a branch (compare URL)
 }
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
@@ -100,29 +105,57 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	if path == "" {
 		return Outcome{}, nil // abstain → advisory only
 	}
-	out := Outcome{Located: true, LocatedPath: path}
 	if inputs.Remediation == "" {
-		return out, nil // locate-only (no analysis → no remediation → cannot fix)
+		return Outcome{Located: true, LocatedPath: path}, nil // locate-only (no remediation)
 	}
-	content, err := readUnderRoot(root, path)
+	return fixJob{d: d, opts: opts, root: root, path: path, inputs: inputs, fixCfg: fixCfg}.generate(ctx)
+}
+
+// fixJob carries the resolved context for the fix-generate-and-deliver tail.
+type fixJob struct {
+	d      autofixDeps
+	opts   AutofixOptions
+	root   string
+	path   string
+	inputs FindingInputs
+	fixCfg fixservice.Config
+}
+
+// generate reads the located file, calls /v1/fix, and delivers the patch.
+func (j fixJob) generate(ctx context.Context) (Outcome, error) {
+	out := Outcome{Located: true, LocatedPath: j.path}
+	content, err := readUnderRoot(j.root, j.path)
 	if err != nil {
 		return out, err
 	}
-	res, err := d.submit(ctx, fixCfg, fixservice.Request{
-		Filename: path, FileContent: content, Remediation: inputs.Remediation,
-		Finding: inputs.Finding, Language: detectLanguage(path),
+	res, err := j.d.submit(ctx, j.fixCfg, fixservice.Request{
+		Filename: j.path, FileContent: content, Remediation: j.inputs.Remediation,
+		Finding: j.inputs.Finding, Language: detectLanguage(j.path),
 	})
 	if err != nil {
 		return out, err
 	}
 	out.Result = &res
-	// Never overwrite the source with empty content, even if changed=true.
-	if res.Changed && res.PatchedContent != "" && !opts.DryRun {
-		if err := applyPatch(root, path, res.PatchedContent); err != nil {
+	if !res.Changed || res.PatchedContent == "" || j.opts.DryRun {
+		return out, nil // no change / empty / dry-run → nothing to deliver
+	}
+	return j.deliverOrApply(ctx, out, res.PatchedContent)
+}
+
+// deliverOrApply pushes a branch (--push-branch) or writes the patch locally.
+func (j fixJob) deliverOrApply(ctx context.Context, out Outcome, content string) (Outcome, error) {
+	if j.opts.PushBranch {
+		url, err := j.d.deliver(ctx, j.opts, j.path, content, j.inputs)
+		if err != nil {
 			return out, err
 		}
-		out.Applied = true
+		out.BranchURL = url
+		return out, nil
 	}
+	if err := applyPatch(j.root, j.path, content); err != nil {
+		return out, err
+	}
+	out.Applied = true
 	return out, nil
 }
 
@@ -240,16 +273,24 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 		fmt.Println("[dry-run] not writing the patched file.")
 		return
 	}
+	if out.BranchURL != "" {
+		fmt.Println("Pushed fix branch — open a PR:", out.BranchURL)
+		return
+	}
 	if out.Applied {
 		fmt.Println("Applied fix to", out.LocatedPath)
 	}
 }
 
-// splitRepo parses an "owner/name" repo spec.
+// repoComponentRE is GitHub's owner/repo charset — rejects "/", "?", spaces, etc.
+// so a --repo value can never inject extra URL path/query segments (CWE-20).
+var repoComponentRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// splitRepo parses and validates an "owner/name" repo spec.
 func splitRepo(spec string) (string, string, error) {
 	parts := strings.SplitN(spec, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("invalid --repo %q, expected owner/name", spec)
+	if len(parts) != 2 || !repoComponentRE.MatchString(parts[0]) || !repoComponentRE.MatchString(parts[1]) {
+		return "", "", fmt.Errorf("invalid --repo %q, expected owner/name (letters, digits, . _ -)", spec)
 	}
 	return parts[0], parts[1], nil
 }
