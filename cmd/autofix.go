@@ -50,6 +50,6 @@ func init() {
 	f.String("github-token", "", "GitHub token for --repo fetch (or env GITHUB_TOKEN)")
 	f.Bool("dry-run", false, "Locate + generate the fix but do not write the patch")
 	f.Bool("push-branch", false, "Push the fix to a new GitHub branch (needs --repo + GITHUB_TOKEN) instead of local apply")
-	f.String("fix-mode", "server", "How to generate the fix: 'server' (/v1/fix, uploads the file) or 'agent' (client-side Edit, no upload)")
+	f.String("fix-mode", "agent", "How to generate the fix: 'agent' (default — LLM Edit tool via the agent SDK, no file upload) or 'server' (/v1/fix single-shot, uploads the file)")
 	f.Bool("list-analyses", false, "List the file's analyses + derived class hints, then exit (needs --file-id)")
 }
