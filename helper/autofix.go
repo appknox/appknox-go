@@ -38,7 +38,7 @@ type autofixDeps struct {
 	fetch    func(ctx context.Context, fileID, analysisID int) (FindingInputs, error)
 	submit   func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
 	agentFix func(ctx context.Context, cfg agent.Config, req agent.FixRequest) (agent.FixResult, error)
-	deliver  func(ctx context.Context, opts AutofixOptions, path, content string, inputs FindingInputs) (string, error)
+	deliver  func(ctx context.Context, opts AutofixOptions, patches []filePatch, inputs FindingInputs) (string, error)
 }
 
 func defaultDeps() autofixDeps {
@@ -51,13 +51,20 @@ func defaultDeps() autofixDeps {
 	}
 }
 
-// Outcome is the source-free result of a run, for printing/testing.
+// filePatch is one located file's generated fix.
+type filePatch struct {
+	Path       string
+	Content    string
+	Diff       string
+	Confidence float64
+	Applied    bool
+}
+
+// Outcome is the source-free result of a run — one or more fixed files.
 type Outcome struct {
-	Located     bool
-	LocatedPath string
-	Result      *fixservice.Result // nil in locate-only mode or advisory
-	Applied     bool
-	BranchURL   string // set when --push-branch delivered a branch (compare URL)
+	Located   []string    // every located path
+	Patches   []filePatch // per-file fixes that changed something
+	BranchURL string      // set when --push-branch delivered a branch (compare URL)
 }
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
@@ -77,7 +84,7 @@ func ProcessAutofix(opts AutofixOptions) {
 	printOutcome(opts, out)
 }
 
-// runAutofix: resolve inputs → fetch/locate → read → /v1/fix → apply (or dry-run).
+// runAutofix: resolve inputs → locate each class → fix each file → deliver.
 func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcome, error) {
 	token := firstNonEmpty(opts.FixToken, os.Getenv("APPKNOX_AUTOFIX_FIX_TOKEN"))
 	if token == "" {
@@ -100,80 +107,101 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	if err := fixservice.ValidateEndpoint(fixCfg.URL); err != nil {
 		return Outcome{}, err
 	}
-	path, err := d.locate(ctx, agent.Config{FixURL: fixCfg.URL, Token: token},
-		agent.Request{RepoRoot: root, ClassHint: inputs.ClassHint, Finding: inputs.Finding})
+	return fixSession{opts: opts, d: d, root: root, fixCfg: fixCfg, inputs: inputs}.run(ctx)
+}
+
+// fixSession carries the resolved context for locating + fixing one finding's
+// (possibly multiple) classes.
+type fixSession struct {
+	opts   AutofixOptions
+	d      autofixDeps
+	root   string
+	fixCfg fixservice.Config
+	inputs FindingInputs
+}
+
+// run locates each first-party class, fixes each located file, then delivers.
+func (s fixSession) run(ctx context.Context) (Outcome, error) {
+	paths, err := s.locateAll(ctx)
 	if err != nil {
 		return Outcome{}, err
 	}
-	if path == "" {
-		return Outcome{}, nil // abstain → advisory only
+	out := Outcome{Located: paths}
+	if len(paths) == 0 || s.inputs.Remediation == "" {
+		return out, nil // advisory: nothing located, or locate-only (no remediation)
 	}
-	if inputs.Remediation == "" {
-		return Outcome{Located: true, LocatedPath: path}, nil // locate-only (no remediation)
+	for _, p := range paths {
+		res, err := s.produceFix(ctx, p)
+		if err != nil {
+			return out, err
+		}
+		if res.Changed && res.PatchedContent != "" {
+			out.Patches = append(out.Patches, filePatch{
+				Path: p, Content: res.PatchedContent, Diff: res.UnifiedDiff, Confidence: res.Confidence})
+		}
 	}
-	return fixJob{d: d, opts: opts, root: root, path: path, inputs: inputs, fixCfg: fixCfg}.generate(ctx)
+	if len(out.Patches) == 0 || s.opts.DryRun {
+		return out, nil
+	}
+	return s.deliver(ctx, out)
 }
 
-// fixJob carries the resolved context for the fix-generate-and-deliver tail.
-type fixJob struct {
-	d      autofixDeps
-	opts   AutofixOptions
-	root   string
-	path   string
-	inputs FindingInputs
-	fixCfg fixservice.Config
+// locateAll locates the file for each class hint, returning the distinct paths.
+func (s fixSession) locateAll(ctx context.Context) ([]string, error) {
+	seen := map[string]bool{}
+	var paths []string
+	for _, hint := range s.inputs.ClassHints {
+		p, err := s.d.locate(ctx, agent.Config{FixURL: s.fixCfg.URL, Token: s.fixCfg.Token},
+			agent.Request{RepoRoot: s.root, ClassHint: hint, Finding: s.inputs.Finding})
+		if err != nil {
+			return nil, err
+		}
+		if p != "" && !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
 }
 
-// generate produces the patch (agent or server) and delivers it.
-func (j fixJob) generate(ctx context.Context) (Outcome, error) {
-	out := Outcome{Located: true, LocatedPath: j.path}
-	res, err := j.produceFix(ctx)
-	if err != nil {
-		return out, err
-	}
-	out.Result = &res
-	if !res.Changed || res.PatchedContent == "" || j.opts.DryRun {
-		return out, nil // no change / empty / dry-run → nothing to deliver
-	}
-	return j.deliverOrApply(ctx, out, res.PatchedContent)
-}
-
-// produceFix generates the patch client-side via the agent's Edit tool
-// (--fix-mode agent — NO file uploaded), or server-side via /v1/fix (default).
-func (j fixJob) produceFix(ctx context.Context) (fixservice.Result, error) {
-	if j.opts.FixMode == "agent" {
-		fr, err := j.d.agentFix(ctx, agent.Config{FixURL: j.fixCfg.URL, Token: j.fixCfg.Token},
-			agent.FixRequest{RepoRoot: j.root, Path: j.path,
-				Finding: j.inputs.Finding, Remediation: j.inputs.Remediation})
+// produceFix generates the patch for one file, client-side via the agent's Edit
+// tool (--fix-mode agent — NO upload), or server-side via /v1/fix (default).
+func (s fixSession) produceFix(ctx context.Context, path string) (fixservice.Result, error) {
+	if s.opts.FixMode == "agent" {
+		fr, err := s.d.agentFix(ctx, agent.Config{FixURL: s.fixCfg.URL, Token: s.fixCfg.Token},
+			agent.FixRequest{RepoRoot: s.root, Path: path,
+				Finding: s.inputs.Finding, Remediation: s.inputs.Remediation})
 		if err != nil {
 			return fixservice.Result{}, err
 		}
 		return fixservice.Result{Changed: fr.Changed, PatchedContent: fr.PatchedContent, UnifiedDiff: fr.Diff}, nil
 	}
-	content, err := readUnderRoot(j.root, j.path)
+	content, err := readUnderRoot(s.root, path)
 	if err != nil {
 		return fixservice.Result{}, err
 	}
-	return j.d.submit(ctx, j.fixCfg, fixservice.Request{
-		Filename: j.path, FileContent: content, Remediation: j.inputs.Remediation,
-		Finding: j.inputs.Finding, Language: detectLanguage(j.path),
+	return s.d.submit(ctx, s.fixCfg, fixservice.Request{
+		Filename: path, FileContent: content, Remediation: s.inputs.Remediation,
+		Finding: s.inputs.Finding, Language: detectLanguage(path),
 	})
 }
 
-// deliverOrApply pushes a branch (--push-branch) or writes the patch locally.
-func (j fixJob) deliverOrApply(ctx context.Context, out Outcome, content string) (Outcome, error) {
-	if j.opts.PushBranch {
-		url, err := j.d.deliver(ctx, j.opts, j.path, content, j.inputs)
+// deliver pushes all patches to one branch (--push-branch) or applies them locally.
+func (s fixSession) deliver(ctx context.Context, out Outcome) (Outcome, error) {
+	if s.opts.PushBranch {
+		url, err := s.d.deliver(ctx, s.opts, out.Patches, s.inputs)
 		if err != nil {
 			return out, err
 		}
 		out.BranchURL = url
 		return out, nil
 	}
-	if err := applyPatch(j.root, j.path, content); err != nil {
-		return out, err
+	for i := range out.Patches {
+		if err := applyPatch(s.root, out.Patches[i].Path, out.Patches[i].Content); err != nil {
+			return out, err
+		}
+		out.Patches[i].Applied = true
 	}
-	out.Applied = true
 	return out, nil
 }
 
@@ -188,7 +216,7 @@ func resolveInputs(
 	if opts.Finding == "" {
 		return FindingInputs{}, errors.New("provide --file-id + --analysis-id, or --finding")
 	}
-	return FindingInputs{Finding: opts.Finding, ClassHint: opts.ClassHint}, nil
+	return FindingInputs{Finding: opts.Finding, ClassHints: []string{opts.ClassHint}}, nil
 }
 
 // resolveRepoRoot returns the repo root and a cleanup func: a local --repo-path,
@@ -250,8 +278,8 @@ func findAnalysis(ctx context.Context, client *appknox.Client, fileID, analysisI
 	return nil, fmt.Errorf("analysis %d not found for file %d", analysisID, fileID)
 }
 
-// listAnalyses prints each analysis with its derived class hint ("*" marks the
-// locatable ones), so the user can pick a good autofix target.
+// listAnalyses prints each analysis with its first-party classes so the user can
+// pick a good autofix target: "+" = single-class (locatable), "*" = multi-class.
 func listAnalyses(fileID int) error {
 	if fileID <= 0 {
 		return errors.New("--list-analyses needs --file-id")
@@ -261,46 +289,66 @@ func listAnalyses(fileID int) error {
 		return err
 	}
 	for _, a := range all {
-		hint := classHintFromFindings(findingsText(a))
-		marker := " "
-		if hint != "" {
-			marker = "*"
-		}
-		fmt.Printf("%s id=%-6d risk=%-8v vuln=%-4d hint=%q\n",
-			marker, a.ID, a.ComputedRisk, a.VulnerabilityID, hint)
+		hints := classHintsFromFindings(findingsText(a))
+		marker := analysisMarker(len(hints))
+		fmt.Printf("%s id=%-6d risk=%-8v vuln=%-4d classes=%v\n",
+			marker, a.ID, a.ComputedRisk, a.VulnerabilityID, hints)
 	}
 	return nil
 }
 
-// printOutcome renders the run result to stdout.
+// analysisMarker flags an analysis by its first-party class count.
+func analysisMarker(n int) string {
+	switch {
+	case n > 1:
+		return "*" // multi-class
+	case n == 1:
+		return "+" // single-class
+	default:
+		return " "
+	}
+}
+
+// printOutcome renders the run result (one or more files) to stdout.
 func printOutcome(opts AutofixOptions, out Outcome) {
-	if !out.Located {
+	if len(out.Located) == 0 {
 		fmt.Println("No source file located for this finding (advisory only).")
 		return
 	}
-	fmt.Println("Located file to fix:", out.LocatedPath)
-	if out.Result == nil {
-		return // locate-only mode
-	}
-	if !out.Result.Changed {
-		fmt.Println("Fix service returned no change (advisory only).")
+	fmt.Printf("Located %d file(s): %s\n", len(out.Located), strings.Join(out.Located, ", "))
+	if len(out.Patches) == 0 {
+		fmt.Println("No change produced (advisory only).")
 		return
 	}
-	if out.Result.Confidence > 0 {
-		fmt.Printf("\nconfidence: %.2f\n", out.Result.Confidence)
+	for _, p := range out.Patches {
+		fmt.Printf("\n=== %s ===\n", p.Path)
+		if p.Confidence > 0 {
+			fmt.Printf("confidence: %.2f\n", p.Confidence)
+		}
+		fmt.Println(p.Diff)
 	}
-	fmt.Printf("\n%s\n", out.Result.UnifiedDiff)
-	if opts.DryRun {
-		fmt.Println("[dry-run] not writing the patched file.")
-		return
+	printDelivery(opts, out)
+}
+
+// printDelivery renders the delivery outcome (dry-run / branch / applied).
+func printDelivery(opts AutofixOptions, out Outcome) {
+	switch {
+	case opts.DryRun:
+		fmt.Printf("\n[dry-run] not writing %d patched file(s).\n", len(out.Patches))
+	case out.BranchURL != "":
+		fmt.Printf("\nPushed %d file(s) to a branch — open a PR: %s\n", len(out.Patches), out.BranchURL)
+	default:
+		fmt.Printf("\nApplied fix to %d file(s): %s\n", len(out.Patches), patchPaths(out.Patches))
 	}
-	if out.BranchURL != "" {
-		fmt.Println("Pushed fix branch — open a PR:", out.BranchURL)
-		return
+}
+
+// patchPaths joins the patched file paths for display.
+func patchPaths(patches []filePatch) string {
+	names := make([]string, len(patches))
+	for i, p := range patches {
+		names[i] = p.Path
 	}
-	if out.Applied {
-		fmt.Println("Applied fix to", out.LocatedPath)
-	}
+	return strings.Join(names, ", ")
 }
 
 // repoComponentRE is GitHub's owner/repo charset — rejects "/", "?", spaces, etc.

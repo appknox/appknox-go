@@ -22,9 +22,9 @@ var (
 
 // FindingInputs are the source-free locate + fix inputs derived from an analysis.
 type FindingInputs struct {
-	Finding     string // short vulnerability summary
-	ClassHint   string // class/symbol hint for the locate agent
-	Remediation string // source-free remediation guidance (KnoxIQ)
+	Finding     string   // short vulnerability summary
+	ClassHints  []string // all first-party classes the finding references (locate targets)
+	Remediation string   // source-free remediation guidance (KnoxIQ)
 }
 
 // stripHTML removes tags for source-free remediation text.
@@ -37,17 +37,21 @@ func detectLanguage(filename string) string {
 	return langBySuffix[strings.ToLower(filepath.Ext(filename))]
 }
 
-// classHintFromFindings returns the first first-party class path referenced by a
-// finding descriptor, e.g. Lcom/appknox/mfva/MainActivity$6;-> -> com/appknox/mfva/MainActivity.
-func classHintFromFindings(text string) string {
+// classHintsFromFindings returns all DISTINCT first-party class paths referenced
+// by the finding descriptors, e.g. Lcom/appknox/mfva/MainActivity$6;-> ->
+// com/appknox/mfva/MainActivity. Multi-class findings yield more than one.
+func classHintsFromFindings(text string) []string {
+	seen := map[string]bool{}
+	var out []string
 	for _, m := range descriptorRE.FindAllStringSubmatch(text, -1) {
 		top := strings.SplitN(m[1], "$", 2)[0]
-		if top == "" || hasAnyPrefix(top, frameworkPrefixes) {
+		if top == "" || hasAnyPrefix(top, frameworkPrefixes) || seen[top] {
 			continue
 		}
-		return top
+		seen[top] = true
+		out = append(out, top)
 	}
-	return ""
+	return out
 }
 
 func hasAnyPrefix(s string, prefixes []string) bool {
@@ -64,7 +68,7 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 func deriveFindingInputs(a *appknox.Analysis, v *appknox.Vulnerability) FindingInputs {
 	return FindingInputs{
 		Finding:     v.Name,
-		ClassHint:   classHintFromFindings(findingsText(a)),
+		ClassHints:  classHintsFromFindings(findingsText(a)),
 		Remediation: remediationText(a, v),
 	}
 }
