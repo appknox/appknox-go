@@ -12,9 +12,9 @@ import (
 	"github.com/appknox/appknox-go/ghpr"
 )
 
-// deliverBranch pushes the patched file to a new branch on GitHub (no PR opened)
-// and returns a compare URL. Used when --push-branch is set.
-func deliverBranch(ctx context.Context, opts AutofixOptions, path, content string, inputs FindingInputs) (string, error) {
+// deliverBranch pushes all patched files to one new branch on GitHub (no PR
+// opened) and returns a compare URL. Used when --push-branch is set.
+func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch, inputs FindingInputs) (string, error) {
 	owner, name, err := splitRepo(opts.Repo)
 	if err != nil {
 		return "", errors.New("--push-branch needs --repo owner/name")
@@ -23,12 +23,13 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, path, content strin
 	if token == "" {
 		return "", errors.New("--push-branch needs a GitHub token (--github-token or GITHUB_TOKEN)")
 	}
-	return ghpr.PushBranch(ctx,
+	files := make([]ghpr.FileChange, len(patches))
+	for i, p := range patches {
+		files[i] = ghpr.FileChange{Path: p.Path, Content: p.Content, Message: commitMessage(inputs, p.Path)}
+	}
+	return ghpr.PushFiles(ctx,
 		ghpr.Config{Owner: owner, Repo: name, BaseRef: opts.Ref, Token: token},
-		ghpr.Change{
-			Branch: prBranch(opts.AnalysisID, path), Path: path,
-			Content: content, Message: commitMessage(inputs, path),
-		})
+		prBranch(opts.AnalysisID, patches[0].Path), files)
 }
 
 // prBranch is a stable branch name for the fix.

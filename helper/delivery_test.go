@@ -19,10 +19,11 @@ func TestCommitMessage(t *testing.T) {
 }
 
 func TestDeliverBranch_RequiresRepoAndToken(t *testing.T) {
-	_, err := deliverBranch(context.Background(), AutofixOptions{}, "p", "c", FindingInputs{})
+	patches := []filePatch{{Path: "app/A.java", Content: "c"}}
+	_, err := deliverBranch(context.Background(), AutofixOptions{}, patches, FindingInputs{})
 	require.Error(t, err) // no --repo
 
 	t.Setenv("GITHUB_TOKEN", "")
-	_, err = deliverBranch(context.Background(), AutofixOptions{Repo: "o/r"}, "p", "c", FindingInputs{})
+	_, err = deliverBranch(context.Background(), AutofixOptions{Repo: "o/r"}, patches, FindingInputs{})
 	require.Error(t, err) // repo but no token
 }

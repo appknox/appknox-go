@@ -49,37 +49,67 @@ type Change struct {
 	Message string
 }
 
-// PushBranch creates Branch off the base ref and commits the patched file to it,
-// returning a compare URL that pre-fills a PR. It does not open the PR itself.
+// FileChange is one patched file (path + content + commit message).
+type FileChange struct {
+	Path    string
+	Content string
+	Message string
+}
+
+// PushBranch pushes a single patched file to a new branch (thin wrapper).
 func PushBranch(ctx context.Context, cfg Config, ch Change) (string, error) {
+	return PushFiles(ctx, cfg, ch.Branch, []FileChange{{Path: ch.Path, Content: ch.Content, Message: ch.Message}})
+}
+
+// PushFiles creates branch off the base ref and commits each patched file to it
+// (one commit per file), returning a compare URL that pre-fills a PR. Idempotent:
+// an existing branch is reused. It does not open the PR itself.
+func PushFiles(ctx context.Context, cfg Config, branch string, files []FileChange) (string, error) {
 	if cfg.Owner == "" || cfg.Repo == "" || cfg.Token == "" {
 		return "", errors.New("ghpr: owner, repo, and token are required")
 	}
-	base := cfg.BaseRef
-	if base == "" {
-		var err error
-		if base, err = defaultBranch(ctx, cfg); err != nil {
-			return "", err
-		}
+	if len(files) == 0 {
+		return "", errors.New("ghpr: no files to push")
+	}
+	base, err := resolveBase(ctx, cfg)
+	if err != nil {
+		return "", err
 	}
 	baseSHA, err := branchSHA(ctx, cfg, base)
 	if err != nil {
 		return "", err
 	}
-	if err := createBranch(ctx, cfg, ch.Branch, baseSHA); err != nil {
+	if err := createBranch(ctx, cfg, branch, baseSHA); err != nil {
 		return "", err
 	}
-	// Query the file on the TARGET branch (not base): on an idempotent re-run the
-	// branch already exists and its file may already be patched, so ITS blob sha
-	// is what PUT /contents must supply to update it.
-	fileSHA, err := currentFileSHA(ctx, cfg, ch.Path, ch.Branch)
-	if err != nil {
+	if err := commitFiles(ctx, cfg, branch, files); err != nil {
 		return "", err
 	}
-	if err := putFile(ctx, cfg, ch, fileSHA); err != nil {
-		return "", err
+	return compareURL(cfg, base, branch), nil
+}
+
+// resolveBase returns the configured base ref or the repo's default branch.
+func resolveBase(ctx context.Context, cfg Config) (string, error) {
+	if cfg.BaseRef != "" {
+		return cfg.BaseRef, nil
 	}
-	return compareURL(cfg, base, ch.Branch), nil
+	return defaultBranch(ctx, cfg)
+}
+
+// commitFiles commits each file to the branch, one commit per file. On a re-run
+// the file's current blob sha on the branch is used so the update is accepted.
+func commitFiles(ctx context.Context, cfg Config, branch string, files []FileChange) error {
+	for _, f := range files {
+		fileSHA, err := currentFileSHA(ctx, cfg, f.Path, branch)
+		if err != nil {
+			return err
+		}
+		ch := Change{Branch: branch, Path: f.Path, Content: f.Content, Message: f.Message}
+		if err := putFile(ctx, cfg, ch, fileSHA); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func defaultBranch(ctx context.Context, cfg Config) (string, error) {

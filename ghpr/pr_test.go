@@ -138,6 +138,41 @@ func TestPushBranch_ResolvesDefaultBranch(t *testing.T) {
 	require.Contains(t, url, "/compare/main...") // resolved default branch
 }
 
+func TestPushFiles_MultipleFiles(t *testing.T) {
+	puts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/git/ref/heads/master"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "S"}})
+		case strings.HasSuffix(r.URL.Path, "/git/refs"):
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/contents/"):
+			w.WriteHeader(http.StatusNotFound) // new files
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/contents/"):
+			puts++
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	url, err := PushFiles(context.Background(),
+		Config{Owner: "o", Repo: "r", BaseRef: "master", Token: "ghtok", APIBase: srv.URL},
+		"appknox-autofix/analysis-42",
+		[]FileChange{
+			{Path: "app/A.java", Content: "a", Message: "fix A"},
+			{Path: "app/B.java", Content: "b", Message: "fix B"},
+		})
+	require.NoError(t, err)
+	require.Equal(t, 2, puts) // one commit per file
+	require.Contains(t, url, "/compare/master...appknox-autofix/analysis-42")
+}
+
+func TestPushFiles_NoFiles(t *testing.T) {
+	_, err := PushFiles(context.Background(), Config{Owner: "o", Repo: "r", Token: "t"}, "b", nil)
+	require.Error(t, err)
+}
+
 func TestWebBase(t *testing.T) {
 	require.Equal(t, "https://github.com", webBase(Config{}))
 	require.Equal(t, "https://ghe.corp", webBase(Config{APIBase: "https://ghe.corp/api/v3"}))
