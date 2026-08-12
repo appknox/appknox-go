@@ -20,6 +20,7 @@ type ProjectProfileReportPreference struct {
 	ShowGdpr   RegulatoryPreference `json:"show_gdpr,omitempty"`
 	ShowNist   RegulatoryPreference `json:"show_nist,omitempty"`
 	ShowSama   RegulatoryPreference `json:"show_sama,omitempty"`
+	ShowDora   RegulatoryPreference `json:"show_dora,omitempty"`
 }
 
 // CurrentAuthenticatedUser is used to get the details about the current
