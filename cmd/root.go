@@ -85,14 +85,53 @@ func knoxIQTimeoutMinutes() (int, error) {
 	return minutes, nil
 }
 
+// defaultConfigFile returns the absolute path to the default config file
+// (~/.config/appknox.json), resolved via os.UserHomeDir rather than viper's
+// own "$HOME/..." path handling: viper only expands that special-cased
+// prefix when it's followed by os.PathSeparator, so a literal "/" in the
+// path (as this codebase used to hardcode) silently fails on Windows, where
+// the separator is "\" and the HOME env var isn't reliably set either.
+// os.UserHomeDir is correct on every platform.
+func defaultConfigFile() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(homeDir, ".config", "appknox.json"), nil
+}
+
+// createDefaultConfigFile creates an empty config file at configFile
+// (making its parent directory if needed) and registers the path with
+// viper directly. WriteConfig only falls back to the (Windows-broken)
+// search-path lookup when no config file has been registered yet, so
+// without this last step, the first `config set`/`init` on a machine would
+// still fail even with the path resolution above fixed.
+func createDefaultConfigFile(configFile string) error {
+	if err := os.MkdirAll(filepath.Dir(configFile), 0o700); err != nil {
+		return err
+	}
+	f, err := os.Create(configFile)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	viper.SetConfigFile(configFile)
+	return nil
+}
+
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
 	if cfgFile != "" {
 		// Use config file from the flag.
 		viper.SetConfigFile(cfgFile)
 	} else {
+		configFile, err := defaultConfigFile()
+		if err != nil {
+			fmt.Println(err.Error())
+			os.Exit(1)
+		}
 		viper.SetConfigName("appknox")
-		viper.AddConfigPath("$HOME/.config")
+		viper.AddConfigPath(filepath.Dir(configFile))
 		viper.SetConfigType("json")
 	}
 
@@ -101,14 +140,16 @@ func initConfig() {
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil {
 		// log.Println("Using config file:", viper.ConfigFileUsed())
-	} else {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Printf(err.Error())
-			os.Exit(1)
-		}
-		path := "/.config/appknox.json"
-		file := filepath.Join(homeDir, path)
-		os.Create(file)
+		return
+	}
+
+	configFile, err := defaultConfigFile()
+	if err != nil {
+		fmt.Println(err.Error())
+		os.Exit(1)
+	}
+	if err := createDefaultConfigFile(configFile); err != nil {
+		fmt.Println(err.Error())
+		os.Exit(1)
 	}
 }
