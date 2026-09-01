@@ -50,6 +50,7 @@ func TestAnalysesCompliance_marshall(t *testing.T) {
 		Nistsp80053:     []string{"AC_3", "RA_2"},
 		Nistsp800171:    []string{"3_1_1", "3_1_3"},
 		Sama:            []string{"3_3_6"},
+		Eucra:           []string{"cra_i_2_d", "cra_i_2_e"},
 		Owaspmobile2024: []string{"M6_2024"},
 		VulnerabilityID: 1,
 	}
@@ -67,10 +68,39 @@ func TestAnalysesCompliance_marshall(t *testing.T) {
 		"nistsp80053": ["AC_3", "RA_2"],
 		"nistsp800171": ["3_1_1", "3_1_3"],
 		"sama": ["3_3_6"],
+		"eucra": ["cra_i_2_d", "cra_i_2_e"],
 		"owaspmobile2024": ["M6_2024"],
 		"vulnerability": 1
 	}`
 	testJSONMarshal(t, u, want)
+}
+
+func TestAnalysesService_ListByFile_Compliance(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/v2/files/1/analyses", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		fmt.Fprint(w, `{"count": 1, "results":[{
+			"id": 1,
+			"sama": ["3_3_6"],
+			"eucra": ["cra_i_2_d", "cra_i_2_e"]
+		}]}`)
+	})
+
+	analyses, _, err := client.Analyses.ListByFile(context.Background(), 1, nil)
+	if err != nil {
+		t.Errorf("Analyses.ListByFile returned error: %v", err)
+	}
+
+	want := []*Analysis{{
+		ID:    1,
+		Sama:  []string{"3_3_6"},
+		Eucra: []string{"cra_i_2_d", "cra_i_2_e"},
+	}}
+	if !reflect.DeepEqual(analyses, want) {
+		t.Errorf("Analyses.ListByFile returned %+v, want %+v", analyses, want)
+	}
 }
 
 func TestAnalysesService_ListByFile(t *testing.T) {

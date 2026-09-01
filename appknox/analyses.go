@@ -108,6 +108,7 @@ type Analysis struct {
 	Nistsp80053     []string                `json:"nistsp80053,omitempty"`
 	Nistsp800171    []string                `json:"nistsp800171,omitempty"`
 	Sama            []string                `json:"sama,omitempty"`
+	Eucra           []string                `json:"eucra,omitempty"`
 	Owaspmobile2024 []string                `json:"owaspmobile2024,omitempty"`
 	Findings        []Finding               `json:"findings,omitempty"`
 	UpdatedOn       *time.Time              `json:"updated_on,omitempty"`
