@@ -112,6 +112,18 @@ type ScanStatusSummary struct {
 	ManualStatus       int  `json:"manual_status,omitempty"`
 }
 
+// HealthScore represents the response returned by the API endpoint
+// /api/v3/files/{id}/health_score.
+type HealthScore struct {
+	HealthScore int `json:"health_score,omitempty"`
+}
+
+// HealthScoreOptions specifies the optional parameters to the
+// FilesService.GetHealthScore method.
+type HealthScoreOptions struct {
+	EventType string `url:"event_type,omitempty"`
+}
+
 // FileListOptions specifies the optional parameters to the
 // FilesService.List method.
 type FileListOptions struct {
@@ -165,4 +177,22 @@ func (s *FilesService) GetScansStatusSummary(ctx context.Context, fileID int) (*
 	var summary ScanStatusSummary
 	resp, err := s.client.Do(ctx, req, &summary)
 	return &summary, resp, err
+}
+
+// GetHealthScore fetches the security health score for the given file using
+// the v3 endpoint /api/v3/files/{id}/health_score.
+// If opt.EventType is provided, it is sent as a query parameter and stores an audit entry.
+func (s *FilesService) GetHealthScore(ctx context.Context, fileID int, opt *HealthScoreOptions) (*HealthScore, *Response, error) {
+	u := fmt.Sprintf("api/v3/files/%v/health_score", fileID)
+	URL, err := addOptions(u, opt)
+	if err != nil {
+		return nil, nil, err
+	}
+	req, err := s.client.NewRequest("GET", URL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var healthScore HealthScore
+	resp, err := s.client.Do(ctx, req, &healthScore)
+	return &healthScore, resp, err
 }

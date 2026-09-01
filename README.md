@@ -13,7 +13,7 @@ Usage:
 
 Available Commands:
   analyses                  List analyses for file
-  cicheck                   Check for vulnerabilities based on risk threshold.
+  cicheck                   Check for vulnerabilities based on risk or health score threshold.
   files                     List files for project
   help                      Help about any command
   init                      Used to initialize Appknox CLI
@@ -143,7 +143,7 @@ each time you run a command you have to pass the flag `access-token`.
 | `owasp <owasp_id>` | Get OWASP detail |
 | `upload <path_to_app_package>` | Upload app file from given path and get the file_id |
 | `sarif <file_id>` | Create SARIF report for the app file. |
-| `cicheck <file_id>` | Check for vulnerabilities based on risk threshold. |
+| `cicheck <file_id>` | Check for vulnerabilities based on risk threshold or health score threshold. |
 | `reports create <file_id>` | Create report for the app file |
 | `reports download summary-csv <report_id>` | Download Summary CSV report for the given report of the file |
 | `reports download summary-excel <report_id>` | Download Summary Excel report for the given report of the file |
@@ -200,6 +200,16 @@ ID      RISK    CVSS-VECTOR                                   CVSS-BASE  VULNERA
 671600  Low     CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N  3.3        96                Enabled Android Application Backup
 
 exit status 1
+
+- **Upload a file and do cicheck based on health score threshold**
+
+$ appknox upload ~/Downloads/mfva.apk | xargs appknox cicheck --health-score-threshold 80
+
+2.3 MiB / 2.3 MiB [==========================================================| 00:00 ] 226.28 KiB/s
+Static Scan Progress:  100 % [==========================================================| ]
+Health score 85 is greater than or equal to threshold 80. Build passed.
+
+Check file ID 12345 on appknox dashboard for more details.
 ```
 
 #### For windows platform
@@ -249,9 +259,39 @@ ID      RISK    CVSS-VECTOR                                   CVSS-BASE  VULNERA
 671600  Low     CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N  3.3        96                Enabled Android Application Backup
 
 exit status 1
+
+- **Upload a file and do cicheck based on health score threshold**
+
+$ .\appknox cicheck $(.\appknox upload .\Downloads\mfva.apk) --health-score-threshold 80
+
+2.3 MiB / 2.3 MiB [==========================================================| 00:00 ] 226.28 KiB/s
+Static Scan Progress:  100 % [==========================================================| ]
+Health score 85 is greater than or equal to threshold 80. Build passed.
+
+Check file ID 12345 on appknox dashboard for more details.
 ```
 
 ## CI/CD Workflows
+
+### CI Check Options
+
+The `cicheck` command supports two modes for validating scan results:
+
+**Risk Threshold Mode** (default):
+- Use `--risk-threshold` or `-r` flag
+- Options: `low`, `medium`, `high`, `critical`
+- Fails if vulnerabilities with risk >= threshold are found
+- Example: `appknox cicheck 12345 --risk-threshold high`
+
+**Health Score Mode**:
+- Use `--health-score-threshold` flag
+- Value: 0-100 (integer)
+- Passes if health score >= threshold
+- Example: `appknox cicheck 12345 --health-score-threshold 80`
+
+**Note:** You can only use one mode at a time (either `--risk-threshold` or `--health-score-threshold`, not both).
+
+Both modes support the `--timeout` flag to set the static scan timeout in minutes (default: 30).
 
 ### Download PDF Report
 

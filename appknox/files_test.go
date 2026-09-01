@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
+
+	"github.com/appknox/appknox-go/appknox/enums"
 )
 
 func TestFiles_marshall(t *testing.T) {
@@ -226,4 +228,73 @@ func TestFilesService_GetScansStatusSummary(t *testing.T) {
     if resp == nil || resp.StatusCode != http.StatusNotFound {
         t.Errorf("Expected response status 404, got %+v", resp)
     }
+}
+
+func TestFilesService_GetHealthScore(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/v3/files/37/health_score", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		fmt.Fprint(w, `{
+			"health_score": 85
+		}`)
+	})
+
+	healthScore, _, err := client.Files.GetHealthScore(context.Background(), 37, nil)
+	if err != nil {
+		t.Errorf("Files.GetHealthScore returned error: %v", err)
+	}
+
+	want := &HealthScore{HealthScore: 85}
+	if !reflect.DeepEqual(healthScore, want) {
+		t.Errorf("Files.GetHealthScore returned %+v, want %+v", healthScore, want)
+	}
+
+	// Test with event_type parameter
+	mux.HandleFunc("/api/v3/files/38/health_score", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		eventType := r.URL.Query().Get("event_type")
+		if eventType != "sast_completed" {
+			t.Errorf("Expected event_type=sast_completed, got %s", eventType)
+		}
+		fmt.Fprint(w, `{"health_score": 90}`)
+	})
+	options := &HealthScoreOptions{EventType: string(enums.EventTypeSASTCompleted)}
+	healthScore, _, err = client.Files.GetHealthScore(context.Background(), 38, options)
+	if err != nil {
+		t.Errorf("Files.GetHealthScore with event_type returned error: %v", err)
+	}
+	want = &HealthScore{HealthScore: 90}
+	if !reflect.DeepEqual(healthScore, want) {
+		t.Errorf("Files.GetHealthScore with event_type returned %+v, want %+v", healthScore, want)
+	}
+
+	// 403 Forbidden test
+	mux.HandleFunc("/api/v3/files/403/health_score", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"detail": "You do not have permission to perform this action."}`)
+	})
+	_, resp, err := client.Files.GetHealthScore(context.Background(), 403, nil)
+	if err == nil {
+		t.Errorf("Expected error for 403 Forbidden, got nil")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Errorf("Expected response status 403, got %+v", resp)
+	}
+
+	// 404 Not Found test
+	mux.HandleFunc("/api/v3/files/404/health_score", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"detail": "Not found."}`)
+	})
+	_, resp, err = client.Files.GetHealthScore(context.Background(), 404, nil)
+	if err == nil {
+		t.Errorf("Expected error for 404 Not Found, got nil")
+	}
+	if resp == nil || resp.StatusCode != http.StatusNotFound {
+		t.Errorf("Expected response status 404, got %+v", resp)
+	}
 }
