@@ -31,6 +31,8 @@ gateway (which holds the provider key). No provider key is needed here.`,
 		opts.PushBranch, _ = f.GetBool("push-branch")
 		opts.FixMode, _ = f.GetString("fix-mode")
 		opts.ListAnalyses, _ = f.GetBool("list-analyses")
+		opts.PRNumber, _ = f.GetInt("pr-number")
+		opts.Scope, _ = f.GetString("scope")
 		helper.ProcessAutofix(opts)
 	},
 }
@@ -52,4 +54,6 @@ func init() {
 	f.Bool("push-branch", false, "Push the fix to a new GitHub branch (needs --repo + GITHUB_TOKEN) instead of local apply")
 	f.String("fix-mode", "agent", "How to generate the fix: 'agent' (default — LLM Edit tool via the agent SDK, no file upload) or 'server' (/v1/fix single-shot, uploads the file)")
 	f.Bool("list-analyses", false, "List the file's analyses + derived class hints, then exit (needs --file-id)")
+	f.Int("pr-number", 0, "Originating pull request: names the fix branch and (by default) scopes the fix to its files")
+	f.String("scope", "", "Which files may be fixed: 'pr' (default when --pr-number is set) or 'repo' for the whole checkout")
 }

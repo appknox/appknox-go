@@ -16,20 +16,22 @@ import (
 
 // AutofixOptions carries the flags for the client-side autofix flow.
 type AutofixOptions struct {
-	Repo        string // GitHub owner/name to auto-fetch
-	Ref         string // git ref (branch/tag/sha); empty = default branch
-	RepoPath    string // already-checked-out repo (alternative to Repo)
-	FileID      int    // Appknox file id (with AnalysisID → finding + remediation)
-	AnalysisID  int    // Appknox analysis id
-	Finding     string // manual finding detail (when not using file/analysis id)
-	ClassHint   string // manual class/symbol hint
-	FixURL      string // Appknox fix-service/gateway base URL
+	Repo         string // GitHub owner/name to auto-fetch
+	Ref          string // git ref (branch/tag/sha); empty = default branch
+	RepoPath     string // already-checked-out repo (alternative to Repo)
+	FileID       int    // Appknox file id (with AnalysisID → finding + remediation)
+	AnalysisID   int    // Appknox analysis id
+	Finding      string // manual finding detail (when not using file/analysis id)
+	ClassHint    string // manual class/symbol hint
+	FixURL       string // Appknox fix-service/gateway base URL
 	FixToken     string // scoped fix-service token
 	GithubToken  string // GitHub token for the --repo fetch
 	DryRun       bool   // locate + fix but do not write the patch
 	PushBranch   bool   // push the fix to a new GitHub branch instead of local apply
 	FixMode      string // "server" (default, /v1/fix) or "agent" (client-side Edit, no upload)
 	ListAnalyses bool   // print the file's analyses + class hints, then exit
+	PRNumber     int    // originating pull request; scopes the fix and names the branch
+	Scope        string // "pr" (only files changed in PRNumber) or "repo"
 }
 
 // autofixDeps are the injectable collaborators (seams for cost-free tests).
@@ -39,6 +41,7 @@ type autofixDeps struct {
 	submit   func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
 	agentFix func(ctx context.Context, cfg agent.Config, req agent.FixRequest) (agent.FixResult, error)
 	deliver  func(ctx context.Context, opts AutofixOptions, patches []filePatch, inputs FindingInputs) (string, error)
+	prFiles  func(ctx context.Context, opts AutofixOptions) ([]string, error)
 }
 
 func defaultDeps() autofixDeps {
@@ -48,6 +51,7 @@ func defaultDeps() autofixDeps {
 		submit:   fixservice.SubmitAndAwait,
 		agentFix: agent.FixFile,
 		deliver:  deliverBranch,
+		prFiles:  fetchPRFiles,
 	}
 }
 
@@ -69,6 +73,10 @@ type Outcome struct {
 	// Verification is KnoxIQ's criteria evaluated against the produced patch.
 	// Delivery is gated on it; see VerificationGate.
 	Verification VerificationReport
+
+	// OutOfScope lists located files the fix deliberately did NOT touch because
+	// they fall outside the pull request being scanned (--scope pr).
+	OutOfScope []string
 }
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
@@ -130,7 +138,11 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
-	out := Outcome{Located: paths}
+	paths, advisory, err := s.applyScope(ctx, paths)
+	if err != nil {
+		return Outcome{}, err
+	}
+	out := Outcome{Located: paths, OutOfScope: advisory}
 	if len(paths) == 0 || s.inputs.Remediation == "" {
 		return out, nil // advisory: nothing located, or locate-only (no remediation)
 	}
@@ -357,8 +369,20 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 		}
 		fmt.Println(p.Diff)
 	}
+	printOutOfScope(out)
 	printVerification(out.Verification)
 	printDelivery(opts, out)
+}
+
+// printOutOfScope names files that were located but deliberately left alone
+// because they fall outside the pull request. Staying silent here would look
+// like autofix simply found nothing there.
+func printOutOfScope(out Outcome) {
+	if len(out.OutOfScope) == 0 {
+		return
+	}
+	fmt.Printf("\nout of scope for this PR (located, not fixed): %s\n",
+		strings.Join(out.OutOfScope, ", "))
 }
 
 // printVerification renders how the patch fared against KnoxIQ's criteria.

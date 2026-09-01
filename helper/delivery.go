@@ -8,12 +8,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/appknox/appknox-go/ghpr"
 )
 
-// deliverBranch pushes all patched files to one new branch on GitHub (no PR
-// opened) and returns a compare URL. Used when --push-branch is set.
+// deliverBranch pushes all patched files to one branch and opens a DRAFT pull
+// request for them, returning the PR URL.
+//
+// Draft is the point: the fix is a proposal. It runs CI and gets reviewed before
+// it can merge. If a PR for this branch is already open -- a re-run of the same
+// finding -- that one is reused rather than opening a duplicate.
 func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch, inputs FindingInputs) (string, error) {
 	owner, name, err := splitRepo(opts.Repo)
 	if err != nil {
@@ -23,18 +28,41 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 	if token == "" {
 		return "", errors.New("--push-branch needs a GitHub token (--github-token or GITHUB_TOKEN)")
 	}
+	cfg := ghpr.Config{Owner: owner, Repo: name, BaseRef: opts.Ref, Token: token}
+
 	files := make([]ghpr.FileChange, len(patches))
 	for i, p := range patches {
 		files[i] = ghpr.FileChange{Path: p.Path, Content: p.Content, Message: commitMessage(inputs, p.Path)}
 	}
-	return ghpr.PushFiles(ctx,
-		ghpr.Config{Owner: owner, Repo: name, BaseRef: opts.Ref, Token: token},
-		prBranch(opts.AnalysisID, patches[0].Path), files)
+	branch := prBranch(opts.PRNumber, opts.AnalysisID, patches[0].Path)
+	if _, err := ghpr.PushFiles(ctx, cfg, branch, files); err != nil {
+		return "", err
+	}
+
+	existing, err := ghpr.FindOpenPR(ctx, cfg, branch)
+	if err != nil {
+		return "", err
+	}
+	if existing != "" {
+		return existing, nil
+	}
+	return ghpr.OpenDraftPR(ctx, cfg, ghpr.PullRequest{
+		Branch: branch, Base: opts.Ref,
+		Title:  prTitle(inputs),
+		Body:   prBody(inputs, patches),
+	})
 }
 
 // prBranch is a stable branch name for the fix.
-func prBranch(analysisID int, path string) string {
-	if analysisID > 0 {
+//
+// The originating pull request is part of the name so a reviewer can tell at a
+// glance which PR a fix belongs to, and so concurrent fixes for the same
+// analysis on different PRs cannot collide on one branch.
+func prBranch(prNumber, analysisID int, path string) string {
+	switch {
+	case prNumber > 0 && analysisID > 0:
+		return fmt.Sprintf("bugfix/appknox-autofix-%d-%d", prNumber, analysisID)
+	case analysisID > 0:
 		return fmt.Sprintf("appknox-autofix/analysis-%d", analysisID)
 	}
 	sum := sha256.Sum256([]byte(path))
@@ -43,9 +71,64 @@ func prBranch(analysisID int, path string) string {
 
 // commitMessage is a conventional-commit subject for the fix.
 func commitMessage(inputs FindingInputs, path string) string {
-	name := inputs.Finding
-	if name == "" {
-		name = "security finding"
+	return fmt.Sprintf("fix(autofix): %s in %s", findingName(inputs), filepath.Base(path))
+}
+
+// prTitle names the draft PR after the finding it addresses.
+func prTitle(inputs FindingInputs) string {
+	return "Appknox Autofix: " + findingName(inputs)
+}
+
+// findingName is the finding's name, or a neutral fallback.
+func findingName(inputs FindingInputs) string {
+	if inputs.Finding == "" {
+		return "security finding"
 	}
-	return fmt.Sprintf("fix(autofix): %s in %s", name, filepath.Base(path))
+	return inputs.Finding
+}
+
+// prBody explains what was changed and, crucially, how far it was verified.
+//
+// The verification state is stated plainly rather than implied: a reviewer must
+// not read a tidy diff as evidence that the fix was checked.
+func prBody(inputs FindingInputs, patches []filePatch) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Automated fix for **%s**.\n\n", findingName(inputs))
+
+	b.WriteString("Files changed:\n")
+	for _, p := range patches {
+		fmt.Fprintf(&b, "- `%s`\n", p.Path)
+	}
+	if len(inputs.Criteria) > 0 {
+		b.WriteString("\nChecked against KnoxIQ's verification criteria:\n")
+		for _, c := range inputs.Criteria {
+			fmt.Fprintf(&b, "- %s\n", c)
+		}
+	} else {
+		b.WriteString("\n> **Not verified.** KnoxIQ recorded no verification criteria " +
+			"for this finding, so the patch could not be machine-checked.\n")
+	}
+	b.WriteString("\nOpened as a draft: review and let CI run before merging.\n")
+	return b.String()
+}
+
+// scopeToPR keeps only the located paths the developer changed in this pull
+// request, returning the rest as advisories.
+//
+// The requirement is to apply suggested fixes only to the files modified by the
+// developer. A located file outside the PR is reported rather than edited, so
+// autofix never quietly changes code the reviewer is not looking at here.
+func scopeToPR(located, prFiles []string) (inScope, advisory []string) {
+	changed := make(map[string]bool, len(prFiles))
+	for _, f := range prFiles {
+		changed[f] = true
+	}
+	for _, path := range located {
+		if changed[path] {
+			inScope = append(inScope, path)
+		} else {
+			advisory = append(advisory, path)
+		}
+	}
+	return inScope, advisory
 }
