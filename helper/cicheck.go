@@ -151,11 +151,11 @@ func ProcessHealthScoreCiCheck(fileID, healthScoreThreshold int, staticScanTimeo
 	msg := fmt.Sprintf("\nCheck file ID %d on appknox dashboard for more details.\n", fileID)
 	if score >= healthScoreThreshold {
 		fmt.Printf("\nHealth score %d is greater than or equal to threshold %d. Build passed.\n", score, healthScoreThreshold)
-		fmt.Printf(msg)
+		fmt.Print(msg)
 	} else {
 		errmsg := fmt.Sprintf("Health score %d is below the threshold %d. Build failed.\n", score, healthScoreThreshold)
 		PrintError(errmsg)
-		fmt.Printf(msg)
+		fmt.Print(msg)
 		os.Exit(1)
 	}
 }
