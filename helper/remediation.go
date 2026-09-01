@@ -24,7 +24,16 @@ var (
 type FindingInputs struct {
 	Finding     string   // short vulnerability summary
 	ClassHints  []string // all first-party classes the finding references (locate targets)
-	Remediation string   // source-free remediation guidance (KnoxIQ)
+	Remediation string   // source-free remediation guidance
+
+	// Criteria are KnoxIQ's own verification steps -- what a generated patch is
+	// checked against before delivery.
+	//
+	// Empty means "could not check", NOT "nothing to check": findings analysed
+	// before the storage layer stopped discarding the field carry none. A caller
+	// with no criteria must refuse to certify the patch rather than assume it
+	// passed.
+	Criteria []string
 }
 
 // stripHTML removes tags for source-free remediation text.
@@ -85,8 +94,18 @@ func findingsText(a *appknox.Analysis) string {
 	return b.String()
 }
 
-// remediationText assembles source-free remediation guidance (KnoxIQ) — never
-// the client's source, only finding metadata + secure/insecure code references.
+// remediationText assembles source-free guidance from the VULNERABILITY-TYPE
+// record — generic reference code for the class of issue, NOT KnoxIQ's
+// per-finding remediation, despite what this comment used to claim.
+//
+// NO PRODUCTION CALLER. Autofix now takes remediation from KnoxIQ and fails
+// rather than degrading to this (see fetchAppknoxInputs), so it and
+// deriveFindingInputs survive only for their tests. Retained pending a decision
+// on whether hosts without KnoxIQ should be supported at all; delete both if
+// the answer is no.
+//
+// Never includes the client's source — only finding metadata and the
+// secure/insecure code references attached to the vulnerability.
 func remediationText(a *appknox.Analysis, v *appknox.Vulnerability) string {
 	parts := []string{"Vulnerability: " + v.Name}
 	if len(a.Cwe) > 0 {

@@ -238,8 +238,14 @@ func resolveRepoRoot(ctx context.Context, opts AutofixOptions) (string, func(), 
 	})
 }
 
-// fetchAppknoxInputs pulls the analysis + vulnerability (KnoxIQ) and derives the
-// source-free finding/hint/remediation.
+// fetchAppknoxInputs resolves the locate + fix inputs for one analysis, taking
+// the remediation and the fix criteria from KnoxIQ.
+//
+// KnoxIQ is the source of truth here, and there is deliberately no fallback: if
+// it cannot be reached (after retries) the run FAILS, because a fix built on
+// guessed remediation is worse than no fix at all. Reaching KnoxIQ and learning
+// that nothing is fixable is a different outcome -- the run abstains with an
+// empty Remediation, which downstream renders as advisory-only.
 func fetchAppknoxInputs(ctx context.Context, fileID, analysisID int) (FindingInputs, error) {
 	client := getClient()
 	analysis, err := findAnalysis(ctx, client, fileID, analysisID)
@@ -250,7 +256,20 @@ func fetchAppknoxInputs(ctx context.Context, fileID, analysisID int) (FindingInp
 	if err != nil {
 		return FindingInputs{}, err
 	}
-	return deriveFindingInputs(analysis, vuln), nil
+
+	findings, err := fixableKnoxIQFindings(ctx, client, analysisID)
+	if err != nil {
+		return FindingInputs{}, err
+	}
+	if len(findings) == 0 {
+		// Reached KnoxIQ; it judged nothing worth fixing. Keep the class hints so
+		// the run can still report what it would have looked at.
+		return FindingInputs{
+			Finding:    vuln.Name,
+			ClassHints: classHintsFromFindings(findingsText(analysis)),
+		}, nil
+	}
+	return knoxIQInputs(findings, vuln.Name), nil
 }
 
 // allAnalyses fetches every analysis for a file (count, then the full list).
