@@ -65,6 +65,10 @@ type Outcome struct {
 	Located   []string    // every located path
 	Patches   []filePatch // per-file fixes that changed something
 	BranchURL string      // set when --push-branch delivered a branch (compare URL)
+
+	// Verification is KnoxIQ's criteria evaluated against the produced patch.
+	// Delivery is gated on it; see VerificationGate.
+	Verification VerificationReport
 }
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
@@ -140,8 +144,15 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 				Path: p, Content: res.PatchedContent, Diff: res.UnifiedDiff, Confidence: res.Confidence})
 		}
 	}
+	// Check the patch against KnoxIQ's own criteria before anything is
+	// delivered. A dry run still reports the verdict so the developer sees what
+	// a real run would have decided.
+	out.Verification = checkCriteria(out.Patches, s.inputs.Criteria)
 	if len(out.Patches) == 0 || s.opts.DryRun {
 		return out, nil
+	}
+	if err := VerificationGate(out.Verification, len(s.inputs.Criteria)); err != nil {
+		return out, err
 	}
 	return s.deliver(ctx, out)
 }
@@ -346,7 +357,26 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 		}
 		fmt.Println(p.Diff)
 	}
+	printVerification(out.Verification)
 	printDelivery(opts, out)
+}
+
+// printVerification renders how the patch fared against KnoxIQ's criteria.
+//
+// "No criteria" is reported explicitly rather than silently omitted: an unchecked
+// patch must never look like a clean one.
+func printVerification(report VerificationReport) {
+	if len(report.Results) == 0 {
+		fmt.Println("\nverification: no KnoxIQ criteria recorded for this finding — patch NOT checked")
+		return
+	}
+	fmt.Printf("\nverification: %s\n", report.Summary())
+	for _, r := range report.Results {
+		fmt.Printf("  [%s] %s\n", r.Status, r.Criterion)
+		if r.Detail != "" {
+			fmt.Printf("           %s\n", r.Detail)
+		}
+	}
 }
 
 // printDelivery renders the delivery outcome (dry-run / branch / applied).

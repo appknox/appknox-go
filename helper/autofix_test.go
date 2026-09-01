@@ -89,9 +89,11 @@ func deps(path string, res fixservice.Result, in FindingInputs) autofixDeps {
 	return autofixDeps{
 		locate: func(context.Context, agent.Config, agent.Request) (string, error) { return path, nil },
 		fetch:  func(context.Context, int, int) (FindingInputs, error) { return in, nil },
-		submit: func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) { return res, nil },
+		submit: func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
+			return res, nil
+		},
 		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
-			return agent.FixResult{Changed: true, PatchedContent: "agent-fixed\n", Diff: "-old\n+new"}, nil
+			return agent.FixResult{Changed: true, PatchedContent: "agent-fixed with SecureRandom\n", Diff: "-old\n+new"}, nil
 		},
 		deliver: func(context.Context, AutofixOptions, []filePatch, FindingInputs) (string, error) {
 			return "https://github.com/appknox/mfva/compare/master...appknox-autofix/analysis-1?expand=1", nil
@@ -103,8 +105,13 @@ func appknoxOpts(root string) AutofixOptions {
 	return AutofixOptions{RepoPath: root, FileID: 1, AnalysisID: 1, FixToken: "tok"}
 }
 
+// oneClass carries a KnoxIQ criterion too: delivery is now gated on the patch
+// satisfying one, so a fixture without criteria would be refused.
 func oneClass(finding, remediation string) FindingInputs {
-	return FindingInputs{Finding: finding, ClassHints: []string{"com/x/C"}, Remediation: remediation}
+	return FindingInputs{
+		Finding: finding, ClassHints: []string{"com/x/C"}, Remediation: remediation,
+		Criteria: []string{"Confirm SecureRandom is present"},
+	}
 }
 
 func TestRunAutofix_RequiresToken(t *testing.T) {
@@ -158,13 +165,14 @@ func TestRunAutofix_MultiClass_FixesEachLocatedFile(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte("orig\n"), 0o644))
 	}
 	pathFor := map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java"}
-	d := deps("", fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, FindingInputs{})
+	d := deps("", fixservice.Result{Changed: true, PatchedContent: "fixed with SecureRandom\n"}, FindingInputs{})
 	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
 		return pathFor[req.ClassHint], nil // each class → its own file
 	}
 	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
 		return FindingInputs{Finding: "Derived Crypto Keys",
-			ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}, nil
+			ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix",
+			Criteria: []string{"Confirm SecureRandom is present"}}, nil
 	}
 	out, err := runAutofix(context.Background(), appknoxOpts(root), d)
 	require.NoError(t, err)
@@ -172,7 +180,7 @@ func TestRunAutofix_MultiClass_FixesEachLocatedFile(t *testing.T) {
 	require.Len(t, out.Patches, 2)
 	for _, rel := range []string{"app/A.java", "app/B.java"} {
 		got, _ := os.ReadFile(filepath.Join(root, rel))
-		require.Equal(t, "fixed\n", string(got)) // BOTH classes fixed
+		require.Equal(t, "fixed with SecureRandom\n", string(got)) // BOTH classes fixed
 	}
 }
 
@@ -183,12 +191,13 @@ func TestRunAutofix_MultiClass_PushBranch_OneBranch(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte("orig\n"), 0o644))
 	}
 	var delivered []filePatch
-	d := deps("", fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, FindingInputs{})
+	d := deps("", fixservice.Result{Changed: true, PatchedContent: "fixed with SecureRandom\n"}, FindingInputs{})
 	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
 		return map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java"}[req.ClassHint], nil
 	}
 	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
-		return FindingInputs{Finding: "Multi", ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}, nil
+		return FindingInputs{Finding: "Multi", ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix",
+			Criteria: []string{"Confirm SecureRandom is present"}}, nil
 	}
 	d.deliver = func(_ context.Context, _ AutofixOptions, patches []filePatch, _ FindingInputs) (string, error) {
 		delivered = patches // all files pushed together in one call
@@ -207,7 +216,7 @@ func TestRunAutofix_DryRun_DoesNotWrite(t *testing.T) {
 	opts := appknoxOpts(root)
 	opts.DryRun = true
 	out, err := runAutofix(context.Background(), opts,
-		deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r")))
+		deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched with SecureRandom\n"}, oneClass("f", "r")))
 	require.NoError(t, err)
 	require.Len(t, out.Patches, 1)
 	require.False(t, out.Patches[0].Applied)
@@ -220,10 +229,10 @@ func TestRunAutofix_PushBranch(t *testing.T) {
 	opts := appknoxOpts(root)
 	opts.Repo, opts.PushBranch = "appknox/mfva", true
 	out, err := runAutofix(context.Background(), opts,
-		deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r")))
+		deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched with SecureRandom\n"}, oneClass("f", "r")))
 	require.NoError(t, err)
 	require.Contains(t, out.BranchURL, "compare")
-	require.False(t, out.Patches[0].Applied)      // delivered as a branch, not applied locally
+	require.False(t, out.Patches[0].Applied) // delivered as a branch, not applied locally
 	got, _ := os.ReadFile(filepath.Join(root, rel))
 	require.Equal(t, "orig\n", string(got))
 }
@@ -241,7 +250,7 @@ func TestRunAutofix_AgentFixMode(t *testing.T) {
 	require.Len(t, out.Patches, 1)
 	require.True(t, out.Patches[0].Applied)
 	got, _ := os.ReadFile(filepath.Join(root, rel))
-	require.Equal(t, "agent-fixed\n", string(got))
+	require.Equal(t, "agent-fixed with SecureRandom\n", string(got))
 }
 
 func TestRunAutofix_EmptyPatchNotApplied(t *testing.T) {
