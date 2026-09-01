@@ -86,17 +86,29 @@ func isRetryableKnoxIQError(err error) bool {
 	return status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
 }
 
-// explainKnoxIQError adds the one piece of context that is not obvious from a
-// bare 401: Appknox exposes two different credentials on the same host, and the
-// Public API's bearer will not authenticate against KnoxIQ.
+// explainKnoxIQError names the actual cause, because the three ways this route
+// refuses look identical in a bare status line and have completely different
+// fixes:
+//
+//   - 401 the credential was not accepted. Appknox exposes two different tokens
+//     on the same host and only the api/v2 one authenticates here.
+//   - 403 the credential is FINE; the organisation is not entitled to KnoxIQ
+//     (mycroft's KnoxIQPermission checks guaranteed_ai_feature.knoxiq). Telling
+//     someone to check their token here sends them to rotate credentials over a
+//     licensing problem.
+//   - 404 the route is not served -- KnoxIQ is not deployed on this host.
 func explainKnoxIQError(err error) error {
 	var apiErr *ErrorResponse
 	if errors.As(err, &apiErr) && apiErr.Response != nil {
 		switch apiErr.Response.StatusCode {
-		case http.StatusUnauthorized, http.StatusForbidden:
+		case http.StatusUnauthorized:
 			return fmt.Errorf(
 				"%w -- KnoxIQ expects the api/v2 token as 'Token <token>'; the Public "+
 					"API's '<keyId>:<secret>' bearer will not authenticate here", err)
+		case http.StatusForbidden:
+			return fmt.Errorf(
+				"%w -- the token is valid but this organisation is not entitled to "+
+					"KnoxIQ; autofix needs the KnoxIQ AI feature enabled on the account", err)
 		case http.StatusNotFound:
 			return fmt.Errorf("%w -- is KnoxIQ enabled on this host?", err)
 		}

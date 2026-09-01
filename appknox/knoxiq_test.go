@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -168,6 +169,36 @@ func TestKnoxIQ_ListByAnalysis_401FailsImmediately(t *testing.T) {
 	}
 	if attempts != 1 {
 		t.Errorf("401 was retried %d times; want exactly 1 attempt", attempts)
+	}
+}
+
+// mycroft gates this route on the org's KnoxIQ entitlement
+// (KnoxIQPermission -> guaranteed_ai_feature.knoxiq), so a 403 means the
+// ACCOUNT lacks the feature, not that the token is wrong. Reporting a token
+// problem here sends a customer off rotating credentials over a licensing gap.
+func TestKnoxIQ_ListByAnalysis_403ReportsEntitlementNotToken(t *testing.T) {
+	withFastRetries(t)
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	var attempts int
+	mux.HandleFunc("/api/knoxiq/analyses/11829/findings", func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	_, err := client.KnoxIQ.ListByAnalysis(context.Background(), 11829)
+	if err == nil {
+		t.Fatal("want an error for 403")
+	}
+	if !strings.Contains(err.Error(), "not entitled") {
+		t.Errorf("403 must explain the entitlement gap, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "keyId") {
+		t.Errorf("403 must NOT blame the token format, got: %v", err)
+	}
+	if attempts != 1 {
+		t.Errorf("403 is not transient; want 1 attempt, got %d", attempts)
 	}
 }
 
