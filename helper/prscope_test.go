@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/appknox/appknox-go/fixservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,7 +56,7 @@ func TestPRBody_saysWhenNothingWasVerified(t *testing.T) {
 // End to end through runAutofix: the out-of-PR file is located but not patched.
 func TestRunAutofix_PRScope_skipsFilesOutsideThePR(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
-	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "fixed with SecureRandom\n"},
+	d := deps(rel, fixResult{Changed: true, PatchedContent: "fixed with SecureRandom\n"},
 		oneClass("Insecure Random", "use SecureRandom"))
 	d.prFiles = func(context.Context, AutofixOptions) ([]string, error) {
 		return []string{"some/other/File.java"}, nil // the PR never touched rel
@@ -73,7 +72,7 @@ func TestRunAutofix_PRScope_skipsFilesOutsideThePR(t *testing.T) {
 
 func TestRunAutofix_PRScope_fixesFilesInsideThePR(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
-	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "fixed with SecureRandom\n"},
+	d := deps(rel, fixResult{Changed: true, PatchedContent: "fixed with SecureRandom\n"},
 		oneClass("Insecure Random", "use SecureRandom"))
 	d.prFiles = func(context.Context, AutofixOptions) ([]string, error) {
 		return []string{rel}, nil

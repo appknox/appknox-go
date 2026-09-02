@@ -28,7 +28,6 @@ type AutofixOptions struct {
 	GithubToken  string // GitHub token for the --repo fetch
 	DryRun       bool   // locate + fix but do not write the patch
 	PushBranch   bool   // push the fix to a new GitHub branch instead of local apply
-	FixMode      string // "server" (default, /v1/fix) or "agent" (client-side Edit, no upload)
 	ListAnalyses bool   // print the file's analyses + class hints, then exit
 	PRNumber     int    // originating pull request; scopes the fix and names the branch
 	Scope        string // "pr" (only files changed in PRNumber) or "repo"
@@ -38,7 +37,6 @@ type AutofixOptions struct {
 type autofixDeps struct {
 	locate   func(ctx context.Context, cfg agent.Config, req agent.Request) (string, error)
 	fetch    func(ctx context.Context, fileID, analysisID int) (FindingInputs, error)
-	submit   func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
 	agentFix func(ctx context.Context, cfg agent.Config, req agent.FixRequest) (agent.FixResult, error)
 	deliver  func(ctx context.Context, opts AutofixOptions, patches []filePatch, inputs FindingInputs) (string, error)
 	prFiles  func(ctx context.Context, opts AutofixOptions) ([]string, error)
@@ -48,7 +46,6 @@ func defaultDeps() autofixDeps {
 	return autofixDeps{
 		locate:   agent.LocateFile,
 		fetch:    fetchAppknoxInputs,
-		submit:   fixservice.SubmitAndAwait,
 		agentFix: agent.FixFile,
 		deliver:  deliverBranch,
 		prFiles:  fetchPRFiles,
@@ -153,7 +150,7 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 		}
 		if res.Changed && res.PatchedContent != "" {
 			out.Patches = append(out.Patches, filePatch{
-				Path: p, Content: res.PatchedContent, Diff: res.UnifiedDiff, Confidence: res.Confidence})
+				Path: p, Content: res.PatchedContent, Diff: res.Diff})
 		}
 	}
 	// Check the patch against KnoxIQ's own criteria before anything is
@@ -187,26 +184,16 @@ func (s fixSession) locateAll(ctx context.Context) ([]string, error) {
 	return paths, nil
 }
 
-// produceFix generates the patch for one file, client-side via the agent's Edit
-// tool (--fix-mode agent — NO upload), or server-side via /v1/fix (default).
-func (s fixSession) produceFix(ctx context.Context, path string) (fixservice.Result, error) {
-	if s.opts.FixMode == "agent" {
-		fr, err := s.d.agentFix(ctx, agent.Config{FixURL: s.fixCfg.URL, Token: s.fixCfg.Token},
-			agent.FixRequest{RepoRoot: s.root, Path: path,
-				Finding: s.inputs.Finding, Remediation: s.inputs.Remediation})
-		if err != nil {
-			return fixservice.Result{}, err
-		}
-		return fixservice.Result{Changed: fr.Changed, PatchedContent: fr.PatchedContent, UnifiedDiff: fr.Diff}, nil
-	}
-	content, err := readUnderRoot(s.root, path)
-	if err != nil {
-		return fixservice.Result{}, err
-	}
-	return s.d.submit(ctx, s.fixCfg, fixservice.Request{
-		Filename: path, FileContent: content, Remediation: s.inputs.Remediation,
-		Finding: s.inputs.Finding, Language: detectLanguage(path),
-	})
+// produceFix generates the patch for one file.
+//
+// The edit happens HERE, on the caller's machine, against the local checkout.
+// Only the model turns cross the wire, and they go to Sherrinford, which holds
+// the provider key. No file is ever uploaded: the repository does not move, and
+// Sherrinford has no endpoint that would accept it.
+func (s fixSession) produceFix(ctx context.Context, path string) (agent.FixResult, error) {
+	return s.d.agentFix(ctx, agent.Config{FixURL: s.fixCfg.URL, Token: s.fixCfg.Token},
+		agent.FixRequest{RepoRoot: s.root, Path: path,
+			Finding: s.inputs.Finding, Remediation: s.inputs.Remediation})
 }
 
 // deliver pushes all patches to one branch (--push-branch) or applies them locally.

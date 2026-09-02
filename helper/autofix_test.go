@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/appknox/appknox-go/agent"
-	"github.com/appknox/appknox-go/fixservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -85,15 +84,22 @@ func repoWithFile(t *testing.T, body string) (string, string) {
 }
 
 // deps builds a stub set: locate returns a fixed path, fix returns res, etc.
-func deps(path string, res fixservice.Result, in FindingInputs) autofixDeps {
+// fixResult carries what a stub fix produced. It replaces the old fixservice
+// payload type, which went away with the upload path.
+type fixResult struct {
+	Changed        bool
+	PatchedContent string
+	UnifiedDiff    string
+	Confidence     float64
+}
+
+func deps(path string, res fixResult, in FindingInputs) autofixDeps {
 	return autofixDeps{
 		locate: func(context.Context, agent.Config, agent.Request) (string, error) { return path, nil },
 		fetch:  func(context.Context, int, int) (FindingInputs, error) { return in, nil },
-		submit: func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
-			return res, nil
-		},
 		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
-			return agent.FixResult{Changed: true, PatchedContent: "agent-fixed with SecureRandom\n", Diff: "-old\n+new"}, nil
+			return agent.FixResult{
+				Changed: res.Changed, PatchedContent: res.PatchedContent, Diff: res.UnifiedDiff}, nil
 		},
 		deliver: func(context.Context, AutofixOptions, []filePatch, FindingInputs) (string, error) {
 			return "https://github.com/appknox/mfva/compare/master...appknox-autofix/analysis-1?expand=1", nil
@@ -124,14 +130,14 @@ func TestRunAutofix_RequiresToken(t *testing.T) {
 func TestRunAutofix_RejectsPlaintextRemoteFixURL(t *testing.T) {
 	_, err := runAutofix(context.Background(),
 		AutofixOptions{RepoPath: t.TempDir(), Finding: "x", FixToken: "tok", FixURL: "http://gateway.example.com"},
-		deps("app/A.java", fixservice.Result{}, FindingInputs{}))
+		deps("app/A.java", fixResult{}, FindingInputs{}))
 	require.Error(t, err)
 }
 
 func TestRunAutofix_Advisory_WhenLocateAbstains(t *testing.T) {
 	out, err := runAutofix(context.Background(),
 		AutofixOptions{RepoPath: t.TempDir(), Finding: "x", FixToken: "tok"},
-		deps("", fixservice.Result{}, FindingInputs{}))
+		deps("", fixResult{}, FindingInputs{}))
 	require.NoError(t, err)
 	require.Empty(t, out.Located)
 }
@@ -140,7 +146,7 @@ func TestRunAutofix_LocateOnly_WhenNoRemediation(t *testing.T) {
 	root, rel := repoWithFile(t, "orig")
 	out, err := runAutofix(context.Background(),
 		AutofixOptions{RepoPath: root, Finding: "x", FixToken: "tok"},
-		deps(rel, fixservice.Result{}, FindingInputs{}))
+		deps(rel, fixResult{}, FindingInputs{}))
 	require.NoError(t, err)
 	require.Equal(t, []string{rel}, out.Located)
 	require.Empty(t, out.Patches) // no remediation → no fix
@@ -148,7 +154,7 @@ func TestRunAutofix_LocateOnly_WhenNoRemediation(t *testing.T) {
 
 func TestRunAutofix_FullFlow_AppliesPatch(t *testing.T) {
 	root, rel := repoWithFile(t, "int r = new Random().nextInt();\n")
-	res := fixservice.Result{Changed: true, PatchedContent: "int r = new SecureRandom().nextInt();\n", Confidence: 0.95}
+	res := fixResult{Changed: true, PatchedContent: "int r = new SecureRandom().nextInt();\n", Confidence: 0.95}
 	out, err := runAutofix(context.Background(), appknoxOpts(root),
 		deps(rel, res, oneClass("Insecure Random", "use SecureRandom")))
 	require.NoError(t, err)
@@ -165,7 +171,7 @@ func TestRunAutofix_MultiClass_FixesEachLocatedFile(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte("orig\n"), 0o644))
 	}
 	pathFor := map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java"}
-	d := deps("", fixservice.Result{Changed: true, PatchedContent: "fixed with SecureRandom\n"}, FindingInputs{})
+	d := deps("", fixResult{Changed: true, PatchedContent: "fixed with SecureRandom\n"}, FindingInputs{})
 	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
 		return pathFor[req.ClassHint], nil // each class → its own file
 	}
@@ -191,7 +197,7 @@ func TestRunAutofix_MultiClass_PushBranch_OneBranch(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte("orig\n"), 0o644))
 	}
 	var delivered []filePatch
-	d := deps("", fixservice.Result{Changed: true, PatchedContent: "fixed with SecureRandom\n"}, FindingInputs{})
+	d := deps("", fixResult{Changed: true, PatchedContent: "fixed with SecureRandom\n"}, FindingInputs{})
 	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
 		return map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java"}[req.ClassHint], nil
 	}
@@ -216,7 +222,7 @@ func TestRunAutofix_DryRun_DoesNotWrite(t *testing.T) {
 	opts := appknoxOpts(root)
 	opts.DryRun = true
 	out, err := runAutofix(context.Background(), opts,
-		deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched with SecureRandom\n"}, oneClass("f", "r")))
+		deps(rel, fixResult{Changed: true, PatchedContent: "patched with SecureRandom\n"}, oneClass("f", "r")))
 	require.NoError(t, err)
 	require.Len(t, out.Patches, 1)
 	require.False(t, out.Patches[0].Applied)
@@ -229,7 +235,7 @@ func TestRunAutofix_PushBranch(t *testing.T) {
 	opts := appknoxOpts(root)
 	opts.Repo, opts.PushBranch = "appknox/mfva", true
 	out, err := runAutofix(context.Background(), opts,
-		deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched with SecureRandom\n"}, oneClass("f", "r")))
+		deps(rel, fixResult{Changed: true, PatchedContent: "patched with SecureRandom\n"}, oneClass("f", "r")))
 	require.NoError(t, err)
 	require.Contains(t, out.BranchURL, "compare")
 	require.False(t, out.Patches[0].Applied) // delivered as a branch, not applied locally
@@ -237,26 +243,10 @@ func TestRunAutofix_PushBranch(t *testing.T) {
 	require.Equal(t, "orig\n", string(got))
 }
 
-func TestRunAutofix_AgentFixMode(t *testing.T) {
-	root, rel := repoWithFile(t, "orig\n")
-	d := deps(rel, fixservice.Result{}, oneClass("f", "r"))
-	d.submit = func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
-		return fixservice.Result{}, errors.New("server /v1/fix must NOT be called in agent mode")
-	}
-	opts := appknoxOpts(root)
-	opts.FixMode = "agent"
-	out, err := runAutofix(context.Background(), opts, d)
-	require.NoError(t, err)
-	require.Len(t, out.Patches, 1)
-	require.True(t, out.Patches[0].Applied)
-	got, _ := os.ReadFile(filepath.Join(root, rel))
-	require.Equal(t, "agent-fixed with SecureRandom\n", string(got))
-}
-
 func TestRunAutofix_EmptyPatchNotApplied(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
 	out, err := runAutofix(context.Background(), appknoxOpts(root),
-		deps(rel, fixservice.Result{Changed: true, PatchedContent: ""}, oneClass("f", "r")))
+		deps(rel, fixResult{Changed: true, PatchedContent: ""}, oneClass("f", "r")))
 	require.NoError(t, err)
 	require.Empty(t, out.Patches) // empty content is not a patch
 	got, _ := os.ReadFile(filepath.Join(root, rel))
@@ -266,17 +256,17 @@ func TestRunAutofix_EmptyPatchNotApplied(t *testing.T) {
 func TestRunAutofix_NoChange_LeavesFile(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
 	out, err := runAutofix(context.Background(), appknoxOpts(root),
-		deps(rel, fixservice.Result{Changed: false}, oneClass("f", "r")))
+		deps(rel, fixResult{Changed: false}, oneClass("f", "r")))
 	require.NoError(t, err)
 	require.Empty(t, out.Patches)
 	require.Equal(t, []string{rel}, out.Located)
 }
 
-func TestRunAutofix_PropagatesSubmitError(t *testing.T) {
+func TestRunAutofix_PropagatesFixError(t *testing.T) {
 	root, rel := repoWithFile(t, "orig")
-	d := deps(rel, fixservice.Result{}, oneClass("f", "r"))
-	d.submit = func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
-		return fixservice.Result{}, errors.New("boom")
+	d := deps(rel, fixResult{}, oneClass("f", "r"))
+	d.agentFix = func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+		return agent.FixResult{}, errors.New("boom")
 	}
 	_, err := runAutofix(context.Background(), appknoxOpts(root), d)
 	require.Error(t, err)
