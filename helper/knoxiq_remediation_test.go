@@ -83,11 +83,24 @@ func TestIsFixable_absentIsValidIsTreatedAsValid(t *testing.T) {
 	}
 }
 
-func TestIsFixable_noValidationFallsThrough(t *testing.T) {
+// KnoxIQ records a validation for every finding it returns, so a missing one
+// means something failed upstream. Editing code on the strength of a failure is
+// the wrong direction.
+func TestIsFixable_missingValidationIsSkipped(t *testing.T) {
 	f := liveFinding()
 	f.Validation = nil
+	if IsFixable(f) {
+		t.Error("a finding with no validation must not be fixed")
+	}
+}
+
+// The API sends TRUE_POSITIVE and UNCERTAIN; uncertain findings are in scope by
+// design, and the fix is reviewed as a draft PR.
+func TestIsFixable_uncertainIsInScope(t *testing.T) {
+	f := liveFinding()
+	f.Validation.Verdict = "UNCERTAIN"
 	if !IsFixable(f) {
-		t.Error("no recorded verdict must fall through to the normal gates")
+		t.Error("UNCERTAIN findings are sent deliberately and must be fixable")
 	}
 }
 

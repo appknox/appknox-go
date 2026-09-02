@@ -10,27 +10,35 @@ import (
 // IsFixable reports whether a KnoxIQ finding is worth attempting a fix for.
 //
 // KnoxIQ has already judged what is real and whose code it is, so this reuses
-// that verdict instead of re-deriving it. Two cases are skipped:
+// that verdict rather than re-deriving it. Per the KnoxIQ team, the API returns
+// only TRUE_POSITIVE and UNCERTAIN findings; false positives are filtered
+// server-side and never reach us.
 //
-//   - a FALSE_POSITIVE, or one KnoxIQ marked invalid -- there is nothing to fix
-//   - code that is NOT first-party -- a vendored library cannot be patched in
-//     the customer's tree, and attempting it is how autofix ends up rewriting
-//     the wrong file
+// UNCERTAIN findings are therefore IN SCOPE by design -- they are sent
+// deliberately, and the fix lands in a draft PR a human reviews.
 //
-// Absent signals mean "not recorded", never "no". A nil Validation falls through
-// to the normal gates, and a nil IsValid/IsThirdParty is not treated as false --
-// relying on Go's zero value here would silently mark such findings unfixable.
+// Two cases are skipped:
+//
+//   - validation absent. KnoxIQ records one for every finding it returns, so a
+//     missing validation means something went wrong upstream. We cannot
+//     establish the finding is real, so we do not touch the code. Treating this
+//     as fixable would mean editing on the strength of a failure.
+//   - code that is NOT first-party. A vendored library cannot be patched in the
+//     customer's tree, and attempting it is how autofix rewrites the wrong file.
+//     This is the filter that actually fires in practice.
+//
+// A nil IsValid/IsThirdParty inside a present validation still means "not
+// recorded" rather than false: Go's zero value would otherwise silently mark
+// such findings unfixable.
 func IsFixable(f *appknox.KnoxIQFinding) bool {
-	if f == nil {
+	if f == nil || f.Validation == nil {
 		return false
 	}
 	v := f.Validation
-	if v == nil {
-		return true
-	}
 	if v.IsValid != nil && !*v.IsValid {
 		return false
 	}
+	// Defence in depth: the API is not supposed to send these at all.
 	if v.Verdict == "FALSE_POSITIVE" {
 		return false
 	}
