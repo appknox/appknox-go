@@ -58,7 +58,7 @@ func TestResolveToken_exchangesOIDCForASession(t *testing.T) {
 	withActionsEnv(t, actions.URL)
 	sherrinford, gotOIDC := sherrinfordServer(t, http.StatusOK, "session-abc")
 
-	token, err := ResolveToken(context.Background(), sherrinford.URL, "")
+	token, err := ResolveToken(context.Background(), sherrinford.URL, "", "appknox-tok")
 	require.NoError(t, err)
 	require.Equal(t, "session-abc", token)
 	require.Equal(t, "the.id.token", *gotOIDC, "the id-token must be forwarded verbatim")
@@ -70,7 +70,7 @@ func TestResolveToken_fallsBackToTheExplicitToken(t *testing.T) {
 	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
 	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
 
-	token, err := ResolveToken(context.Background(), "https://sherrinford.example", "static-tok")
+	token, err := ResolveToken(context.Background(), "https://sherrinford.example", "static-tok", "")
 	require.NoError(t, err)
 	require.Equal(t, "static-tok", token)
 }
@@ -79,7 +79,7 @@ func TestResolveToken_requiresSomething(t *testing.T) {
 	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
 	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
 
-	_, err := ResolveToken(context.Background(), "https://sherrinford.example", "")
+	_, err := ResolveToken(context.Background(), "https://sherrinford.example", "", "")
 	require.Error(t, err)
 }
 
@@ -90,7 +90,7 @@ func TestResolveToken_prefersOIDCOverAStaticToken(t *testing.T) {
 	withActionsEnv(t, actions.URL)
 	sherrinford, _ := sherrinfordServer(t, http.StatusOK, "session-abc")
 
-	token, err := ResolveToken(context.Background(), sherrinford.URL, "static-tok")
+	token, err := ResolveToken(context.Background(), sherrinford.URL, "static-tok", "appknox-tok")
 	require.NoError(t, err)
 	require.Equal(t, "session-abc", token)
 }
@@ -102,7 +102,7 @@ func TestResolveToken_refusedExchangeIsAnError(t *testing.T) {
 	withActionsEnv(t, actions.URL)
 	sherrinford, _ := sherrinfordServer(t, http.StatusUnauthorized, "")
 
-	_, err := ResolveToken(context.Background(), sherrinford.URL, "static-tok")
+	_, err := ResolveToken(context.Background(), sherrinford.URL, "static-tok", "appknox-tok")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "401")
 }
@@ -114,14 +114,14 @@ func TestResolveToken_audienceIsOverridable(t *testing.T) {
 	t.Setenv("APPKNOX_AUTOFIX_OIDC_AUDIENCE", "api://custom")
 	sherrinford, _ := sherrinfordServer(t, http.StatusOK, "s")
 
-	_, err := ResolveToken(context.Background(), sherrinford.URL, "")
+	_, err := ResolveToken(context.Background(), sherrinford.URL, "", "appknox-tok")
 	require.NoError(t, err)
 	require.Equal(t, "api://custom", *gotAudience)
 }
 
 // The id-token is a bearer credential; it must never reach a plaintext endpoint.
 func TestExchangeForSession_refusesPlaintextRemote(t *testing.T) {
-	_, err := ExchangeForSession(context.Background(), "http://sherrinford.example", "tok")
+	_, err := ExchangeForSession(context.Background(), "http://sherrinford.example", "tok", "ak")
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "https"), "want a plaintext refusal, got: %v", err)
 }

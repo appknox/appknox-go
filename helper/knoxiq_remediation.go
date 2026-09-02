@@ -115,10 +115,14 @@ func fixableKnoxIQFindings(
 
 // knoxIQInputs turns the fixable findings into the locate + fix inputs.
 //
-// Criteria are KnoxIQ's own verification steps. An empty Criteria means "could
-// not check" -- typically a finding analysed before the storage layer stopped
-// discarding the field -- and must never be read downstream as "checked and
-// passed".
+// Criteria come from remediation.verification and NOTHING ELSE. remediation.steps
+// often names the same symbols and would usually work, but steps are
+// instructions ("replace X with Y") while verification is an assertion ("confirm
+// X is gone"). Checking a patch against instructions passes by coincidence of
+// wording, and a gate that is right by accident is not a gate.
+//
+// Empty Criteria therefore means "could not check", never "nothing to check",
+// and the run says so rather than delivering an unverified patch.
 func knoxIQInputs(findings []*appknox.KnoxIQFinding, vulnerabilityName string) FindingInputs {
 	var instructions, criteria []string
 	seenHint := map[string]bool{}

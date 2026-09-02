@@ -72,11 +72,15 @@ func actionsIDToken(ctx context.Context, audience string) (string, error) {
 // The endpoint is validated before the id-token is sent: that token is a bearer
 // credential, and putting it on the wire in plaintext would hand it to anyone on
 // the path.
-func ExchangeForSession(ctx context.Context, gatewayURL, idToken string) (string, error) {
+func ExchangeForSession(ctx context.Context, gatewayURL, idToken, appknoxToken string) (string, error) {
 	if err := ValidateEndpoint(gatewayURL); err != nil {
 		return "", err
 	}
-	body, err := json.Marshal(map[string]string{"oidc_token": idToken})
+	// Both credentials go up: the id-token proves which run is calling, the
+	// Appknox token proves the account is entitled to spend. Sherrinford's
+	// repository allow-list is open by default, so this is what authorises.
+	body, err := json.Marshal(map[string]string{
+		"oidc_token": idToken, "appknox_token": appknoxToken})
 	if err != nil {
 		return "", err
 	}
@@ -108,7 +112,7 @@ func ExchangeForSession(ctx context.Context, gatewayURL, idToken string) (string
 // A refused exchange is an ERROR, never a fallback to the static token. Falling
 // back would turn "this repository is not allow-listed" into a silent downgrade,
 // which is precisely the signal an operator needs to see.
-func ResolveToken(ctx context.Context, gatewayURL, staticToken string) (string, error) {
+func ResolveToken(ctx context.Context, gatewayURL, staticToken, appknoxToken string) (string, error) {
 	audience := os.Getenv("APPKNOX_AUTOFIX_OIDC_AUDIENCE")
 	if audience == "" {
 		audience = defaultOIDCAudience
@@ -119,7 +123,7 @@ func ResolveToken(ctx context.Context, gatewayURL, staticToken string) (string, 
 		return "", err
 	}
 	if idToken != "" {
-		return ExchangeForSession(ctx, gatewayURL, idToken)
+		return ExchangeForSession(ctx, gatewayURL, idToken, appknoxToken)
 	}
 	if staticToken != "" {
 		return staticToken, nil

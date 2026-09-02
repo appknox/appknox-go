@@ -12,6 +12,7 @@ import (
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/appknox/appknox-go/fixservice"
 	"github.com/appknox/appknox-go/ghfetch"
+	"github.com/spf13/viper"
 )
 
 // AutofixOptions carries the flags for the client-side autofix flow.
@@ -104,7 +105,8 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	// In CI this mints a per-run session token from the runner's OIDC identity,
 	// so no long-lived gateway secret has to be stored anywhere.
 	token, err := fixservice.ResolveToken(ctx, gatewayURL,
-		firstNonEmpty(opts.FixToken, os.Getenv("APPKNOX_AUTOFIX_FIX_TOKEN")))
+		firstNonEmpty(opts.FixToken, os.Getenv("APPKNOX_AUTOFIX_FIX_TOKEN")),
+		viper.GetString("access-token"))
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -381,7 +383,9 @@ func printOutOfScope(out Outcome) {
 // patch must never look like a clean one.
 func printVerification(report VerificationReport) {
 	if len(report.Results) == 0 {
-		fmt.Println("\nverification: no KnoxIQ criteria recorded for this finding — patch NOT checked")
+		fmt.Println("\nverification MISSING: KnoxIQ recorded no remediation.verification " +
+			"for this finding, so the patch was NOT checked. A real run refuses to " +
+			"deliver; re-run the analysis to populate it.")
 		return
 	}
 	fmt.Printf("\nverification: %s\n", report.Summary())
