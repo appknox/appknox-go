@@ -28,13 +28,17 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 	if token == "" {
 		return "", errors.New("--push-branch needs a GitHub token (--github-token or GITHUB_TOKEN)")
 	}
-	cfg := ghpr.Config{Owner: owner, Repo: name, BaseRef: opts.Ref, Token: token}
+	// The fix belongs beside the work that produced it, so it targets the source
+	// feature branch rather than the repository default.
+	source := SourceBranch(opts.SourceBranch)
+	base := firstNonEmpty(source, opts.Ref)
+	cfg := ghpr.Config{Owner: owner, Repo: name, BaseRef: base, Token: token}
 
 	files := make([]ghpr.FileChange, len(patches))
 	for i, p := range patches {
 		files[i] = ghpr.FileChange{Path: p.Path, Content: p.Content, Message: commitMessage(inputs, p.Path)}
 	}
-	branch := prBranch(opts.PRNumber, opts.AnalysisID, patches[0].Path)
+	branch := prBranch(source, opts.PRNumber, opts.AnalysisID, patches[0].Path)
 	if _, err := ghpr.PushFiles(ctx, cfg, branch, files); err != nil {
 		return "", err
 	}
@@ -47,18 +51,25 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 		return existing, nil
 	}
 	return ghpr.OpenDraftPR(ctx, cfg, ghpr.PullRequest{
-		Branch: branch, Base: opts.Ref,
-		Title:  prTitle(inputs),
-		Body:   prBody(inputs, patches),
+		Branch: branch, Base: base,
+		Title: prTitle(inputs),
+		Body:  prBody(inputs, patches),
 	})
 }
 
 // prBranch is a stable branch name for the fix.
 //
-// The originating pull request is part of the name so a reviewer can tell at a
-// glance which PR a fix belongs to, and so concurrent fixes for the same
-// analysis on different PRs cannot collide on one branch.
-func prBranch(prNumber, analysisID int, path string) string {
+// Keyed on the SOURCE FEATURE BRANCH where possible: one active autofix branch
+// and one draft PR per feature branch, so a second scan of the same branch
+// updates them rather than opening another. Keying on the scan or the analysis
+// instead is how a busy branch ends up with a dozen remediation PRs.
+//
+// The older analysis- and hash-based names remain as fallbacks for runs outside
+// CI, where no branch context exists.
+func prBranch(sourceBranch string, prNumber, analysisID int, path string) string {
+	if name := autofixBranchFor(sourceBranch); name != "" {
+		return name
+	}
 	switch {
 	case prNumber > 0 && analysisID > 0:
 		return fmt.Sprintf("bugfix/appknox-autofix-%d-%d", prNumber, analysisID)

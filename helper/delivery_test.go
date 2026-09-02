@@ -8,8 +8,8 @@ import (
 )
 
 func TestPrBranch(t *testing.T) {
-	require.Equal(t, "appknox-autofix/analysis-42", prBranch(0, 42, "a.java"))
-	require.Contains(t, prBranch(0, 0, "app/Main.java"), "appknox-autofix/fix-") // no id → hashed
+	require.Equal(t, "appknox-autofix/analysis-42", prBranch("", 0, 42, "a.java"))
+	require.Contains(t, prBranch("", 0, 0, "app/Main.java"), "appknox-autofix/fix-") // no id → hashed
 }
 
 func TestCommitMessage(t *testing.T) {

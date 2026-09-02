@@ -35,6 +35,13 @@ type AutofixOptions struct {
 	// AllowUnverified ships a patch KnoxIQ gave us no way to check. Never
 	// ships one that demonstrably FAILS a check.
 	AllowUnverified bool
+	// SourceBranch is the feature branch being remediated. The autofix branch
+	// and the PR base both derive from it, so repeated scans of one branch
+	// update a single PR instead of opening a new one each time.
+	SourceBranch string
+	// RiskThreshold is the minimum computed risk worth fixing, matching the
+	// severity policy the customer already sets on cicheck.
+	RiskThreshold int
 }
 
 // autofixDeps are the injectable collaborators (seams for cost-free tests).
@@ -45,7 +52,7 @@ type autofixDeps struct {
 	deliver  func(ctx context.Context, opts AutofixOptions, patches []filePatch, inputs FindingInputs) (string, error)
 	prFiles  func(ctx context.Context, opts AutofixOptions) ([]string, error)
 	// analysisIDs lists the analyses on a file worth attempting.
-	analysisIDs func(ctx context.Context, fileID int) ([]int, error)
+	analysisIDs func(ctx context.Context, fileID, riskThreshold int) ([]int, error)
 }
 
 func defaultDeps() autofixDeps {
@@ -136,13 +143,23 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	// Every target is attempted, then everything that passed its own gate is
 	// delivered together. One branch per scan, not one per finding.
 	var out Outcome
+	work := newWorkingTree(root)
 	for _, t := range targets {
-		session := fixSession{opts: opts, d: d, root: root, fixCfg: fixCfg, inputs: t.Inputs}
+		session := fixSession{opts: opts, d: d, root: root, fixCfg: fixCfg, inputs: t.Inputs, work: work}
 		if err := session.attempt(ctx, t, &out); err != nil {
 			return out, err
 		}
 	}
-	if len(out.Patches) == 0 || opts.DryRun {
+	// One entry per file, carrying every fix applied to it.
+	out.Patches = latestPerPath(out.Patches)
+
+	// Fixes are written to the tree as they are produced so each analysis can
+	// build on the last. Unless the caller actually wants them applied locally,
+	// put the checkout back exactly as we found it.
+	if opts.DryRun || opts.PushBranch {
+		defer func() { _ = work.restore() }()
+	}
+	if opts.DryRun || len(out.Patches) == 0 {
 		return out, nil
 	}
 	return deliverAll(ctx, opts, d, root, out, targets)
@@ -172,10 +189,36 @@ func (s fixSession) attempt(ctx context.Context, t analysisTarget, out *Outcome)
 	} else if err := s.gate(produced.Verification); err != nil {
 		report.Skipped = err.Error()
 	} else {
+		// Land each fix in the tree straight away: the next analysis must see it,
+		// or two findings in one file will be fixed against the same original and
+		// the later push will discard the earlier one.
+		for _, p := range produced.Patches {
+			if err := s.work.apply(p.Path, p.Content); err != nil {
+				return err
+			}
+		}
 		out.Patches = append(out.Patches, produced.Patches...)
 	}
 	out.Analyses = append(out.Analyses, report)
 	return nil
+}
+
+// latestPerPath collapses patches to one entry per file, keeping the newest.
+//
+// Because each fix was applied to the tree before the next analysis ran, the
+// newest content already contains every earlier fix to that file.
+func latestPerPath(patches []filePatch) []filePatch {
+	index := map[string]int{}
+	var out []filePatch
+	for _, p := range patches {
+		if at, seen := index[p.Path]; seen {
+			out[at] = p
+			continue
+		}
+		index[p.Path] = len(out)
+		out = append(out, p)
+	}
+	return out
 }
 
 // gate applies the verification gate, honouring --allow-unverified.
@@ -203,10 +246,8 @@ func deliverAll(
 		out.BranchURL = url
 		return out, nil
 	}
+	// Already written to the tree as each analysis produced it; just record it.
 	for i := range out.Patches {
-		if err := applyPatch(root, out.Patches[i].Path, out.Patches[i].Content); err != nil {
-			return out, err
-		}
 		out.Patches[i].Applied = true
 	}
 	return out, nil
@@ -220,6 +261,49 @@ type fixSession struct {
 	root   string
 	fixCfg fixservice.Config
 	inputs FindingInputs
+
+	// work is shared across analyses so two findings in the same file compose
+	// instead of overwriting each other.
+	work *workingTree
+}
+
+// workingTree tracks edits made during a run so later analyses see earlier
+// fixes.
+//
+// Each analysis fixes a file starting from whatever is on disk. Without this,
+// two findings in one file would each be fixed against the ORIGINAL content and
+// the second push would silently clobber the first -- which is exactly what
+// happened on mfva PR #18, where a crypto fix was lost to a PRNG fix in the same
+// file.
+type workingTree struct {
+	root     string
+	original map[string]string // path -> content before we touched it
+}
+
+func newWorkingTree(root string) *workingTree {
+	return &workingTree{root: root, original: map[string]string{}}
+}
+
+// apply writes a patch to the tree, remembering the original content once.
+func (w *workingTree) apply(path, content string) error {
+	if _, seen := w.original[path]; !seen {
+		before, err := readUnderRoot(w.root, path)
+		if err != nil {
+			return err
+		}
+		w.original[path] = before
+	}
+	return applyPatch(w.root, path, content)
+}
+
+// restore puts every touched file back, for a dry run that must leave no trace.
+func (w *workingTree) restore() error {
+	for path, content := range w.original {
+		if err := applyPatch(w.root, path, content); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // produce locates each first-party class, fixes each located file, and checks

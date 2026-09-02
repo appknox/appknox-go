@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"strings"
+
+	"github.com/appknox/appknox-go/appknox/enums"
 	"github.com/appknox/appknox-go/helper"
 	"github.com/spf13/cobra"
 )
@@ -33,8 +36,28 @@ gateway (which holds the provider key). No provider key is needed here.`,
 		opts.PRNumber, _ = f.GetInt("pr-number")
 		opts.Scope, _ = f.GetString("scope")
 		opts.AllowUnverified, _ = f.GetBool("allow-unverified")
+		opts.SourceBranch, _ = f.GetString("source-branch")
+		riskName, _ := f.GetString("risk-threshold")
+		opts.RiskThreshold = parseRiskThreshold(riskName)
 		helper.ProcessAutofix(opts)
 	},
+}
+
+// parseRiskThreshold maps the CLI severity name onto Appknox's risk scale,
+// mirroring cicheck so one policy covers both gating and remediation.
+func parseRiskThreshold(name string) int {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "critical":
+		return int(enums.Risk.Critical)
+	case "high":
+		return int(enums.Risk.High)
+	case "medium":
+		return int(enums.Risk.Medium)
+	case "low":
+		return int(enums.Risk.Low)
+	}
+	// Anything else, including health-score mode, considers every finding.
+	return int(enums.Risk.Passed)
 }
 
 func init() {
@@ -54,6 +77,8 @@ func init() {
 	f.Bool("push-branch", false, "Push the fix to a new GitHub branch (needs --repo + GITHUB_TOKEN) instead of local apply")
 	f.Bool("list-analyses", false, "List the file's analyses + derived class hints, then exit (needs --file-id)")
 	f.Int("pr-number", 0, "Originating pull request: names the fix branch and (by default) scopes the fix to its files")
+	f.String("source-branch", "", "Feature branch being remediated; the autofix branch and PR base derive from it (default: the CI branch)")
+	f.String("risk-threshold", "low", "Lowest risk worth fixing: low, medium, high or critical. Matches the cicheck policy")
 	f.Bool("allow-unverified", false, "Deliver a fix KnoxIQ gave us no way to check. Never delivers one that FAILS a check; the PR is stamped NOT VERIFIED")
 	f.String("scope", "", "Which files may be fixed: 'pr' (default when --pr-number is set) or 'repo' for the whole checkout")
 }

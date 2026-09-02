@@ -35,7 +35,7 @@ func withCriteria(finding, hint string) FindingInputs {
 func TestRunAutofix_AllAnalyses_fixesEveryFinding(t *testing.T) {
 	root, a, b := multiFileRepo(t)
 	d := deps("", fixResult{Changed: true, PatchedContent: "fixed with SecureRandom\n"}, FindingInputs{})
-	d.analysisIDs = func(context.Context, int) ([]int, error) { return []int{101, 102}, nil }
+	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{101, 102}, nil }
 	d.fetch = func(_ context.Context, _, analysisID int) (FindingInputs, error) {
 		if analysisID == 101 {
 			return withCriteria("Weak PRNG", "com/x/A"), nil
@@ -59,7 +59,7 @@ func TestRunAutofix_AllAnalyses_deliversOnce(t *testing.T) {
 	root, a, b := multiFileRepo(t)
 	var deliveries, delivered = 0, 0
 	d := deps("", fixResult{Changed: true, PatchedContent: "fixed with SecureRandom\n"}, FindingInputs{})
-	d.analysisIDs = func(context.Context, int) ([]int, error) { return []int{101, 102}, nil }
+	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{101, 102}, nil }
 	d.fetch = func(_ context.Context, _, id int) (FindingInputs, error) {
 		if id == 101 {
 			return withCriteria("A", "com/x/A"), nil
@@ -88,7 +88,7 @@ func TestRunAutofix_AllAnalyses_deliversOnce(t *testing.T) {
 func TestRunAutofix_AllAnalyses_holdsBackOnlyTheUnverified(t *testing.T) {
 	root, a, b := multiFileRepo(t)
 	d := deps("", fixResult{Changed: true, PatchedContent: "fixed with SecureRandom\n"}, FindingInputs{})
-	d.analysisIDs = func(context.Context, int) ([]int, error) { return []int{101, 102}, nil }
+	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{101, 102}, nil }
 	d.fetch = func(_ context.Context, _, id int) (FindingInputs, error) {
 		if id == 101 {
 			return withCriteria("good", "com/x/A"), nil
@@ -121,7 +121,7 @@ func TestRunAutofix_AllAnalyses_holdsBackOnlyTheUnverified(t *testing.T) {
 // A single bad analysis should not cost the developer the rest of the scan.
 func TestResolveTargets_skipsAnalysesThatFailToResolve(t *testing.T) {
 	d := defaultDeps()
-	d.analysisIDs = func(context.Context, int) ([]int, error) { return []int{1, 2}, nil }
+	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{1, 2}, nil }
 	d.fetch = func(_ context.Context, _, id int) (FindingInputs, error) {
 		if id == 1 {
 			return FindingInputs{}, errors.New("knoxiq blew up")
@@ -136,7 +136,7 @@ func TestResolveTargets_skipsAnalysesThatFailToResolve(t *testing.T) {
 
 func TestResolveTargets_errorsWhenNothingIsFixable(t *testing.T) {
 	d := defaultDeps()
-	d.analysisIDs = func(context.Context, int) ([]int, error) { return []int{1}, nil }
+	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{1}, nil }
 	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
 		return FindingInputs{Finding: "x"}, nil // no remediation
 	}

@@ -65,12 +65,14 @@ func resolveTargets(ctx context.Context, opts AutofixOptions, d autofixDeps) ([]
 func everyLocatableAnalysis(
 	ctx context.Context, opts AutofixOptions, d autofixDeps,
 ) ([]analysisTarget, error) {
-	ids, err := d.analysisIDs(ctx, opts.FileID)
+	ids, err := d.analysisIDs(ctx, opts.FileID, opts.RiskThreshold)
 	if err != nil {
 		return nil, err
 	}
 	if len(ids) == 0 {
-		return nil, fmt.Errorf("no analysis on file %d names a first-party class to fix", opts.FileID)
+		return nil, fmt.Errorf(
+			"no analysis on file %d both names a first-party class and meets the risk threshold",
+			opts.FileID)
 	}
 	fmt.Printf("Considering %d analyses on file %d\n", len(ids), opts.FileID)
 
@@ -93,15 +95,28 @@ func everyLocatableAnalysis(
 	return targets, nil
 }
 
-// locatableAnalysisIDs returns the analyses on a file that reference a
-// first-party class -- the ones a fix could actually be located for.
-func locatableAnalysisIDs(ctx context.Context, fileID int) ([]int, error) {
+// locatableAnalysisIDs returns the analyses on a file worth attempting.
+//
+// Two filters, both local and free:
+//
+//   - the analysis must name a first-party class, or no fix could be located.
+//   - its computed risk must meet the configured threshold. Autofix reuses the
+//     severity policy the customer already sets on cicheck rather than
+//     introducing a second one just for remediation -- nobody should have to
+//     configure "which vulnerabilities matter" twice.
+//
+// A threshold of 0 (Passed) means everything, which is what health-score mode
+// wants: a health score implies no severity cutoff.
+func locatableAnalysisIDs(ctx context.Context, fileID, riskThreshold int) ([]int, error) {
 	all, err := allAnalyses(ctx, getClient(), fileID)
 	if err != nil {
 		return nil, err
 	}
 	var ids []int
 	for _, a := range all {
+		if int(a.ComputedRisk) < riskThreshold {
+			continue
+		}
 		if len(classHintsFromFindings(findingsText(a))) > 0 {
 			ids = append(ids, a.ID)
 		}
