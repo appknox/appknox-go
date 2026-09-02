@@ -150,7 +150,27 @@ func checkCriteria(patches []filePatch, criteria []string) VerificationReport {
 // "Could not check" must never be reported as success; that is exactly how a
 // broken patch would reach a customer's branch.
 func VerificationGate(report VerificationReport, criteriaCount int) error {
+	return verificationGate(report, criteriaCount, false)
+}
+
+// VerificationGateAllowingUnverified is the same gate with the "could not
+// check" cases downgraded to a warning.
+//
+// It never permits a VIOLATED criterion. The distinction matters: "we could not
+// check this patch" is a gap in our inputs, while "this patch demonstrably
+// fails KnoxIQ's own test" is a broken fix, and no flag should ship the latter.
+//
+// The unverified state is stamped on the pull request body, so a reviewer is
+// told rather than left to assume the fix was checked.
+func VerificationGateAllowingUnverified(report VerificationReport, criteriaCount int) error {
+	return verificationGate(report, criteriaCount, true)
+}
+
+func verificationGate(report VerificationReport, criteriaCount int, allowUnverified bool) error {
 	if criteriaCount == 0 {
+		if allowUnverified {
+			return nil
+		}
 		return fmt.Errorf(
 			"refusing to deliver: KnoxIQ supplied no verification criteria for this " +
 				"finding, so the patch cannot be checked (re-run the analysis to " +
@@ -161,6 +181,9 @@ func VerificationGate(report VerificationReport, criteriaCount int) error {
 			report.Summary(), violated[0].Detail)
 	}
 	if report.Checked() == 0 {
+		if allowUnverified {
+			return nil
+		}
 		return fmt.Errorf(
 			"refusing to deliver: %s — none of KnoxIQ's criteria could be "+
 				"machine-checked against this patch", report.Summary())

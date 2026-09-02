@@ -32,6 +32,9 @@ type AutofixOptions struct {
 	ListAnalyses bool   // print the file's analyses + class hints, then exit
 	PRNumber     int    // originating pull request; scopes the fix and names the branch
 	Scope        string // "pr" (only files changed in PRNumber) or "repo"
+	// AllowUnverified ships a patch KnoxIQ gave us no way to check. Never
+	// ships one that demonstrably FAILS a check.
+	AllowUnverified bool
 }
 
 // autofixDeps are the injectable collaborators (seams for cost-free tests).
@@ -166,13 +169,21 @@ func (s fixSession) attempt(ctx context.Context, t analysisTarget, out *Outcome)
 
 	if len(produced.Patches) == 0 {
 		report.Skipped = "no change produced"
-	} else if err := VerificationGate(produced.Verification, len(s.inputs.Criteria)); err != nil {
+	} else if err := s.gate(produced.Verification); err != nil {
 		report.Skipped = err.Error()
 	} else {
 		out.Patches = append(out.Patches, produced.Patches...)
 	}
 	out.Analyses = append(out.Analyses, report)
 	return nil
+}
+
+// gate applies the verification gate, honouring --allow-unverified.
+func (s fixSession) gate(report VerificationReport) error {
+	if s.opts.AllowUnverified {
+		return VerificationGateAllowingUnverified(report, len(s.inputs.Criteria))
+	}
+	return VerificationGate(report, len(s.inputs.Criteria))
 }
 
 // deliverAll pushes every verified patch to a single branch and pull request.

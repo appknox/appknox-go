@@ -32,6 +32,7 @@ gateway (which holds the provider key). No provider key is needed here.`,
 		opts.ListAnalyses, _ = f.GetBool("list-analyses")
 		opts.PRNumber, _ = f.GetInt("pr-number")
 		opts.Scope, _ = f.GetString("scope")
+		opts.AllowUnverified, _ = f.GetBool("allow-unverified")
 		helper.ProcessAutofix(opts)
 	},
 }
@@ -53,5 +54,6 @@ func init() {
 	f.Bool("push-branch", false, "Push the fix to a new GitHub branch (needs --repo + GITHUB_TOKEN) instead of local apply")
 	f.Bool("list-analyses", false, "List the file's analyses + derived class hints, then exit (needs --file-id)")
 	f.Int("pr-number", 0, "Originating pull request: names the fix branch and (by default) scopes the fix to its files")
+	f.Bool("allow-unverified", false, "Deliver a fix KnoxIQ gave us no way to check. Never delivers one that FAILS a check; the PR is stamped NOT VERIFIED")
 	f.String("scope", "", "Which files may be fixed: 'pr' (default when --pr-number is set) or 'repo' for the whole checkout")
 }
