@@ -95,9 +95,18 @@ func ProcessAutofix(opts AutofixOptions) {
 
 // runAutofix: resolve inputs → locate each class → fix each file → deliver.
 func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcome, error) {
-	token := firstNonEmpty(opts.FixToken, os.Getenv("APPKNOX_AUTOFIX_FIX_TOKEN"))
-	if token == "" {
-		return Outcome{}, errors.New("fix-service token required (--fix-token or APPKNOX_AUTOFIX_FIX_TOKEN)")
+	gatewayURL := firstNonEmpty(opts.FixURL, "http://localhost:8100")
+	// Gate the endpoint before ANY credential is sent: the id-token exchange
+	// below, and every later model turn, carry bearer credentials (CWE-319).
+	if err := fixservice.ValidateEndpoint(gatewayURL); err != nil {
+		return Outcome{}, err
+	}
+	// In CI this mints a per-run session token from the runner's OIDC identity,
+	// so no long-lived gateway secret has to be stored anywhere.
+	token, err := fixservice.ResolveToken(ctx, gatewayURL,
+		firstNonEmpty(opts.FixToken, os.Getenv("APPKNOX_AUTOFIX_FIX_TOKEN")))
+	if err != nil {
+		return Outcome{}, err
 	}
 	inputs, err := resolveInputs(ctx, opts, d.fetch)
 	if err != nil {
@@ -109,13 +118,7 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	}
 	defer cleanup()
 
-	fixCfg := fixservice.Config{URL: firstNonEmpty(opts.FixURL, "http://localhost:8100"), Token: token}
-	// Gate the endpoint before ANY call: locate routes the same token+prompt
-	// through this URL first, so a plaintext-remote check only on the fix leg
-	// would still leak the token during locate (CWE-319).
-	if err := fixservice.ValidateEndpoint(fixCfg.URL); err != nil {
-		return Outcome{}, err
-	}
+	fixCfg := fixservice.Config{URL: gatewayURL, Token: token}
 	return fixSession{opts: opts, d: d, root: root, fixCfg: fixCfg, inputs: inputs}.run(ctx)
 }
 
