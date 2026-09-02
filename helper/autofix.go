@@ -41,15 +41,18 @@ type autofixDeps struct {
 	agentFix func(ctx context.Context, cfg agent.Config, req agent.FixRequest) (agent.FixResult, error)
 	deliver  func(ctx context.Context, opts AutofixOptions, patches []filePatch, inputs FindingInputs) (string, error)
 	prFiles  func(ctx context.Context, opts AutofixOptions) ([]string, error)
+	// analysisIDs lists the analyses on a file worth attempting.
+	analysisIDs func(ctx context.Context, fileID int) ([]int, error)
 }
 
 func defaultDeps() autofixDeps {
 	return autofixDeps{
-		locate:   agent.LocateFile,
-		fetch:    fetchAppknoxInputs,
-		agentFix: agent.FixFile,
-		deliver:  deliverBranch,
-		prFiles:  fetchPRFiles,
+		locate:      agent.LocateFile,
+		fetch:       fetchAppknoxInputs,
+		agentFix:    agent.FixFile,
+		deliver:     deliverBranch,
+		prFiles:     fetchPRFiles,
+		analysisIDs: locatableAnalysisIDs,
 	}
 }
 
@@ -75,6 +78,11 @@ type Outcome struct {
 	// OutOfScope lists located files the fix deliberately did NOT touch because
 	// they fall outside the pull request being scanned (--scope pr).
 	OutOfScope []string
+
+	// Analyses records every analysis attempted and what became of it, so a run
+	// covering a whole file can say which findings were delivered and which were
+	// held back, rather than reporting only the aggregate.
+	Analyses []analysisReport
 }
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
@@ -110,7 +118,7 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	if err != nil {
 		return Outcome{}, err
 	}
-	inputs, err := resolveInputs(ctx, opts, d.fetch)
+	targets, err := resolveTargets(ctx, opts, d)
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -121,7 +129,76 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	defer cleanup()
 
 	fixCfg := fixservice.Config{URL: gatewayURL, Token: token}
-	return fixSession{opts: opts, d: d, root: root, fixCfg: fixCfg, inputs: inputs}.run(ctx)
+
+	// Every target is attempted, then everything that passed its own gate is
+	// delivered together. One branch per scan, not one per finding.
+	var out Outcome
+	for _, t := range targets {
+		session := fixSession{opts: opts, d: d, root: root, fixCfg: fixCfg, inputs: t.Inputs}
+		if err := session.attempt(ctx, t, &out); err != nil {
+			return out, err
+		}
+	}
+	if len(out.Patches) == 0 || opts.DryRun {
+		return out, nil
+	}
+	return deliverAll(ctx, opts, d, root, out, targets)
+}
+
+// attempt runs one analysis and folds its result into the aggregate outcome.
+//
+// A patch that fails its own criteria is held back rather than aborting the
+// run: the other findings in the scan are still worth delivering.
+func (s fixSession) attempt(ctx context.Context, t analysisTarget, out *Outcome) error {
+	produced, err := s.produce(ctx)
+	if err != nil {
+		return err
+	}
+	report := analysisReport{
+		AnalysisID:   t.AnalysisID,
+		Finding:      t.Inputs.Finding,
+		Located:      produced.Located,
+		Patches:      len(produced.Patches),
+		Verification: produced.Verification,
+	}
+	out.Located = append(out.Located, produced.Located...)
+	out.OutOfScope = append(out.OutOfScope, produced.OutOfScope...)
+
+	if len(produced.Patches) == 0 {
+		report.Skipped = "no change produced"
+	} else if err := VerificationGate(produced.Verification, len(s.inputs.Criteria)); err != nil {
+		report.Skipped = err.Error()
+	} else {
+		out.Patches = append(out.Patches, produced.Patches...)
+	}
+	out.Analyses = append(out.Analyses, report)
+	return nil
+}
+
+// deliverAll pushes every verified patch to a single branch and pull request.
+func deliverAll(
+	ctx context.Context, opts AutofixOptions, d autofixDeps, root string,
+	out Outcome, targets []analysisTarget,
+) (Outcome, error) {
+	inputs := targets[0].Inputs
+	if len(targets) > 1 {
+		inputs = FindingInputs{Finding: fmt.Sprintf("%d findings", len(out.Analyses))}
+	}
+	if opts.PushBranch {
+		url, err := d.deliver(ctx, opts, out.Patches, inputs)
+		if err != nil {
+			return out, err
+		}
+		out.BranchURL = url
+		return out, nil
+	}
+	for i := range out.Patches {
+		if err := applyPatch(root, out.Patches[i].Path, out.Patches[i].Content); err != nil {
+			return out, err
+		}
+		out.Patches[i].Applied = true
+	}
+	return out, nil
 }
 
 // fixSession carries the resolved context for locating + fixing one finding's
@@ -134,8 +211,10 @@ type fixSession struct {
 	inputs FindingInputs
 }
 
-// run locates each first-party class, fixes each located file, then delivers.
-func (s fixSession) run(ctx context.Context) (Outcome, error) {
+// produce locates each first-party class, fixes each located file, and checks
+// the result against KnoxIQ's criteria. It does NOT deliver: the caller collects
+// every analysis first so they can ship as one pull request.
+func (s fixSession) produce(ctx context.Context) (Outcome, error) {
 	paths, err := s.locateAll(ctx)
 	if err != nil {
 		return Outcome{}, err
@@ -158,17 +237,10 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 				Path: p, Content: res.PatchedContent, Diff: res.Diff})
 		}
 	}
-	// Check the patch against KnoxIQ's own criteria before anything is
-	// delivered. A dry run still reports the verdict so the developer sees what
-	// a real run would have decided.
+	// Check the patch against KnoxIQ's own criteria. A dry run reports the
+	// verdict too, so the developer sees what a real run would have decided.
 	out.Verification = checkCriteria(out.Patches, s.inputs.Criteria)
-	if len(out.Patches) == 0 || s.opts.DryRun {
-		return out, nil
-	}
-	if err := VerificationGate(out.Verification, len(s.inputs.Criteria)); err != nil {
-		return out, err
-	}
-	return s.deliver(ctx, out)
+	return out, nil
 }
 
 // locateAll locates the file for each class hint, returning the distinct paths.
@@ -218,20 +290,6 @@ func (s fixSession) deliver(ctx context.Context, out Outcome) (Outcome, error) {
 		out.Patches[i].Applied = true
 	}
 	return out, nil
-}
-
-// resolveInputs derives finding/hint/remediation from Appknox ids, or the flags.
-func resolveInputs(
-	ctx context.Context, opts AutofixOptions,
-	fetch func(context.Context, int, int) (FindingInputs, error),
-) (FindingInputs, error) {
-	if opts.FileID > 0 && opts.AnalysisID > 0 {
-		return fetch(ctx, opts.FileID, opts.AnalysisID)
-	}
-	if opts.Finding == "" {
-		return FindingInputs{}, errors.New("provide --file-id + --analysis-id, or --finding")
-	}
-	return FindingInputs{Finding: opts.Finding, ClassHints: []string{opts.ClassHint}}, nil
 }
 
 // resolveRepoRoot returns the repo root and a cleanup func: a local --repo-path,
@@ -361,9 +419,32 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 		}
 		fmt.Println(p.Diff)
 	}
+	printAnalyses(out)
 	printOutOfScope(out)
-	printVerification(out.Verification)
 	printDelivery(opts, out)
+}
+
+// printAnalyses reports every analysis attempted and what became of it.
+//
+// A whole-file run must say which findings were held back and why. Reporting
+// only the aggregate would let a partial delivery read as a complete one.
+func printAnalyses(out Outcome) {
+	if len(out.Analyses) == 0 {
+		return
+	}
+	fmt.Printf("\n%d analysis(es) attempted:\n", len(out.Analyses))
+	for _, a := range out.Analyses {
+		status := fmt.Sprintf("%d file(s) fixed", a.Patches)
+		if a.Skipped != "" {
+			status = "HELD BACK — " + a.Skipped
+		}
+		fmt.Printf("  [%d] %s: %s\n", a.AnalysisID, a.Finding, status)
+		if len(a.Verification.Results) > 0 {
+			fmt.Printf("       verification: %s\n", a.Verification.Summary())
+		} else if a.Patches > 0 {
+			fmt.Printf("       verification: MISSING — no remediation.verification recorded\n")
+		}
+	}
 }
 
 // printOutOfScope names files that were located but deliberately left alone

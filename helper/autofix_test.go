@@ -42,33 +42,6 @@ func TestResolveRepoRoot_RequiresRepoOrPath(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestResolveInputs_FromFlags(t *testing.T) {
-	called := false
-	fetch := func(context.Context, int, int) (FindingInputs, error) { called = true; return FindingInputs{}, nil }
-	in, err := resolveInputs(context.Background(),
-		AutofixOptions{Finding: "weak PRNG", ClassHint: "Main"}, fetch)
-	require.NoError(t, err)
-	require.Equal(t, "weak PRNG", in.Finding)
-	require.Equal(t, []string{"Main"}, in.ClassHints)
-	require.False(t, called) // flags path must not hit Appknox
-}
-
-func TestResolveInputs_FromAppknoxIDs(t *testing.T) {
-	fetch := func(_ context.Context, f, a int) (FindingInputs, error) {
-		require.Equal(t, 118, f)
-		require.Equal(t, 11754, a)
-		return FindingInputs{Finding: "Derived Crypto Keys", Remediation: "derive securely"}, nil
-	}
-	in, err := resolveInputs(context.Background(), AutofixOptions{FileID: 118, AnalysisID: 11754}, fetch)
-	require.NoError(t, err)
-	require.Equal(t, "derive securely", in.Remediation)
-}
-
-func TestResolveInputs_RequiresSomething(t *testing.T) {
-	_, err := resolveInputs(context.Background(), AutofixOptions{}, nil)
-	require.Error(t, err)
-}
-
 func TestListAnalyses_RequiresFileID(t *testing.T) {
 	require.Error(t, listAnalyses(0))
 }
