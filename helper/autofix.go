@@ -409,7 +409,16 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 	}
 	fmt.Printf("Located %d file(s): %s\n", len(out.Located), strings.Join(out.Located, ", "))
 	if len(out.Patches) == 0 {
-		fmt.Println("No change produced (advisory only).")
+		// "No change produced" and "changes produced, then withheld" look
+		// identical from the patch count and are completely different problems:
+		// one sends you to the fixer, the other to the gate. Say which.
+		if withheld := patchesWithheld(out); withheld > 0 {
+			fmt.Printf("%d fix(es) produced but NOT delivered — see below.\n", withheld)
+		} else {
+			fmt.Println("No change produced (advisory only).")
+		}
+		printAnalyses(out)
+		printOutOfScope(out)
 		return
 	}
 	for _, p := range out.Patches {
@@ -422,6 +431,17 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 	printAnalyses(out)
 	printOutOfScope(out)
 	printDelivery(opts, out)
+}
+
+// patchesWithheld counts fixes that were generated but held back by a gate.
+func patchesWithheld(out Outcome) int {
+	var n int
+	for _, a := range out.Analyses {
+		if a.Skipped != "" {
+			n += a.Patches
+		}
+	}
+	return n
 }
 
 // printAnalyses reports every analysis attempted and what became of it.
