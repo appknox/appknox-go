@@ -203,48 +203,57 @@ func TestCiCheckCommand_RequiredFileIDArg(t *testing.T) {
 	}
 }
 
+type gateActivationCase struct {
+	name       string
+	flags      map[string]string
+	wantRisk   int
+	wantLikeli int
+	wantHealth int
+	wantErr    bool
+}
+
+// assertGateActivation runs one gateActivationCase against parseCiPolicy.
+// Extracted from TestParseCiPolicy_GateActivation to keep that function's
+// cognitive complexity low.
+func assertGateActivation(t *testing.T, tt gateActivationCase) {
+	resetCiCheckFlags()
+	for k, v := range tt.flags {
+		cicheckCmd.Flags().Set(k, v)
+	}
+	policy, err := parseCiPolicy(cicheckCmd)
+	if tt.wantErr {
+		if err == nil {
+			t.Fatalf("expected error, got nil")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if policy.RiskThreshold != tt.wantRisk {
+		t.Errorf("risk = %d, want %d", policy.RiskThreshold, tt.wantRisk)
+	}
+	if policy.LikelihoodThreshold != tt.wantLikeli {
+		t.Errorf("likelihood = %d, want %d", policy.LikelihoodThreshold, tt.wantLikeli)
+	}
+	if policy.HealthScoreThreshold != tt.wantHealth {
+		t.Errorf("health = %d, want %d", policy.HealthScoreThreshold, tt.wantHealth)
+	}
+}
+
 func TestParseCiPolicy_GateActivation(t *testing.T) {
-	tests := []struct {
-		name       string
-		flags      map[string]string
-		wantRisk   int
-		wantLikeli int
-		wantHealth int
-		wantErr    bool
-	}{
+	tests := []gateActivationCase{
 		{"default risk", map[string]string{}, 1, -1, -1, false},
-		{"risk explicit", map[string]string{"risk-threshold": "high"}, 3, -1, -1, false},
-		{"likelihood only disables risk", map[string]string{"exploit-likelihood-threshold": "high"}, -1, 4, -1, false},
-		{"risk + likelihood", map[string]string{"risk-threshold": "medium", "exploit-likelihood-threshold": "low"}, 2, 2, -1, false},
-		{"health + likelihood", map[string]string{"health-score-threshold": "80", "exploit-likelihood-threshold": "high"}, -1, 4, 80, false},
-		{"risk + health error", map[string]string{"risk-threshold": "low", "health-score-threshold": "80"}, 0, 0, 0, true},
-		{"invalid likelihood", map[string]string{"exploit-likelihood-threshold": "bad"}, 0, 0, 0, true},
+		{"risk explicit", map[string]string{flagRiskThreshold: "high"}, 3, -1, -1, false},
+		{"likelihood only disables risk", map[string]string{flagExploitLikelihoodThreshold: "high"}, -1, 4, -1, false},
+		{"risk + likelihood", map[string]string{flagRiskThreshold: "medium", flagExploitLikelihoodThreshold: "low"}, 2, 2, -1, false},
+		{"health + likelihood", map[string]string{flagHealthScoreThreshold: "80", flagExploitLikelihoodThreshold: "high"}, -1, 4, 80, false},
+		{"risk + health error", map[string]string{flagRiskThreshold: "low", flagHealthScoreThreshold: "80"}, 0, 0, 0, true},
+		{"invalid likelihood", map[string]string{flagExploitLikelihoodThreshold: "bad"}, 0, 0, 0, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resetCiCheckFlags()
-			for k, v := range tt.flags {
-				cicheckCmd.Flags().Set(k, v)
-			}
-			policy, err := parseCiPolicy(cicheckCmd)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if policy.RiskThreshold != tt.wantRisk {
-				t.Errorf("risk = %d, want %d", policy.RiskThreshold, tt.wantRisk)
-			}
-			if policy.LikelihoodThreshold != tt.wantLikeli {
-				t.Errorf("likelihood = %d, want %d", policy.LikelihoodThreshold, tt.wantLikeli)
-			}
-			if policy.HealthScoreThreshold != tt.wantHealth {
-				t.Errorf("health = %d, want %d", policy.HealthScoreThreshold, tt.wantHealth)
-			}
+			assertGateActivation(t, tt)
 		})
 	}
 	resetCiCheckFlags()

@@ -1,10 +1,13 @@
 package helper
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -112,6 +115,130 @@ func knoxIQStatusServer(t *testing.T, sastStatus int) (*appknox.Client, func()) 
 	return getClient(), teardown
 }
 
+// knoxIQStatusCodeServer mocks a GetScanStatus call that fails at the HTTP
+// layer with the given status code (as opposed to knoxIQStatusServer, which
+// always returns 200 with a status body).
+func knoxIQStatusCodeServer(t *testing.T, statusCode int) (*appknox.Client, func()) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(statusCode)
+	}))
+	oldHost := viper.GetString("host")
+	oldToken := viper.GetString("access-token")
+	viper.Set("access-token", "FAKE-TOKEN")
+	viper.Set("host", server.URL+"/")
+	teardown := func() {
+		viper.Set("access-token", oldToken)
+		viper.Set("host", oldHost)
+		server.Close()
+	}
+	return getClient(), teardown
+}
+
+func TestKnoxIQAvailable_404IsQuiet(t *testing.T) {
+	client, teardown := knoxIQStatusCodeServer(t, 404)
+	defer teardown()
+	var status enums.KnoxIQScanStatusType
+	var available bool
+	errOut := captureStderr(func() {
+		status, available = knoxIQAvailable(context.Background(), client, 1)
+	})
+	assert.Equal(t, enums.KnoxIQStatusDisabled, status)
+	assert.False(t, available)
+	assert.Empty(t, errOut)
+}
+
+// captureStderr mirrors captureOutput but for os.Stderr, since PrintError
+// writes there rather than to stdout.
+func captureStderr(f func()) string {
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	f()
+
+	_ = w.Close()
+	os.Stderr = old
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	return buf.String()
+}
+
+func TestKnoxIQAvailable_ServerErrorIsLoud(t *testing.T) {
+	client, teardown := knoxIQStatusCodeServer(t, 500)
+	defer teardown()
+	var status enums.KnoxIQScanStatusType
+	var available bool
+	errOut := captureStderr(func() {
+		status, available = knoxIQAvailable(context.Background(), client, 1)
+	})
+	assert.Equal(t, enums.KnoxIQStatusDisabled, status)
+	assert.False(t, available)
+	assert.NotEmpty(t, errOut)
+}
+
+func TestKnoxIQAvailable_TrueWhenInProgressOrDone(t *testing.T) {
+	statuses := []enums.KnoxIQScanStatusType{
+		enums.KnoxIQStatusPending, enums.KnoxIQStatusRunning, enums.KnoxIQStatusCompleted,
+	}
+	for _, s := range statuses {
+		t.Run(s.String(), func(t *testing.T) {
+			client, teardown := knoxIQStatusServer(t, int(s))
+			defer teardown()
+			status, available := knoxIQAvailable(context.Background(), client, 1)
+			assert.Equal(t, s, status)
+			assert.True(t, available)
+		})
+	}
+}
+
+// TestKnoxIQAvailable_NotTriggeredHints covers the case a 403 cannot express:
+// the org has KnoxIQ, but this build never asked for triage. Silently falling
+// back to SAST hid a missing `--knoxiq` on the upload step.
+func TestKnoxIQAvailable_NotTriggeredHints(t *testing.T) {
+	client, teardown := knoxIQStatusServer(t, int(enums.KnoxIQStatusNotTriggered))
+	defer teardown()
+	var status enums.KnoxIQScanStatusType
+	var available bool
+	out := captureOutput(func() {
+		status, available = knoxIQAvailable(context.Background(), client, 1)
+	})
+	assert.Equal(t, enums.KnoxIQStatusNotTriggered, status)
+	assert.False(t, available)
+	assert.Contains(t, out, "--knoxiq")
+}
+
+// TestKnoxIQAvailable_DisabledIsQuiet is the counterpart: an org without the
+// feature gets no hint, because there is nothing the user can do about it.
+func TestKnoxIQAvailable_DisabledIsQuiet(t *testing.T) {
+	client, teardown := knoxIQStatusServer(t, int(enums.KnoxIQStatusDisabled))
+	defer teardown()
+	var available bool
+	out := captureOutput(func() {
+		_, available = knoxIQAvailable(context.Background(), client, 1)
+	})
+	assert.False(t, available)
+	assert.Empty(t, out)
+}
+
+// TestWaitForKnoxIQ_NotTriggered pins NOT_TRIGGERED as terminal: no trigger is
+// expected for this file, so polling would burn the whole KnoxIQ budget.
+func TestWaitForKnoxIQ_NotTriggered(t *testing.T) {
+	client, teardown := knoxIQStatusServer(t, int(enums.KnoxIQStatusNotTriggered))
+	defer teardown()
+	captureOutput(func() {
+		assert.False(t, waitForKnoxIQ(context.Background(), client, 1, time.Now().Add(time.Minute)))
+	})
+}
+
+func TestWaitForKnoxIQ_DeadlinePassed(t *testing.T) {
+	client, teardown := knoxIQStatusServer(t, int(enums.KnoxIQStatusRunning))
+	defer teardown()
+	captureOutput(func() {
+		assert.False(t, waitForKnoxIQ(context.Background(), client, 1, time.Now().Add(-time.Minute)))
+	})
+}
+
 func TestWaitForKnoxIQ_Completed(t *testing.T) {
 	client, teardown := knoxIQStatusServer(t, int(enums.KnoxIQStatusCompleted))
 	defer teardown()
@@ -150,6 +277,31 @@ func TestWarnLikelihoodUnavailable_NoOpWithoutLikelihoodGate(t *testing.T) {
 	policy := CiPolicy{RiskThreshold: -1, LikelihoodThreshold: -1}
 	warnLikelihoodUnavailable(&policy)
 	assert.Equal(t, -1, policy.RiskThreshold)
+}
+
+// TestReportKnoxIQGate_NeedsReviewExcludedFromGate: a finding at the highest
+// risk and likelihood severity must not fail the build when it is marked
+// needs-review — decideGates calling os.Exit(1) here would kill the test
+// process, so a passing test is itself proof the gate was skipped.
+func TestReportKnoxIQGate_NeedsReviewExcludedFromGate(t *testing.T) {
+	high := enums.Exploitability.High
+	rows := []*appknox.KnoxIQCICDAnalysis{
+		{
+			ID:                       1,
+			ComputedRisk:             enums.Risk.Critical,
+			ExploitabilityLikelihood: &high,
+			NeedsReview:              true,
+		},
+	}
+	policy := CiPolicy{
+		RiskThreshold:       int(enums.Risk.Low),
+		LikelihoodThreshold: int(enums.Exploitability.Low),
+	}
+	out := captureOutput(func() {
+		reportKnoxIQGate(1, policy, rows)
+	})
+	assert.NotContains(t, out, "Found")
+	assert.Contains(t, out, "No vulnerabilities found breaching the configured thresholds.")
 }
 
 func TestPrintActiveGates(t *testing.T) {

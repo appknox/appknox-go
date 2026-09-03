@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	// "github.com/appknox/appknox-go/appknox"
+	"github.com/appknox/appknox-go/helper"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -67,10 +68,10 @@ func init() {
 	// local flags would make the second binding silently win regardless of
 	// which command actually ran.
 	RootCmd.PersistentFlags().Int(
-		"knoxiq-timeout", 30, "KnoxIQ triage timeout in minutes, shared by cicheck and sarif (default: 30)")
-	viper.BindPFlag("knoxiq-timeout", RootCmd.PersistentFlags().Lookup("knoxiq-timeout"))
-	viper.BindEnv("knoxiq-timeout", "APPKNOX_KNOXIQ_TIMEOUT")
-	viper.SetDefault("knoxiq-timeout", 30)
+		helper.ConfigKeyKnoxIQTimeout, 30, "KnoxIQ triage timeout in minutes, shared by cicheck and sarif (default: 30)")
+	viper.BindPFlag(helper.ConfigKeyKnoxIQTimeout, RootCmd.PersistentFlags().Lookup(helper.ConfigKeyKnoxIQTimeout))
+	viper.BindEnv(helper.ConfigKeyKnoxIQTimeout, "APPKNOX_KNOXIQ_TIMEOUT")
+	viper.SetDefault(helper.ConfigKeyKnoxIQTimeout, 30)
 
 	RootCmd.InitDefaultVersionFlag()
 }
@@ -78,7 +79,7 @@ func init() {
 // knoxIQTimeoutMinutes reads and validates the shared --knoxiq-timeout
 // setting (1-240 minutes), used by both cicheck and sarif.
 func knoxIQTimeoutMinutes() (int, error) {
-	minutes := viper.GetInt("knoxiq-timeout")
+	minutes := viper.GetInt(helper.ConfigKeyKnoxIQTimeout)
 	if minutes < 1 || minutes > 240 {
 		return 0, errors.New("knoxiq-timeout must be between 1 and 240 minutes")
 	}
@@ -147,6 +148,9 @@ func initConfig() {
 	if err != nil {
 		fmt.Println(err.Error())
 		os.Exit(1)
+	}
+	if _, statErr := os.Stat(configFile); statErr == nil {
+		fmt.Println("Warning: config file exists but could not be read; recreating it.")
 	}
 	if err := createDefaultConfigFile(configFile); err != nil {
 		fmt.Println(err.Error())

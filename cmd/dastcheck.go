@@ -28,7 +28,7 @@ You can also filter vulnerabilities by using --risk-threshold <string>
             os.Exit(1)
         }
 
-        riskInput, _ := cmd.Flags().GetString("risk-threshold")
+        riskInput, _ := cmd.Flags().GetString(flagRiskThreshold)
         riskInputLower := strings.ToLower(riskInput)
 
         var riskThresholdInt int
@@ -61,7 +61,7 @@ func init() {
     RootCmd.AddCommand(dastCheckCmd)
 
     dastCheckCmd.Flags().StringP(
-        "risk-threshold", "r",
+        flagRiskThreshold, "r",
         "low",
         "Risk threshold to fail the command. Options: low, medium, high, critical",
     )

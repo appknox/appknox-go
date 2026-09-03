@@ -6,13 +6,15 @@ import (
 	"os"
 
 	"github.com/appknox/appknox-go/appknox"
+	"github.com/appknox/appknox-go/appknox/enums"
 	"github.com/spf13/viper"
 )
 
 // ConvertToSARIFReport generates a SARIF report for fileID and writes it to
-// filePath.
-func ConvertToSARIFReport(fileID int, riskThreshold int, filePath string, budget ScanBudget) error {
-	sarif, err := generateSARIF(fileID, riskThreshold, budget)
+// filePath. skipKnoxIQ produces the plain-SAST report immediately, without
+// waiting for or looking up KnoxIQ triage.
+func ConvertToSARIFReport(fileID int, riskThreshold int, filePath string, budget ScanBudget, skipKnoxIQ bool) error {
+	sarif, err := generateSARIF(fileID, riskThreshold, budget, skipKnoxIQ)
 	if err != nil {
 		return err
 	}
@@ -39,13 +41,17 @@ func ConvertToSARIFReport(fileID int, riskThreshold int, filePath string, budget
 // needs-review findings (Req 2/3 parity). SARIF is a report generator, not a
 // gate, so KnoxIQ not completing in time falls back to plain SAST results
 // rather than failing the command.
-func generateSARIF(fileID, riskThreshold int, budget ScanBudget) (appknox.SARIF, error) {
+func generateSARIF(fileID, riskThreshold int, budget ScanBudget, skipKnoxIQ bool) (appknox.SARIF, error) {
 	waitForStaticScan(fileID, budget)
 	ctx := context.Background()
 	client := getClient()
 
 	analyses := listAllAnalyses(ctx, client, fileID)
-	properties, excluded := knoxIQSARIFOverlay(ctx, client, fileID, budget)
+	properties := map[int]*appknox.ResultProperties{}
+	excluded := map[int]bool{}
+	if !skipKnoxIQ {
+		properties, excluded = knoxIQSARIFOverlay(ctx, client, fileID, budget)
+	}
 	filtered := filterAnalysesForSARIF(analyses, riskThreshold, excluded)
 	return appknox.BuildSARIF(ctx, client, filtered, properties)
 }
@@ -60,10 +66,11 @@ func knoxIQSARIFOverlay(
 	properties = map[int]*appknox.ResultProperties{}
 	excluded = map[int]bool{}
 
-	if _, available := knoxIQAvailable(ctx, client, fileID); !available {
+	status, available := knoxIQAvailable(ctx, client, fileID)
+	if !available {
 		return properties, excluded
 	}
-	if !waitForKnoxIQ(ctx, client, fileID, budget.KnoxIQDeadline()) {
+	if status != enums.KnoxIQStatusCompleted && !waitForKnoxIQ(ctx, client, fileID, budget.KnoxIQDeadline()) {
 		fmt.Println("\nKnoxIQ did not complete; SARIF will use SAST results only.")
 		return properties, excluded
 	}
@@ -73,7 +80,7 @@ func knoxIQSARIFOverlay(
 		return properties, excluded
 	}
 
-	_, needsReview := partitionNeedsReview(triaged, viper.GetBool("include-needs-review"))
+	_, needsReview := partitionNeedsReview(triaged, viper.GetBool(ConfigKeyIncludeNeedsReview))
 	for _, row := range needsReview {
 		excluded[row.ID] = true
 	}

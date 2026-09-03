@@ -29,7 +29,7 @@ func TestKnoxIQ_GetScanStatus(t *testing.T) {
 func TestKnoxIQ_ListCICDAnalyses(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()
-	mux.HandleFunc("/api/knoxiq/file/1/cicd/analyses", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/knoxiq/file/1/cicd_analyses", func(w http.ResponseWriter, r *http.Request) {
 		testMethod(t, r, "GET")
 		fmt.Fprint(w, `{"count":1,"results":[{"id":1,"computed_risk":3,`+
 			`"cvss_base":8.1,"vulnerability_id":9,"vulnerability_name":"SQLi",`+
@@ -59,7 +59,7 @@ func TestKnoxIQ_ListCICDAnalyses(t *testing.T) {
 func TestKnoxIQ_ListCICDAnalyses_404(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()
-	mux.HandleFunc("/api/knoxiq/file/1/cicd/analyses", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/knoxiq/file/1/cicd_analyses", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 

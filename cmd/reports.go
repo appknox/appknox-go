@@ -160,7 +160,7 @@ Files are saved to {output}/{file_id}/. Default output directory is ./reports/`,
 		if outputDir == "" {
 			outputDir = "./reports"
 		}
-		knoxiqTimeout := time.Duration(viper.GetInt("knoxiq-timeout")) * time.Minute
+		knoxiqTimeout := time.Duration(viper.GetInt(helper.ConfigKeyKnoxIQTimeout)) * time.Minute
 		if err := helper.ProcessKnoxIQReport(fileID, outputDir, knoxiqTimeout); err != nil {
 			helper.PrintError(err)
 			os.Exit(1)

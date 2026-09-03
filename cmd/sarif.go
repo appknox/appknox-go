@@ -34,6 +34,7 @@ var sarifCmd = &cobra.Command{
 		}
 		outputFilePath, _ := cmd.Flags().GetString("output")
 		staticMinutes, _ := cmd.Flags().GetInt("timeout")
+		noKnoxIQ, _ := cmd.Flags().GetBool("no-knoxiq")
 		knoxiqMinutes, err := knoxIQTimeoutMinutes()
 		if err != nil {
 			helper.PrintError(err)
@@ -43,7 +44,7 @@ var sarifCmd = &cobra.Command{
 			time.Duration(staticMinutes)*time.Minute,
 			time.Duration(knoxiqMinutes)*time.Minute,
 		)
-		if err := helper.ConvertToSARIFReport(fileID, riskThresholdInt, outputFilePath, budget); err != nil {
+		if err := helper.ConvertToSARIFReport(fileID, riskThresholdInt, outputFilePath, budget, noKnoxIQ); err != nil {
 			helper.PrintError(err)
 			os.Exit(1)
 		}
@@ -53,8 +54,10 @@ var sarifCmd = &cobra.Command{
 func init() {
 	RootCmd.AddCommand(sarifCmd)
 	sarifCmd.Flags().StringP(
-		"risk-threshold", "r", "low", "Minimum risk to include in the report. Available options: low, medium, high, critical")
+		flagRiskThreshold, "r", "low", "Minimum risk to include in the report. Available options: low, medium, high, critical")
 	sarifCmd.PersistentFlags().StringP("output", "o", "report.sarif", "Output file path to save reports")
 	sarifCmd.Flags().IntP(
 		"timeout", "t", 30, "Static scan timeout in minutes for the CI check (default: 30)")
+	sarifCmd.Flags().Bool(
+		"no-knoxiq", false, "Skip the KnoxIQ wait entirely and produce the plain SAST report immediately")
 }

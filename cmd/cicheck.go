@@ -59,9 +59,9 @@ func parseCiPolicy(cmd *cobra.Command) (helper.CiPolicy, error) {
 		time.Duration(knoxiqMinutes)*time.Minute,
 	)
 
-	healthChanged := cmd.Flags().Changed("health-score-threshold")
-	riskChanged := cmd.Flags().Changed("risk-threshold")
-	likelihoodChanged := cmd.Flags().Changed("exploit-likelihood-threshold")
+	healthChanged := cmd.Flags().Changed(flagHealthScoreThreshold)
+	riskChanged := cmd.Flags().Changed(flagRiskThreshold)
+	likelihoodChanged := cmd.Flags().Changed(flagExploitLikelihoodThreshold)
 
 	if healthChanged && riskChanged {
 		return policy, errors.New("only one of risk-threshold or health-score-threshold can be provided")
@@ -89,7 +89,7 @@ func applyHealthGate(cmd *cobra.Command, policy *helper.CiPolicy, changed bool) 
 	if !changed {
 		return nil
 	}
-	value, _ := cmd.Flags().GetInt("health-score-threshold")
+	value, _ := cmd.Flags().GetInt(flagHealthScoreThreshold)
 	if value < 0 || value > 100 {
 		return errors.New("health-score-threshold must be between 0 and 100")
 	}
@@ -101,7 +101,7 @@ func applyLikelihoodGate(cmd *cobra.Command, policy *helper.CiPolicy, changed bo
 	if !changed {
 		return nil
 	}
-	value, _ := cmd.Flags().GetString("exploit-likelihood-threshold")
+	value, _ := cmd.Flags().GetString(flagExploitLikelihoodThreshold)
 	switch strings.ToLower(value) {
 	case "low":
 		policy.LikelihoodThreshold = 2
@@ -116,7 +116,7 @@ func applyLikelihoodGate(cmd *cobra.Command, policy *helper.CiPolicy, changed bo
 }
 
 func parseRiskThreshold(cmd *cobra.Command) (int, error) {
-	value, _ := cmd.Flags().GetString("risk-threshold")
+	value, _ := cmd.Flags().GetString(flagRiskThreshold)
 	switch strings.ToLower(value) {
 	case "low":
 		return 1, nil
@@ -133,21 +133,21 @@ func parseRiskThreshold(cmd *cobra.Command) (int, error) {
 func init() {
 	RootCmd.AddCommand(cicheckCmd)
 	cicheckCmd.Flags().StringP(
-		"risk-threshold", "r", "low", "Risk threshold to fail the command. Available options: low, medium, high, critical")
+		flagRiskThreshold, "r", "low", "Risk threshold to fail the command. Available options: low, medium, high, critical")
 	cicheckCmd.Flags().Int(
-		"health-score-threshold", 0, "Health score threshold (0-100) to pass the command")
+		flagHealthScoreThreshold, 0, "Health score threshold (0-100) to pass the command")
 	cicheckCmd.Flags().IntP(
 		"timeout", "t", 30, "Static scan timeout in minutes for the CI check (default: 30)")
 
 	cicheckCmd.Flags().String(
-		"exploit-likelihood-threshold", "",
+		flagExploitLikelihoodThreshold, "",
 		"Fail the build on KnoxIQ exploit likelihood. Available options: low, medium, high")
 
 	cicheckCmd.Flags().Bool(
-		"include-needs-review", false,
+		helper.ConfigKeyIncludeNeedsReview, false,
 		"Include KnoxIQ needs-review vulnerabilities in the CI check results and build decision")
 	viper.BindPFlag(
-		"include-needs-review", cicheckCmd.Flags().Lookup("include-needs-review"))
-	viper.BindEnv("include-needs-review", "APPKNOX_INCLUDE_NEEDS_REVIEW")
-	viper.SetDefault("include-needs-review", false)
+		helper.ConfigKeyIncludeNeedsReview, cicheckCmd.Flags().Lookup(helper.ConfigKeyIncludeNeedsReview))
+	viper.BindEnv(helper.ConfigKeyIncludeNeedsReview, "APPKNOX_INCLUDE_NEEDS_REVIEW")
+	viper.SetDefault(helper.ConfigKeyIncludeNeedsReview, false)
 }

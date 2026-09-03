@@ -64,7 +64,7 @@ func TestKnoxIQSARIFOverlay_Available(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/knoxiq/file/1/knoxiq_scan/status":
 			fmt.Fprint(w, `{"id":1,"sast_status":4,"dast_status":0}`)
-		case "/api/knoxiq/file/1/cicd/analyses":
+		case "/api/knoxiq/file/1/cicd_analyses":
 			fmt.Fprint(w, `{"count":2,"results":[`+
 				`{"id":10,"computed_risk":3,"exploitability_score":8.2,"exploitability_likelihood":4,"needs_review":false},`+
 				`{"id":11,"computed_risk":4,"needs_review":true}]}`)

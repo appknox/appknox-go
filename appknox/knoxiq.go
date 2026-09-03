@@ -2,10 +2,7 @@ package appknox
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/appknox/appknox-go/appknox/enums"
 )
@@ -57,7 +54,7 @@ func (s *KnoxIQService) GetScanStatus(ctx context.Context, fileID int) (*KnoxIQS
 
 // ListCICDAnalyses lists the triaged analyses for a file.
 func (s *KnoxIQService) ListCICDAnalyses(ctx context.Context, fileID int, opt *AnalysisListOptions) ([]*KnoxIQCICDAnalysis, *DRFResponseKnoxIQCICDAnalysis, error) {
-	u := fmt.Sprintf("api/knoxiq/file/%v/cicd/analyses", fileID)
+	u := fmt.Sprintf("api/knoxiq/file/%v/cicd_analyses", fileID)
 	URL, err := addOptions(u, opt)
 	if err != nil {
 		return nil, nil, err
@@ -69,9 +66,8 @@ func (s *KnoxIQService) ListCICDAnalyses(ctx context.Context, fileID int, opt *A
 	var drfResponse DRFResponseKnoxIQCICDAnalysis
 	_, err = s.client.Do(ctx, req, &drfResponse)
 	if err != nil {
-		if strings.Contains(err.Error(), "404") {
-			fileId := strconv.Itoa(fileID)
-			return nil, nil, errors.New("KnoxIQ CI/CD analyses for fileID " + fileId + " not found (404)")
+		if StatusCodeOf(err) == 404 {
+			return nil, nil, fmt.Errorf("KnoxIQ CI/CD analyses for fileID %d not found (404)", fileID)
 		}
 		return nil, nil, err
 	}

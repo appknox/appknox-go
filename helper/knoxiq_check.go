@@ -21,15 +21,20 @@ const knoxIQPollInterval = 5 * time.Second
 // 403 (org without the KnoxIQ feature) and 404 (backend without the KnoxIQ
 // endpoints) both mean "not available", so the CLI silently falls back to the
 // plain SAST flow. Anything else is surfaced before falling back.
+//
+// Because 403 already covers "org without KnoxIQ", a successful response
+// reporting NOT_TRIGGERED means something different and actionable: the
+// organization does have KnoxIQ, but this build never asked for triage. That is
+// almost always a missing `--knoxiq` on the upload step, so it earns a hint
+// rather than a silent fallback. The build decision is unchanged either way.
 func knoxIQAvailable(
 	ctx context.Context, client *appknox.Client, fileID int,
 ) (enums.KnoxIQScanStatusType, bool) {
 	scanStatus, _, err := client.KnoxIQ.GetScanStatus(ctx, fileID)
 	if err != nil {
-		switch appknox.StatusCodeOf(err) {
-		case 403, 404:
-			// Expected for non-KnoxIQ orgs and older backends.
-		default:
+		statusCode := appknox.StatusCodeOf(err)
+		if statusCode != 403 && statusCode != 404 {
+			// Anything other than "org without KnoxIQ" or "backend without the endpoint".
 			PrintError(err)
 		}
 		return enums.KnoxIQStatusDisabled, false
@@ -40,6 +45,12 @@ func knoxIQAvailable(
 		enums.KnoxIQStatusRunning,
 		enums.KnoxIQStatusCompleted:
 		return status, true
+	case enums.KnoxIQStatusNotTriggered:
+		fmt.Println(
+			"\nKnoxIQ is enabled for your organization but this build did not " +
+				"request triage. Add --knoxiq to your upload step to gate on " +
+				"KnoxIQ results.",
+		)
 	}
 	return status, false
 }
@@ -132,7 +143,10 @@ func waitForKnoxIQ(ctx context.Context, client *appknox.Client, fileID int, dead
 			return true
 		case enums.KnoxIQStatusErrored,
 			enums.KnoxIQStatusDisabled,
-			enums.KnoxIQStatusLegacy:
+			enums.KnoxIQStatusLegacy,
+			// Terminal too: no trigger is expected for this file, so polling
+			// would burn the whole budget waiting for a scan that never starts.
+			enums.KnoxIQStatusNotTriggered:
 			return false
 		}
 		if time.Now().After(deadline) {
@@ -147,11 +161,12 @@ func waitForKnoxIQ(ctx context.Context, client *appknox.Client, fileID int, dead
 // analyses meet the likelihood threshold; 0 (with a warning) when the file has
 // no KnoxIQ triage.
 func countLikelihoodOffenders(ctx context.Context, client *appknox.Client, fileID int, policy CiPolicy) int {
-	if _, available := knoxIQAvailable(ctx, client, fileID); !available {
+	status, available := knoxIQAvailable(ctx, client, fileID)
+	if !available {
 		PrintError("exploit-likelihood gating requires KnoxIQ triage — skipping (no KnoxIQ results for this file)")
 		return 0
 	}
-	if !waitForKnoxIQ(ctx, client, fileID, policy.Budget.KnoxIQDeadline()) {
+	if status != enums.KnoxIQStatusCompleted && !waitForKnoxIQ(ctx, client, fileID, policy.Budget.KnoxIQDeadline()) {
 		PrintError("KnoxIQ did not complete — skipping exploit-likelihood gate")
 		return 0
 	}
@@ -160,7 +175,7 @@ func countLikelihoodOffenders(ctx context.Context, client *appknox.Client, fileI
 		PrintError("Could not fetch KnoxIQ results — skipping exploit-likelihood gate")
 		return 0
 	}
-	counted, _ := partitionNeedsReview(triaged, viper.GetBool("include-needs-review"))
+	counted, _ := partitionNeedsReview(triaged, viper.GetBool(ConfigKeyIncludeNeedsReview))
 	return len(filterCICDByLikelihood(counted, policy.LikelihoodThreshold))
 }
 
@@ -259,7 +274,7 @@ func printKnoxIQTable(rows []*appknox.KnoxIQCICDAnalysis) {
 
 func reportKnoxIQGate(fileID int, policy CiPolicy, triaged []*appknox.KnoxIQCICDAnalysis) {
 	counted, needsReview := partitionNeedsReview(
-		triaged, viper.GetBool("include-needs-review"))
+		triaged, viper.GetBool(ConfigKeyIncludeNeedsReview))
 
 	var riskVulns, likelihoodVulns []*appknox.KnoxIQCICDAnalysis
 	if policy.RiskThreshold >= 0 {
