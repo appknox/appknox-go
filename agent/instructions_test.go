@@ -5,15 +5,71 @@ import (
 	"testing"
 )
 
-// Each rule below is here because its absence produced a real defect on mfva.
+// Each rule below is here because its absence produced a measured defect --
+// either on mfva, or in the 50-item compile bench described in instructions.go.
 
 func TestFixSystemPrompt_forbidsTheOverReachThatBrokeTheBuild(t *testing.T) {
 	// Dropping the "BC" provider changed the Cipher.getInstance overload and
 	// invalidated an existing catch clause: ExportedActivity.java stopped
 	// compiling.
-	for _, want := range []string{"MINIMAL", "overload", "catch clause", "does not compile"} {
+	for _, want := range []string{"MINIMAL", "overload", "exception\n  surface"} {
 		if !strings.Contains(fixSystemPrompt, want) {
 			t.Errorf("system prompt should warn about %q", want)
+		}
+	}
+}
+
+// The overload rule used to end at "which does not compile". That taught the
+// model the boundary was javac acceptance, so a patch that compiled but silently
+// bound a different overload read as in-bounds -- one such patch sent a user
+// session token in place of the provider key. The rule must be justified on
+// runtime grounds, not compile grounds.
+func TestFixSystemPrompt_treatsCompilingAsInsufficientEvidence(t *testing.T) {
+	if strings.Contains(fixSystemPrompt, "which does not compile") {
+		t.Error("justifying the overload rule by compilation is what let silent behaviour changes through")
+	}
+	for _, want := range []string{"Compiling is NOT", "credential", "different host"} {
+		if !strings.Contains(fixSystemPrompt, want) {
+			t.Errorf("system prompt should name the silent runtime divergence: %q", want)
+		}
+	}
+}
+
+// A KnoxIQ remediation is class-level policy prose naming manifests, build files
+// and server behaviour the target file does not contain. Acting on those clauses
+// was the single largest defect class: invented idle timeouts, invented caller
+// guards, invented endpoints.
+func TestFixSystemPrompt_boundsScopeToTheFile(t *testing.T) {
+	for _, want := range []string{"SCOPE", "out of\n  scope", "Partial application"} {
+		if !strings.Contains(fixSystemPrompt, want) {
+			t.Errorf("system prompt should bound scope to the file: %q", want)
+		}
+	}
+}
+
+// Refusing to use a platform overload merely because the file does not declare
+// it left a live SQL injection unfixed. Under-fixing is the dangerous direction.
+func TestFixSystemPrompt_allowsUndeclaredPlatformOverloads(t *testing.T) {
+	if !strings.Contains(fixSystemPrompt, "NOT an invention") {
+		t.Error("a documented platform overload must not be treated as an invention")
+	}
+}
+
+// Dead vulnerable code still trips the scanner that raised the finding, so an
+// orphaned no-op TrustManager means the finding never clears on rescan.
+func TestFixSystemPrompt_deletesOrphansThatAreThemselvesTheVulnerability(t *testing.T) {
+	for _, want := range []string{"CONTAINED", "orphan", "still reported by the"} {
+		if !strings.Contains(fixSystemPrompt, want) {
+			t.Errorf("system prompt should carve dead vulnerable code out of the orphan rule: %q", want)
+		}
+	}
+}
+
+// Four fixers stated the defect in their own report and shipped it anyway.
+func TestFixSystemPrompt_refusesToShipADisclosedGuess(t *testing.T) {
+	for _, want := range []string{"Abstain per site", "does not make it acceptable"} {
+		if !strings.Contains(fixSystemPrompt, want) {
+			t.Errorf("disclosure must not substitute for abstention: %q", want)
 		}
 	}
 }
