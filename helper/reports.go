@@ -71,6 +71,48 @@ func ProcessCreateReport(fileID int) (reportID int, isNew bool, err error) {
 	return report.ID, true, nil
 }
 
+// ProcessKnoxIQReport generates and downloads the KnoxIQ PDF report for a file
+// — the same report mycroft produces for a KnoxIQ-triaged file, fetched via the
+// CLI. It refuses to run when the file has no KnoxIQ results at all, and it
+// verifies the report mycroft actually generated is KnoxIQ-flavoured before
+// downloading it, rather than silently handing back a standard report under a
+// command whose whole purpose is KnoxIQ. Use `reports create`/`download pdf`
+// for a standard report.
+func ProcessKnoxIQReport(fileID int, outputDir string, knoxiqTimeout time.Duration) error {
+	ctx := context.Background()
+	client := getClient()
+
+	if _, available := knoxIQAvailable(ctx, client, fileID); !available {
+		return fmt.Errorf(
+			"no KnoxIQ results for file %d; use 'appknox reports create' and "+
+				"'appknox reports download pdf' for a standard report",
+			fileID,
+		)
+	}
+
+	// Standalone command, so the KnoxIQ wait starts now — there is no
+	// preceding static-scan wait to carry time over from.
+	if !waitForKnoxIQ(ctx, client, fileID, time.Now().Add(knoxiqTimeout)) {
+		PrintError("KnoxIQ triage did not complete within the timeout; the report may not include KnoxIQ results.")
+	}
+
+	reportID, _, err := ProcessCreateReport(fileID)
+	if err != nil {
+		return err
+	}
+	report, err := client.Reports.GetReport(ctx, reportID)
+	if err != nil {
+		return err
+	}
+	if !report.IsKnoxIQ {
+		return fmt.Errorf(
+			"generated report for file %d does not include KnoxIQ results (no completed KnoxIQ scan)",
+			fileID,
+		)
+	}
+	return ProcessDownloadReportPDF(reportID, outputDir)
+}
+
 // ProcessDownloadReportPDF downloads a PDF VAPT report and its password file by report ID.
 func ProcessDownloadReportPDF(reportID int, outputDir string) error {
 	ctx := context.Background()
@@ -130,4 +172,3 @@ func ProcessDownloadReportPDF(reportID int, outputDir string) error {
 
 	return nil
 }
-

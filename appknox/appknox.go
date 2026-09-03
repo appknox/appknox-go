@@ -70,6 +70,9 @@ type Client struct {
 
 	// Dynamic Scan service is used to interact with appknox DAST related APIs
 	DynamicScans *DynamicScanService
+
+	// KnoxIQ service is used to interact with appknox KnoxIQ APIs.
+	KnoxIQ *KnoxIQService
 }
 
 // NewClient returns a new appknox API client.
@@ -106,6 +109,7 @@ func NewClient(accessToken string) (*Client, error) {
 	c.Organizations = (*OrganizationsService)(&c.common)
 	c.Reports = (*ReportsService)(&c.common)
 	c.DynamicScans = (*DynamicScanService)(&c.common)
+	c.KnoxIQ = (*KnoxIQService)(&c.common)
 	return c, nil
 }
 
@@ -268,6 +272,17 @@ func (r *ErrorResponse) Error() string {
 	return fmt.Sprintf("%v %v: %d %v",
 		r.Response.Request.Method, sanitizeURL(r.Response.Request.URL),
 		r.Response.StatusCode, r.Detail)
+}
+
+// StatusCodeOf returns the HTTP status code carried by an API error, or 0 when
+// the error did not come from an API response (transport failure, etc). Lets
+// callers distinguish "the server said no" from "we never reached the server".
+func StatusCodeOf(err error) int {
+	var errResp *ErrorResponse
+	if errors.As(err, &errResp) && errResp.Response != nil {
+		return errResp.Response.StatusCode
+	}
+	return 0
 }
 
 // Error is custom error object.
