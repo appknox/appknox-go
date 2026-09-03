@@ -12,7 +12,7 @@ import (
 	"github.com/manifoldco/promptui"
 )
 
-//ProcessInit initializes Appknox CLI.
+// ProcessInit initializes Appknox CLI.
 func ProcessInit() {
 	host := viper.GetString("host")
 	if strings.Contains(host, "https://api.appknox.com") {

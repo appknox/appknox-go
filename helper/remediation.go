@@ -34,6 +34,10 @@ type FindingInputs struct {
 	// with no criteria must refuse to certify the patch rather than assume it
 	// passed.
 	Criteria []string
+
+	// DeveloperPrompt is KnoxIQ's guidance written for a human developer. More
+	// specific than the generic remediation prose, so the fixer gets it too.
+	DeveloperPrompt string
 }
 
 // stripHTML removes tags for source-free remediation text.

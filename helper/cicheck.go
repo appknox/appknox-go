@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"time"
-	
+
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/appknox/appknox-go/appknox/enums"
 	"github.com/cheynewallace/tabby"

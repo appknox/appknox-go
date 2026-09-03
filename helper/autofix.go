@@ -365,7 +365,8 @@ func (s fixSession) locateAll(ctx context.Context) ([]string, error) {
 func (s fixSession) produceFix(ctx context.Context, path string) (agent.FixResult, error) {
 	return s.d.agentFix(ctx, agent.Config{FixURL: s.fixCfg.URL, Token: s.fixCfg.Token},
 		agent.FixRequest{RepoRoot: s.root, Path: path,
-			Finding: s.inputs.Finding, Remediation: s.inputs.Remediation})
+			Finding: s.inputs.Finding, Remediation: s.inputs.Remediation,
+			DeveloperPrompt: s.inputs.DeveloperPrompt, Criteria: s.inputs.Criteria})
 }
 
 // deliver pushes all patches to one branch (--push-branch) or applies them locally.

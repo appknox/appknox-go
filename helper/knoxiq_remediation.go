@@ -132,7 +132,7 @@ func fixableKnoxIQFindings(
 // Empty Criteria therefore means "could not check", never "nothing to check",
 // and the run says so rather than delivering an unverified patch.
 func knoxIQInputs(findings []*appknox.KnoxIQFinding, vulnerabilityName string) FindingInputs {
-	var instructions, criteria []string
+	var instructions, criteria, developerPrompts []string
 	seenHint := map[string]bool{}
 	var hints []string
 
@@ -143,6 +143,9 @@ func knoxIQInputs(findings []*appknox.KnoxIQFinding, vulnerabilityName string) F
 		if f.Remediation != nil {
 			criteria = append(criteria, f.Remediation.Verification...)
 		}
+		if strings.TrimSpace(f.DeveloperPrompt) != "" {
+			developerPrompts = append(developerPrompts, f.DeveloperPrompt)
+		}
 		for _, hint := range classHintsFromFindings(f.Title + " " + f.Description) {
 			if !seenHint[hint] {
 				seenHint[hint] = true
@@ -152,9 +155,10 @@ func knoxIQInputs(findings []*appknox.KnoxIQFinding, vulnerabilityName string) F
 	}
 
 	return FindingInputs{
-		Finding:     vulnerabilityName,
-		ClassHints:  hints,
-		Remediation: joinNonEmpty(instructions, "\n\n"),
-		Criteria:    criteria,
+		Finding:         vulnerabilityName,
+		ClassHints:      hints,
+		Remediation:     joinNonEmpty(instructions, "\n\n"),
+		Criteria:        criteria,
+		DeveloperPrompt: joinNonEmpty(developerPrompts, "\n\n"),
 	}
 }

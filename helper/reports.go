@@ -130,4 +130,3 @@ func ProcessDownloadReportPDF(reportID int, outputDir string) error {
 
 	return nil
 }
-

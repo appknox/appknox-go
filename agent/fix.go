@@ -13,17 +13,18 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/toolrunner"
 )
 
-const fixSystemPrompt = "You are a security fix assistant. Given a finding and its remediation, read " +
-	"the target file and apply a SINGLE precise fix with the edit tool (str_replace): replace ONLY the " +
-	"vulnerable code with the secure version, keeping everything else byte-for-byte. old_string must be " +
-	"unique. Edit ONLY the specified file. If you cannot fix it confidently, make no edit."
-
 // FixRequest describes the located file + finding to fix in place.
 type FixRequest struct {
 	RepoRoot    string
 	Path        string
 	Finding     string
 	Remediation string
+	// DeveloperPrompt is KnoxIQ's guidance written for a human developer --
+	// more specific than the generic remediation prose when present.
+	DeveloperPrompt string
+	// Criteria are the checks the patch will be measured against, passed in so
+	// the fixer aims at them rather than discovering a miss afterwards.
+	Criteria []string
 }
 
 // FixResult is the outcome of a client-side agent fix. It is side-effect-free:
@@ -106,14 +107,6 @@ func buildFixTools(root, allowedPath string, edits *[]editRecord) ([]anthropic.B
 		return nil, err
 	}
 	return append(tools, edit), nil
-}
-
-// fixUserPrompt renders the per-file fix instruction.
-func fixUserPrompt(req FixRequest) string {
-	return fmt.Sprintf(
-		"Target file (edit ONLY this): %s\nFinding: %s\n\nRemediation:\n%s\n\n"+
-			"Read the file, then apply the fix with a single precise edit (str_replace).",
-		req.Path, req.Finding, req.Remediation)
 }
 
 // buildDiff renders the recorded edits as a simple -old/+new diff.
