@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/appknox/appknox-go/agent"
@@ -292,4 +293,48 @@ func TestAttempt_CarriesDeclineReasonsIntoTheRunOutcome(t *testing.T) {
 
 	require.Len(t, out.Declined, 1)
 	require.Equal(t, "needs Android Keystore", out.Declined[0].Reason)
+}
+
+// 108 analyses on mfva file 358 produced 2 fix candidates, because the target
+// filter required a first-party class descriptor in the finding text. The 106
+// dropped were not minor -- they included Critical and High findings whose
+// fixes live in AndroidManifest.xml and res/xml, which name no class.
+func TestLocatableAnalysisIDs_KeepsFindingsWithNoClassDescriptor(t *testing.T) {
+	// Risk is the only filter now; locatability is decided later, by the
+	// locate agent and by KnoxIQ, both of which see more than a regex does.
+	require.NotContains(t, targetsFilterSource(t), "classHintsFromFindings",
+		"target selection must not gate on class hints")
+}
+
+// helper: the body of locatableAnalysisIDs, so the test pins behaviour rather
+// than restating it.
+func targetsFilterSource(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("autofix_targets.go")
+	require.NoError(t, err)
+	src := string(b)
+	start := strings.Index(src, "func locatableAnalysisIDs")
+	require.Greater(t, start, 0)
+	end := strings.Index(src[start:], "\n}\n")
+	require.Greater(t, end, 0)
+	return src[start : start+end]
+}
+
+// A finding with no class hint must still get one locate attempt, or manifest
+// findings are silently unreachable no matter what the target filter allows.
+func TestLocateAll_AttemptsOnceWhenThereAreNoClassHints(t *testing.T) {
+	var seen []string
+	s := fixSession{
+		root:   t.TempDir(),
+		inputs: FindingInputs{Finding: "Application Data Backup Allowed"},
+		d: autofixDeps{locate: func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
+			seen = append(seen, req.ClassHint)
+			return "app/src/main/AndroidManifest.xml", nil
+		}},
+	}
+	paths, err := s.locateAll(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, []string{""}, seen, "one attempt, with an empty hint")
+	require.Equal(t, []string{"app/src/main/AndroidManifest.xml"}, paths)
 }

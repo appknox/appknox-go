@@ -111,16 +111,24 @@ func everyLocatableAnalysis(
 
 // locatableAnalysisIDs returns the analyses on a file worth attempting.
 //
-// Two filters, both local and free:
+// ONE filter: computed risk must meet the configured threshold. Autofix reuses
+// the severity policy the customer already sets on cicheck rather than
+// introducing a second one just for remediation -- nobody should have to
+// configure "which vulnerabilities matter" twice. A threshold of 0 (Passed)
+// means everything, which is what health-score mode wants.
 //
-//   - the analysis must name a first-party class, or no fix could be located.
-//   - its computed risk must meet the configured threshold. Autofix reuses the
-//     severity policy the customer already sets on cicheck rather than
-//     introducing a second one just for remediation -- nobody should have to
-//     configure "which vulnerabilities matter" twice.
+// It used to ALSO require the finding to name a first-party class descriptor,
+// on the reasoning that without one there is nothing to locate. That reasoning
+// was wrong, and expensively so: on mfva file 358, 108 analyses produced 2
+// candidates, and the 106 dropped included Critical and High findings. They
+// were not minor -- they were manifest, network-config and framework issues
+// whose finding text names no Lcom/...; class, so they were discarded before
+// KnoxIQ was even asked whether they were fixable.
 //
-// A threshold of 0 (Passed) means everything, which is what health-score mode
-// wants: a health score implies no severity cutoff.
+// The locate agent has read_file, grep and glob over the checkout and can find
+// AndroidManifest.xml from a finding description perfectly well. A class hint
+// is a useful seed, not a precondition, so the decision about what is fixable
+// now belongs to KnoxIQ and the locate agent rather than to a regex here.
 func locatableAnalysisIDs(ctx context.Context, fileID, riskThreshold int) ([]int, error) {
 	all, err := allAnalyses(ctx, getClient(), fileID)
 	if err != nil {
@@ -131,9 +139,7 @@ func locatableAnalysisIDs(ctx context.Context, fileID, riskThreshold int) ([]int
 		if int(a.ComputedRisk) < riskThreshold {
 			continue
 		}
-		if len(classHintsFromFindings(findingsText(a))) > 0 {
-			ids = append(ids, a.ID)
-		}
+		ids = append(ids, a.ID)
 	}
 	return ids, nil
 }

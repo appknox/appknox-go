@@ -362,7 +362,17 @@ func (s fixSession) produce(ctx context.Context) (Outcome, error) {
 func (s fixSession) locateAll(ctx context.Context) ([]string, error) {
 	seen := map[string]bool{}
 	var paths []string
-	for _, hint := range s.inputs.ClassHints {
+	// A finding with no class descriptor still has a file. Manifest, network
+	// config and permission findings name no Lcom/...; class, and looping over
+	// an empty hint list used to mean they were never even looked for. One
+	// hintless pass lets the locate agent work from the finding text alone --
+	// it has grep and glob over the checkout, and "Application Data Backup
+	// Allowed" leads to AndroidManifest.xml without needing a class.
+	hints := s.inputs.ClassHints
+	if len(hints) == 0 {
+		hints = []string{""}
+	}
+	for _, hint := range hints {
 		p, err := s.d.locate(ctx, agent.Config{FixURL: s.fixCfg.URL, Token: s.fixCfg.Token},
 			agent.Request{RepoRoot: s.root, ClassHint: hint, Finding: s.inputs.Finding})
 		if err != nil {
