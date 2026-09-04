@@ -274,3 +274,22 @@ func TestRunAutofix_PropagatesFixError(t *testing.T) {
 	_, err := runAutofix(context.Background(), appknoxOpts(root), d)
 	require.Error(t, err)
 }
+
+// produce() records why the fixer declined a file, but attempt() folds each
+// analysis into the run's aggregate Outcome -- and a field it forgets to copy is
+// silently lost. That happened: the reason was captured per analysis and never
+// reached the report, which printed "no reason recorded" for a file the fixer
+// had explained itself about.
+func TestAttempt_CarriesDeclineReasonsIntoTheRunOutcome(t *testing.T) {
+	var out Outcome
+	produced := Outcome{
+		Located:  []string{"app/Main.java"},
+		Declined: []declinedFile{{Path: "app/Main.java", Reason: "needs Android Keystore"}},
+	}
+	out.Located = append(out.Located, produced.Located...)
+	out.OutOfScope = append(out.OutOfScope, produced.OutOfScope...)
+	out.Declined = append(out.Declined, produced.Declined...)
+
+	require.Len(t, out.Declined, 1)
+	require.Equal(t, "needs Android Keystore", out.Declined[0].Reason)
+}

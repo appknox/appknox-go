@@ -197,6 +197,7 @@ func (s fixSession) attempt(ctx context.Context, t analysisTarget, out *Outcome)
 	}
 	out.Located = append(out.Located, produced.Located...)
 	out.OutOfScope = append(out.OutOfScope, produced.OutOfScope...)
+	out.Declined = append(out.Declined, produced.Declined...)
 
 	if len(produced.Patches) == 0 {
 		report.Skipped = "no change produced"
