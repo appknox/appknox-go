@@ -73,10 +73,6 @@ type filePatch struct {
 	Diff       string
 	Confidence float64
 	Applied    bool
-	// Created marks a file the fix added rather than edited. It changes nothing
-	// about delivery -- content is written per path either way -- but a reviewer
-	// reading the PR needs to know which files are new code the fixer wrote.
-	Created bool
 }
 
 // Outcome is the source-free result of a run — one or more fixed files.
@@ -337,15 +333,6 @@ func (s fixSession) produce(ctx context.Context) (Outcome, error) {
 		if res.Changed && res.PatchedContent != "" {
 			out.Patches = append(out.Patches, filePatch{
 				Path: p, Content: res.PatchedContent, Diff: res.Diff})
-		}
-		// Files the remediation asked the fixer to add ("introduce a
-		// SecureCryptoManager class"). They ride the same delivery path as an
-		// edited file -- ghpr pushes content per path either way -- so the only
-		// thing needed here is not to drop them.
-		for _, nf := range res.NewFiles {
-			out.Patches = append(out.Patches, filePatch{
-				Path: nf.Path, Content: nf.Content, Created: true,
-				Diff: fmt.Sprintf("--- %s\n+++ NEW FILE (%d bytes)", nf.Path, len(nf.Content))})
 		}
 	}
 	// Check the patch against KnoxIQ's own criteria. A dry run reports the

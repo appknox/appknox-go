@@ -60,18 +60,6 @@ SCOPE - the file decides, not the remediation prose.
   surface. Never leave a site unfixed merely because the safe overload is not
   spelled out here.
 
-NEW FILES - only when the remediation prescribes one.
-  A remediation sometimes asks for a new unit of code by name ("introduce a
-  SecureCryptoManager class") and then calls it from the fixed site. Create it
-  with create_file, in the same package and directory convention as the file you
-  were given, and write only what the remediation describes - no extra helpers,
-  no configuration, no tests. It must compile against the same standard library
-  and platform APIs the target file already uses.
-  Do NOT create a file to avoid an edit, to hold code that belongs in the file
-  you were given, or because a helper you invented would be convenient. If the
-  remediation does not name the new unit, there is no new unit. Never create a
-  file to replace an existing one - edit that file instead.
-
 MINIMAL - change the named construct, not the call around it.
   Do NOT alter a method signature, argument list, overload, import, or exception
   surface unless the remediation calls for it. Replace a bad argument in place;

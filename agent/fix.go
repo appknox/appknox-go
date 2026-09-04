@@ -34,29 +34,10 @@ type FixResult struct {
 	Changed        bool
 	PatchedContent string
 	Diff           string
-	// NewFiles are files the fix added, for the caller to deliver.
-	//
-	// A remediation often prescribes a new unit of code rather than an edit to
-	// an existing one -- "introduce a SecureCryptoManager class, then call it
-	// from the fixed method". Without this the fixer can only rewrite the
-	// located file, so it has to decline such a remediation outright and the
-	// finding stays open.
-	//
-	// Like PatchedContent these are captured rather than left behind: the
-	// created files are removed from disk before FixFile returns.
-	NewFiles []NewFile
 }
 
-// NewFile is a file the fix created.
-type NewFile struct {
-	Path    string
-	Content string
-}
-
-// fixRunner runs the edit agent, applying edits on disk and recording them,
-// plus any files the fix created so the caller can deliver and then unwind them.
-type fixRunner func(ctx context.Context, cfg Config, req FixRequest,
-	edits *[]editRecord, created *[]createdFile) error
+// fixRunner runs the edit agent, applying edits on disk and recording them.
+type fixRunner func(ctx context.Context, cfg Config, req FixRequest, edits *[]editRecord) error
 
 // FixFile fixes the located file locally via the agent's edit tool — NO file is
 // uploaded (only the model turns cross the gateway). Returns the patched content
@@ -75,19 +56,11 @@ func fixWith(ctx context.Context, cfg Config, req FixRequest, run fixRunner) (Fi
 		return FixResult{}, err
 	}
 	var edits []editRecord
-	var created []createdFile
-	runErr := run(ctx, cfg, req, &edits, &created)
+	runErr := run(ctx, cfg, req, &edits)
 	patched, readErr := os.ReadFile(abs)
 	revertErr := os.WriteFile(abs, original, 0o644) // revert: FixFile leaves disk unchanged
-	// Unwind creations unconditionally, even on a failed run: a run that errored
-	// part-way can still have created files, and one left behind would be read by
-	// the next analysis in this run as if it were the developer's own code.
-	removeErr := removeCreated(req.RepoRoot, created)
 	if runErr != nil {
 		return FixResult{}, runErr
-	}
-	if removeErr != nil { // disk NOT left unchanged; fail loudly, as with revert
-		return FixResult{}, fmt.Errorf("agent: removing files created by the fix: %w", removeErr)
 	}
 	if readErr != nil {
 		return FixResult{}, fmt.Errorf("agent: reading patched file %s: %w", req.Path, readErr)
@@ -96,36 +69,19 @@ func fixWith(ctx context.Context, cfg Config, req FixRequest, run fixRunner) (Fi
 		return FixResult{}, fmt.Errorf("agent: restoring %s after fix: %w", req.Path, revertErr)
 	}
 	return FixResult{
-		// A fix that only added a file still changed the codebase. Reporting
-		// Changed=false there would drop the new file at the caller, which
-		// treats an unchanged result as "nothing to deliver".
-		Changed:        !bytes.Equal(original, patched) || len(created) > 0,
+		Changed:        !bytes.Equal(original, patched),
 		PatchedContent: string(patched),
 		Diff:           buildDiff(edits),
-		NewFiles:       newFiles(created),
 	}, nil
-}
-
-// newFiles converts the captured creations for the caller.
-func newFiles(created []createdFile) []NewFile {
-	if len(created) == 0 {
-		return nil
-	}
-	out := make([]NewFile, 0, len(created))
-	for _, f := range created {
-		out = append(out, NewFile{Path: f.Path, Content: f.Content})
-	}
-	return out
 }
 
 // sdkFix drives the Tool Runner with read-only tools + the edit tool, routed
 // through the gateway.
-func sdkFix(ctx context.Context, cfg Config, req FixRequest,
-	edits *[]editRecord, created *[]createdFile) error {
+func sdkFix(ctx context.Context, cfg Config, req FixRequest, edits *[]editRecord) error {
 	if cfg.FixURL == "" || cfg.Token == "" {
 		return errors.New("agent: FixURL and Token are required to reach the gateway")
 	}
-	tools, err := buildFixTools(req.RepoRoot, req.Path, edits, created)
+	tools, err := buildFixTools(req.RepoRoot, req.Path, edits)
 	if err != nil {
 		return err
 	}
@@ -139,8 +95,7 @@ func sdkFix(ctx context.Context, cfg Config, req FixRequest,
 }
 
 // buildFixTools = read-only Read/Grep/Glob + the edit tool (restricted to allowedPath).
-func buildFixTools(root, allowedPath string, edits *[]editRecord,
-	created *[]createdFile) ([]anthropic.BetaTool, error) {
+func buildFixTools(root, allowedPath string, edits *[]editRecord) ([]anthropic.BetaTool, error) {
 	tools, err := buildLocateTools(root)
 	if err != nil {
 		return nil, err
@@ -151,19 +106,7 @@ func buildFixTools(root, allowedPath string, edits *[]editRecord,
 	if err != nil {
 		return nil, err
 	}
-	// create is deliberately separate from edit rather than a mode of it: edit
-	// is restricted to the one located file, and that restriction is a safety
-	// property worth keeping intact. Creating a NEW file cannot overwrite the
-	// developer's code, so it carries its own, different guards.
-	create, err := toolrunner.NewBetaToolFromJSONSchema(
-		"create_file",
-		"Create a NEW file that does not exist yet. Only for a remediation that "+
-			"explicitly prescribes a new class or helper. Never use it to rewrite an existing file.",
-		createHandler(root, created))
-	if err != nil {
-		return nil, err
-	}
-	return append(tools, edit, create), nil
+	return append(tools, edit), nil
 }
 
 // buildDiff renders the recorded edits as a simple -old/+new diff.
