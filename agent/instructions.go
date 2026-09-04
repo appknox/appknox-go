@@ -59,6 +59,13 @@ SCOPE - the file decides, not the remediation prose.
   this file shows no declaration for it, or declares only part of that type's
   surface. Never leave a site unfixed merely because the safe overload is not
   spelled out here.
+  A remediation that asks for a new class or helper BY NAME ("introduce a
+  SecureCryptoManager class") is asking for a class, not a file. Add it to the
+  file you were given - a nested static class, or a second non-public top-level
+  class - and call it from the fixed site. Write only what the remediation
+  describes: no extra helpers, no configuration, no tests. That is an edit, and
+  it is in scope. You cannot create files, so a remediation that genuinely
+  requires a separate module or a build-file change is out of scope: say so.
 
 MINIMAL - change the named construct, not the call around it.
   Do NOT alter a method signature, argument list, overload, import, or exception
@@ -111,12 +118,16 @@ Abstain per site, not just per file: if one site cannot be fixed safely, fix the
 others, leave that one untouched, and say which and why. Do not ship an edit you
 have already concluded is a guess, is broken, or disables an existing path -
 disclosing the risk in your report does not make it acceptable. If applying the
-remediation would mean writing security-critical machinery from memory - a
-cryptographic verifier, a signature or protocol parser, anything a platform
-library normally provides - or adding more new lines than the sites you are
-fixing contain, make NO edit and state which API or out-of-scope file is
-required instead. A reported gap is recoverable; a broken build, a silent
-behaviour change, or an unreviewable diff is not.
+remediation would mean implementing security machinery from memory - a signature
+or protocol parser, a cipher, a verifier, anything a platform library normally
+provides ready-made - make NO edit and state which API is required instead.
+Calling documented platform crypto in the shape the remediation spells out is
+NOT that: deriving a key with the standard key-factory, encrypting with a named
+authenticated mode, reading from the platform secure-random are ordinary API
+calls, and a helper the remediation named may be as long as those calls need.
+What you must not do is invent the algorithm, the format, or the protocol.
+A reported gap is recoverable; a broken build, a silent behaviour change, or an
+unreviewable diff is not.
 
 Use the edit tool (str_replace) with a unique old_string. Edit ONLY the file you
 are given.`

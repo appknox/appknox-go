@@ -65,6 +65,37 @@ func TestFixSystemPrompt_deletesOrphansThatAreThemselvesTheVulnerability(t *test
 	}
 }
 
+// KnoxIQ's Derived Crypto Keys remediation says "introduce a new utility class,
+// SecureCryptoManager, into your project" and then calls it. The fixer read that
+// as needing a new FILE, which it cannot create, so it declined the site and the
+// finding never cleared on rescan. Java allows a second non-public top-level
+// class -- or a nested one -- in the file it already has, so this is an edit.
+func TestFixSystemPrompt_addsAPrescribedHelperClassToTheSameFile(t *testing.T) {
+	for _, want := range []string{"BY NAME", "nested static class", "not a file"} {
+		if !strings.Contains(fixSystemPrompt, want) {
+			t.Errorf("system prompt should allow a named helper class in the same file: %q", want)
+		}
+	}
+	if !strings.Contains(fixSystemPrompt, "You cannot create files") {
+		t.Error("the fixer has no create tool; the prompt must say so rather than let it assume")
+	}
+}
+
+// The abstain clause must still refuse hand-rolled security machinery (it stopped
+// a fixer writing 380 lines of APK signature parsing) WITHOUT also refusing the
+// ordinary platform crypto calls a remediation spells out. Conflating the two
+// makes every crypto remediation unfixable.
+func TestFixSystemPrompt_separatesInventedCryptoFromDocumentedAPIs(t *testing.T) {
+	if !strings.Contains(fixSystemPrompt, "implementing security machinery from memory") {
+		t.Error("inventing a cipher, parser or verifier must still be refused")
+	}
+	for _, want := range []string{"NOT that", "invent the algorithm, the format, or the protocol"} {
+		if !strings.Contains(fixSystemPrompt, want) {
+			t.Errorf("documented platform crypto must stay permitted: %q", want)
+		}
+	}
+}
+
 // Four fixers stated the defect in their own report and shipped it anyway.
 func TestFixSystemPrompt_refusesToShipADisclosedGuess(t *testing.T) {
 	for _, want := range []string{"Abstain per site", "does not make it acceptable"} {
