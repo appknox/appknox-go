@@ -24,7 +24,7 @@ func TestFixWith_AppliesThenReverts(t *testing.T) {
 	orig := "int r = new Random().nextInt();\n"
 	root, rel := fixRepo(t, orig)
 
-	run := func(_ context.Context, _ Config, req FixRequest, edits *[]editRecord) error {
+	run := func(_ context.Context, _ Config, req FixRequest, edits *[]editRecord, _ *string) error {
 		// simulate the edit tool writing the patched file + recording the edit
 		patched := strings.Replace(orig, "new Random()", "new SecureRandom()", 1)
 		require.NoError(t, os.WriteFile(filepath.Join(req.RepoRoot, req.Path), []byte(patched), 0o644))
@@ -43,7 +43,7 @@ func TestFixWith_AppliesThenReverts(t *testing.T) {
 
 func TestFixWith_NoEdit(t *testing.T) {
 	root, rel := fixRepo(t, "unchanged\n")
-	run := func(context.Context, Config, FixRequest, *[]editRecord) error { return nil }
+	run := func(context.Context, Config, FixRequest, *[]editRecord, *string) error { return nil }
 	res, err := fixWith(context.Background(), Config{}, FixRequest{RepoRoot: root, Path: rel}, run)
 	require.NoError(t, err)
 	require.False(t, res.Changed)
@@ -52,7 +52,7 @@ func TestFixWith_NoEdit(t *testing.T) {
 
 func TestFixWith_PropagatesErrorAndReverts(t *testing.T) {
 	root, rel := fixRepo(t, "orig\n")
-	run := func(_ context.Context, _ Config, req FixRequest, _ *[]editRecord) error {
+	run := func(_ context.Context, _ Config, req FixRequest, _ *[]editRecord, _ *string) error {
 		_ = os.WriteFile(filepath.Join(req.RepoRoot, req.Path), []byte("half-written"), 0o644)
 		return errors.New("boom")
 	}

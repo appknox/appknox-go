@@ -75,6 +75,12 @@ type filePatch struct {
 	Applied    bool
 }
 
+// declinedFile is a located file the fixer chose not to edit, with its reason.
+type declinedFile struct {
+	Path   string
+	Reason string
+}
+
 // Outcome is the source-free result of a run — one or more fixed files.
 type Outcome struct {
 	Located   []string    // every located path
@@ -93,6 +99,11 @@ type Outcome struct {
 	// covering a whole file can say which findings were delivered and which were
 	// held back, rather than reporting only the aggregate.
 	Analyses []analysisReport
+
+	// Declined are located files the fixer deliberately left alone, each with
+	// the reason it gave. Declining is a legitimate outcome under the fix
+	// contract; reporting it without the reason is not.
+	Declined []declinedFile
 }
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
@@ -333,6 +344,11 @@ func (s fixSession) produce(ctx context.Context) (Outcome, error) {
 		if res.Changed && res.PatchedContent != "" {
 			out.Patches = append(out.Patches, filePatch{
 				Path: p, Content: res.PatchedContent, Diff: res.Diff})
+		} else if reason := strings.TrimSpace(res.Reason); reason != "" {
+			// The fixer declined this file and said why. Keep it: without it the
+			// run reports only that no edit appeared, which is the symptom, not
+			// the cause, and the cause is unrecoverable once the run ends.
+			out.Declined = append(out.Declined, declinedFile{Path: p, Reason: reason})
 		}
 	}
 	// Check the patch against KnoxIQ's own criteria. A dry run reports the
@@ -572,7 +588,7 @@ func printAnalyses(out Outcome, showRemediation bool) {
 		// and no line of output said so.
 		if len(a.Unfixed) > 0 {
 			fmt.Printf("       NOT FIXED: %s\n", strings.Join(a.Unfixed, ", "))
-			fmt.Println("       (located for this finding; the fixer produced no edit)")
+			printDeclineReasons(out, a.Unfixed)
 		}
 		if showRemediation || len(a.Unfixed) > 0 {
 			printRemediation(a)
@@ -581,6 +597,31 @@ func printAnalyses(out Outcome, showRemediation bool) {
 			fmt.Printf("       verification: %s\n", a.Verification.Summary())
 		} else if a.Patches > 0 {
 			fmt.Printf("       verification: MISSING — no remediation.verification recorded\n")
+		}
+	}
+}
+
+// printDeclineReasons prints why the fixer left each unfixed file alone.
+//
+// "the fixer produced no edit" is the symptom. The contract asks the model to
+// state why it declined, and that answer is the only way to tell a correct
+// abstention from a fixer that misread what it was allowed to do.
+func printDeclineReasons(out Outcome, unfixed []string) {
+	for _, path := range unfixed {
+		reason := ""
+		for _, d := range out.Declined {
+			if d.Path == path {
+				reason = d.Reason
+				break
+			}
+		}
+		if reason == "" {
+			fmt.Printf("       %s: no reason recorded\n", path)
+			continue
+		}
+		fmt.Printf("       %s -- the fixer said:\n", path)
+		for _, line := range strings.Split(reason, "\n") {
+			fmt.Printf("       | %s\n", line)
 		}
 	}
 }

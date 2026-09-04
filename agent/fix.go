@@ -34,10 +34,20 @@ type FixResult struct {
 	Changed        bool
 	PatchedContent string
 	Diff           string
+	// Reason is the fixer's own closing account of what it did, and above all
+	// why it declined when it made no edit.
+	//
+	// The contract tells the model to make NO edit and say why rather than
+	// guess, so declining is an expected outcome -- but the explanation used to
+	// be discarded here, which left "the fixer produced no edit" as the whole
+	// story in the logs and made a decline impossible to diagnose after the fact.
+	Reason string
 }
 
-// fixRunner runs the edit agent, applying edits on disk and recording them.
-type fixRunner func(ctx context.Context, cfg Config, req FixRequest, edits *[]editRecord) error
+// fixRunner runs the edit agent, applying edits on disk and recording them,
+// and captures the model's closing message in reason.
+type fixRunner func(ctx context.Context, cfg Config, req FixRequest,
+	edits *[]editRecord, reason *string) error
 
 // FixFile fixes the located file locally via the agent's edit tool — NO file is
 // uploaded (only the model turns cross the gateway). Returns the patched content
@@ -56,7 +66,8 @@ func fixWith(ctx context.Context, cfg Config, req FixRequest, run fixRunner) (Fi
 		return FixResult{}, err
 	}
 	var edits []editRecord
-	runErr := run(ctx, cfg, req, &edits)
+	var reason string
+	runErr := run(ctx, cfg, req, &edits, &reason)
 	patched, readErr := os.ReadFile(abs)
 	revertErr := os.WriteFile(abs, original, 0o644) // revert: FixFile leaves disk unchanged
 	if runErr != nil {
@@ -72,12 +83,14 @@ func fixWith(ctx context.Context, cfg Config, req FixRequest, run fixRunner) (Fi
 		Changed:        !bytes.Equal(original, patched),
 		PatchedContent: string(patched),
 		Diff:           buildDiff(edits),
+		Reason:         strings.TrimSpace(reason),
 	}, nil
 }
 
 // sdkFix drives the Tool Runner with read-only tools + the edit tool, routed
 // through the gateway.
-func sdkFix(ctx context.Context, cfg Config, req FixRequest, edits *[]editRecord) error {
+func sdkFix(ctx context.Context, cfg Config, req FixRequest,
+	edits *[]editRecord, reason *string) error {
 	if cfg.FixURL == "" || cfg.Token == "" {
 		return errors.New("agent: FixURL and Token are required to reach the gateway")
 	}
@@ -90,7 +103,10 @@ func sdkFix(ctx context.Context, cfg Config, req FixRequest, edits *[]editRecord
 		option.WithAPIKey(cfg.Token),
 	)
 	runner := client.Beta.Messages.NewToolRunner(tools, runnerParams(cfg, fixSystemPrompt, fixUserPrompt(req)))
-	_, err = runner.RunToCompletion(ctx)
+	final, err := runner.RunToCompletion(ctx)
+	// Keep the closing message even when the run errored: a partial explanation
+	// is often the only account of what the fixer was attempting.
+	*reason = extractText(final)
 	return err
 }
 
