@@ -33,9 +33,15 @@ type analysisReport struct {
 	// one would look patched for the other. Not hypothetical -- on file 348 the
 	// Weak PRNG analysis patched MainActivity.java while the Derived Crypto Keys
 	// analysis located that same file and left its hardcoded DES key alone.
-	Unfixed      []string
-	Verification VerificationReport
-	Skipped      string // why nothing from this analysis was delivered
+	Unfixed []string
+	// Remediation and DeveloperPrompt are what KnoxIQ asked for, kept so the run
+	// can echo the instruction beside the patch it produced. A diff is only
+	// judgeable against the instruction behind it, and the run used to report
+	// the patch and the verdict while never recording what was requested.
+	Remediation     string
+	DeveloperPrompt string
+	Verification    VerificationReport
+	Skipped         string // why nothing from this analysis was delivered
 }
 
 // resolveTargets decides what this run will attempt.

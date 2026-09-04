@@ -175,12 +175,14 @@ func (s fixSession) attempt(ctx context.Context, t analysisTarget, out *Outcome)
 		return err
 	}
 	report := analysisReport{
-		AnalysisID:   t.AnalysisID,
-		Finding:      t.Inputs.Finding,
-		Located:      produced.Located,
-		Patches:      len(produced.Patches),
-		Unfixed:      unfixedPaths(produced.Located, produced.Patches),
-		Verification: produced.Verification,
+		AnalysisID:      t.AnalysisID,
+		Finding:         t.Inputs.Finding,
+		Located:         produced.Located,
+		Patches:         len(produced.Patches),
+		Unfixed:         unfixedPaths(produced.Located, produced.Patches),
+		Remediation:     t.Inputs.Remediation,
+		DeveloperPrompt: t.Inputs.DeveloperPrompt,
+		Verification:    produced.Verification,
 	}
 	out.Located = append(out.Located, produced.Located...)
 	out.OutOfScope = append(out.OutOfScope, produced.OutOfScope...)
@@ -514,7 +516,7 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 		} else {
 			fmt.Println("No change produced (advisory only).")
 		}
-		printAnalyses(out)
+		printAnalyses(out, opts.DryRun)
 		printOutOfScope(out)
 		return
 	}
@@ -525,7 +527,7 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 		}
 		fmt.Println(p.Diff)
 	}
-	printAnalyses(out)
+	printAnalyses(out, opts.DryRun)
 	printOutOfScope(out)
 	printDelivery(opts, out)
 }
@@ -545,7 +547,11 @@ func patchesWithheld(out Outcome) int {
 //
 // A whole-file run must say which findings were held back and why. Reporting
 // only the aggregate would let a partial delivery read as a complete one.
-func printAnalyses(out Outcome) {
+// showRemediation forces the full KnoxIQ guidance to be echoed for every
+// analysis. It is printed unconditionally for an analysis that left a located
+// file unfixed, because that is when the first question is always "what was the
+// fixer actually asked to do?" -- and until now the run never recorded it.
+func printAnalyses(out Outcome, showRemediation bool) {
 	if len(out.Analyses) == 0 {
 		return
 	}
@@ -568,10 +574,37 @@ func printAnalyses(out Outcome) {
 			fmt.Printf("       NOT FIXED: %s\n", strings.Join(a.Unfixed, ", "))
 			fmt.Println("       (located for this finding; the fixer produced no edit)")
 		}
+		if showRemediation || len(a.Unfixed) > 0 {
+			printRemediation(a)
+		}
 		if len(a.Verification.Results) > 0 {
 			fmt.Printf("       verification: %s\n", a.Verification.Summary())
 		} else if a.Patches > 0 {
 			fmt.Printf("       verification: MISSING — no remediation.verification recorded\n")
+		}
+	}
+}
+
+// printRemediation echoes what KnoxIQ asked for, verbatim.
+//
+// This is the audit record for a fix: the patch is only judgeable against the
+// instruction that produced it, and a fix that looks wrong is often a fix that
+// was asked for something different from what the reader assumed. The run used
+// to print the diff and the verdict but never the instruction, so "why did it
+// not fix that file" had no answer anywhere in the output.
+func printRemediation(a analysisReport) {
+	if strings.TrimSpace(a.Remediation) == "" {
+		fmt.Println("       remediation: NONE RECORDED — KnoxIQ returned no guidance")
+		return
+	}
+	fmt.Println("       --- remediation handed to the fixer ---")
+	for _, line := range strings.Split(strings.TrimRight(a.Remediation, "\n"), "\n") {
+		fmt.Printf("       | %s\n", line)
+	}
+	if dp := strings.TrimSpace(a.DeveloperPrompt); dp != "" {
+		fmt.Println("       --- KnoxIQ's guidance for the developer ---")
+		for _, line := range strings.Split(dp, "\n") {
+			fmt.Printf("       | %s\n", line)
 		}
 	}
 }
