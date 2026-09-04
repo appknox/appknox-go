@@ -22,10 +22,18 @@ type analysisTarget struct {
 
 // analysisReport records what happened for one analysis, delivered or not.
 type analysisReport struct {
-	AnalysisID   int
-	Finding      string
-	Located      []string
-	Patches      int
+	AnalysisID int
+	Finding    string
+	Located    []string
+	Patches    int
+	// Unfixed are files THIS analysis located that produced no patch.
+	//
+	// Recorded per analysis rather than derived afterwards from the run's whole
+	// patch set: two analyses often locate the same file, so a file patched for
+	// one would look patched for the other. Not hypothetical -- on file 348 the
+	// Weak PRNG analysis patched MainActivity.java while the Derived Crypto Keys
+	// analysis located that same file and left its hardcoded DES key alone.
+	Unfixed      []string
 	Verification VerificationReport
 	Skipped      string // why nothing from this analysis was delivered
 }

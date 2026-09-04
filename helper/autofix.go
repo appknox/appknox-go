@@ -179,6 +179,7 @@ func (s fixSession) attempt(ctx context.Context, t analysisTarget, out *Outcome)
 		Finding:      t.Inputs.Finding,
 		Located:      produced.Located,
 		Patches:      len(produced.Patches),
+		Unfixed:      unfixedPaths(produced.Located, produced.Patches),
 		Verification: produced.Verification,
 	}
 	out.Located = append(out.Located, produced.Located...)
@@ -550,17 +551,53 @@ func printAnalyses(out Outcome) {
 	}
 	fmt.Printf("\n%d analysis(es) attempted:\n", len(out.Analyses))
 	for _, a := range out.Analyses {
-		status := fmt.Sprintf("%d file(s) fixed", a.Patches)
+		// Report fixed AGAINST located, never fixed alone. A finding covering
+		// two files whose fixer edited one is a half-fix, and "1 file(s) fixed"
+		// reads exactly like a whole one -- that is how file 348 shipped a
+		// Derived Crypto Keys patch for ExportedActivity while the hardcoded DES
+		// key in MainActivity went untouched, and the finding never cleared.
+		status := fmt.Sprintf("%d of %d located file(s) fixed", a.Patches, len(a.Located))
 		if a.Skipped != "" {
 			status = "HELD BACK — " + a.Skipped
 		}
 		fmt.Printf("  [%d] %s: %s\n", a.AnalysisID, a.Finding, status)
+		// Name what the fixer declined. Silence here is what made the gap
+		// invisible: the file was located, handed to the fixer, and left alone,
+		// and no line of output said so.
+		if len(a.Unfixed) > 0 {
+			fmt.Printf("       NOT FIXED: %s\n", strings.Join(a.Unfixed, ", "))
+			fmt.Println("       (located for this finding; the fixer produced no edit)")
+		}
 		if len(a.Verification.Results) > 0 {
 			fmt.Printf("       verification: %s\n", a.Verification.Summary())
 		} else if a.Patches > 0 {
 			fmt.Printf("       verification: MISSING — no remediation.verification recorded\n")
 		}
 	}
+}
+
+// unfixedPaths returns the files this analysis located that produced no patch.
+//
+// Located-but-unfixed is a real outcome, not an anomaly: the fix contract tells
+// the model to make NO edit rather than guess when it cannot apply the
+// remediation safely, so a declined file is often the correct answer. What is
+// not acceptable is doing it quietly -- the finding stays open either way, and
+// the reader has to be told which files still carry it.
+func unfixedPaths(located []string, patches []filePatch) []string {
+	if len(patches) == len(located) {
+		return nil
+	}
+	patched := make(map[string]bool, len(patches))
+	for _, p := range patches {
+		patched[p.Path] = true
+	}
+	var unfixed []string
+	for _, path := range located {
+		if !patched[path] {
+			unfixed = append(unfixed, path)
+		}
+	}
+	return unfixed
 }
 
 // printOutOfScope names files that were located but deliberately left alone

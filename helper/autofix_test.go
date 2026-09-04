@@ -11,6 +11,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// A finding that locates two files and patches one is a half-fix. It has to be
+// reported as such, because the vulnerability stays open and the scan will keep
+// reporting it -- which is exactly what happened on mfva file 348.
+func TestUnfixedPaths_NamesTheFileTheFixerDeclined(t *testing.T) {
+	located := []string{"app/MainActivity.java", "app/ExportedActivity.java"}
+	patches := []filePatch{{Path: "app/ExportedActivity.java"}}
+
+	require.Equal(t, []string{"app/MainActivity.java"}, unfixedPaths(located, patches))
+}
+
+func TestUnfixedPaths_SilentWhenEveryLocatedFileWasFixed(t *testing.T) {
+	located := []string{"app/A.java", "app/B.java"}
+	patches := []filePatch{{Path: "app/A.java"}, {Path: "app/B.java"}}
+
+	require.Empty(t, unfixedPaths(located, patches))
+}
+
+// The reason Unfixed is recorded per analysis rather than derived from the run's
+// whole patch set. Two analyses commonly locate the same file: on file 348 the
+// Weak PRNG analysis patched MainActivity.java while the Derived Crypto Keys
+// analysis located that same file and left its hardcoded DES key alone. Judging
+// against the combined patch set would report that file as fixed for both.
+func TestUnfixedPaths_IgnoresPatchesFromAnotherAnalysis(t *testing.T) {
+	located := []string{"app/MainActivity.java"}
+	// This analysis produced nothing; a different one patched the same path.
+	var ownPatches []filePatch
+
+	require.Equal(t, []string{"app/MainActivity.java"}, unfixedPaths(located, ownPatches))
+}
+
 func TestSplitRepo(t *testing.T) {
 	o, n, err := splitRepo("appknox/mfva")
 	require.NoError(t, err)
