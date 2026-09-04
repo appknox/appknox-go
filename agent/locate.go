@@ -18,7 +18,22 @@ import (
 )
 
 const (
-	defaultMaxTokens     = 1024
+	// defaultMaxTokens sizes a LOCATE turn, which answers with a single path.
+	defaultMaxTokens = 1024
+	// defaultFixMaxTokens sizes a FIX turn, which is a different job entirely.
+	//
+	// A fix turn emits the edit tool call, and old_string plus new_string carry
+	// real code. 1024 was enough for a one-line algorithm swap and silently too
+	// small for anything larger: the reply was truncated mid-tool-use, so no edit
+	// ever completed and the final message carried no text. That surfaced as "the
+	// fixer produced no edit" with no reason -- indistinguishable from a
+	// deliberate abstention -- and as flakiness, since whether a fix fitted the
+	// budget depended on how much code it happened to touch.
+	//
+	// On mfva file 348 the two findings fell either side of that line: the
+	// one-line Cipher swap in ExportedActivity fitted, and the hardcoded-key fix
+	// in MainActivity, which has to write a key-derivation helper, did not.
+	defaultFixMaxTokens  = 16384
 	defaultMaxIterations = 15
 )
 
@@ -92,13 +107,20 @@ func locateParams(cfg Config, req Request) anthropic.BetaToolRunnerParams {
 // runnerParams builds Tool Runner params with cfg's model/token/iteration
 // defaults and the given system + user prompts. Shared by locate and fix.
 func runnerParams(cfg Config, system, user string) anthropic.BetaToolRunnerParams {
+	return runnerParamsWithBudget(cfg, system, user, defaultMaxTokens)
+}
+
+// runnerParamsWithBudget is runnerParams with an explicit output-token budget,
+// so a locate turn and a fix turn are not forced to share one number. An
+// explicit cfg.MaxTokens still wins.
+func runnerParamsWithBudget(cfg Config, system, user string, fallbackMaxTokens int64) anthropic.BetaToolRunnerParams {
 	model := cfg.Model
 	if model == "" {
 		model = string(anthropic.ModelClaudeSonnet5)
 	}
 	maxTokens := cfg.MaxTokens
 	if maxTokens <= 0 {
-		maxTokens = defaultMaxTokens
+		maxTokens = fallbackMaxTokens
 	}
 	maxIter := cfg.MaxIterations
 	if maxIter <= 0 {

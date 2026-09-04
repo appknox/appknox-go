@@ -102,12 +102,37 @@ func sdkFix(ctx context.Context, cfg Config, req FixRequest,
 		option.WithBaseURL(strings.TrimRight(cfg.FixURL, "/")+"/anthropic"),
 		option.WithAPIKey(cfg.Token),
 	)
-	runner := client.Beta.Messages.NewToolRunner(tools, runnerParams(cfg, fixSystemPrompt, fixUserPrompt(req)))
+	runner := client.Beta.Messages.NewToolRunner(tools,
+		runnerParamsWithBudget(cfg, fixSystemPrompt, fixUserPrompt(req), defaultFixMaxTokens))
 	final, err := runner.RunToCompletion(ctx)
 	// Keep the closing message even when the run errored: a partial explanation
 	// is often the only account of what the fixer was attempting.
-	*reason = extractText(final)
+	*reason = declineReason(final)
 	return err
+}
+
+// declineReason renders the fixer's closing message, naming the mechanical
+// reasons a turn can end with no edit and no explanation.
+//
+// A truncated or iteration-capped run leaves a final message with no text at
+// all. Reporting that as silence would make it look like the model chose to
+// abstain, when in fact it never got to finish -- two problems with opposite
+// fixes, and for a while they were indistinguishable in the logs.
+func declineReason(final *anthropic.BetaMessage) string {
+	if final == nil {
+		return "the fixer returned no final message"
+	}
+	if text := strings.TrimSpace(extractText(final)); text != "" {
+		return text
+	}
+	switch final.StopReason {
+	case anthropic.BetaStopReasonMaxTokens:
+		return "the reply hit the output-token limit before the edit completed; " +
+			"the fix was too large for the budget, not declined"
+	case anthropic.BetaStopReasonRefusal:
+		return "the model refused the request"
+	}
+	return ""
 }
 
 // buildFixTools = read-only Read/Grep/Glob + the edit tool (restricted to allowedPath).

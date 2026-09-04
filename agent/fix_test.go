@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,4 +82,41 @@ func TestBuildDiff(t *testing.T) {
 	require.Contains(t, d, "--- A.java")
 	require.Contains(t, d, "- old")
 	require.Contains(t, d, "+ new")
+}
+
+// A fix turn writes code into the edit tool call; a locate turn writes a path.
+// Sharing one 1024-token budget silently truncated any fix bigger than a
+// one-line swap, so no edit completed and the run looked like an abstention.
+func TestFixTurnGetsABiggerTokenBudgetThanLocate(t *testing.T) {
+	fix := runnerParamsWithBudget(Config{}, "sys", "user", defaultFixMaxTokens)
+	locate := runnerParams(Config{}, "sys", "user")
+
+	require.Greater(t, fix.MaxTokens, locate.MaxTokens)
+	require.EqualValues(t, defaultFixMaxTokens, fix.MaxTokens)
+}
+
+func TestRunnerParams_ExplicitMaxTokensStillWins(t *testing.T) {
+	p := runnerParamsWithBudget(Config{MaxTokens: 999}, "sys", "user", defaultFixMaxTokens)
+	require.EqualValues(t, 999, p.MaxTokens)
+}
+
+// A truncated or refused turn ends with no text. Reporting that as silence made
+// it read as "the model chose not to edit", which is the opposite diagnosis and
+// sends you to the prompt instead of the budget.
+func TestDeclineReason_NamesTruncationRatherThanLookingLikeAbstention(t *testing.T) {
+	msg := &anthropic.BetaMessage{StopReason: anthropic.BetaStopReasonMaxTokens}
+	require.Contains(t, declineReason(msg), "output-token limit")
+
+	require.Contains(t, declineReason(nil), "no final message")
+}
+
+// When the model does explain itself, its own words win over any inference.
+func TestDeclineReason_PrefersTheModelsOwnWords(t *testing.T) {
+	msg := &anthropic.BetaMessage{
+		StopReason: anthropic.BetaStopReasonMaxTokens,
+		Content: []anthropic.BetaContentBlockUnion{
+			{Type: "text", Text: "needs Android Keystore, out of scope here"},
+		},
+	}
+	require.Equal(t, "needs Android Keystore, out of scope here", declineReason(msg))
 }
