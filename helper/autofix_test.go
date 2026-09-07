@@ -39,6 +39,7 @@ func TestResolveRepoRoot_LocalPath(t *testing.T) {
 }
 
 func TestResolveRepoRoot_RequiresRepoOrPath(t *testing.T) {
+	clearCIRepoEnv(t)
 	_, _, err := resolveRepoRoot(context.Background(), AutofixOptions{})
 	require.Error(t, err)
 }
@@ -89,12 +90,14 @@ func deps(path string, res fixservice.Result, in FindingInputs) autofixDeps {
 	return autofixDeps{
 		locate: func(context.Context, agent.Config, agent.Request) (string, error) { return path, nil },
 		fetch:  func(context.Context, int, int) (FindingInputs, error) { return in, nil },
-		submit: func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) { return res, nil },
+		submit: func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
+			return res, nil
+		},
 		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
 			return agent.FixResult{Changed: true, PatchedContent: "agent-fixed\n", Diff: "-old\n+new"}, nil
 		},
-		deliver: func(context.Context, AutofixOptions, []filePatch, FindingInputs) (string, error) {
-			return "https://github.com/appknox/mfva/compare/master...appknox-autofix/analysis-1?expand=1", nil
+		deliver: func(context.Context, AutofixOptions, []filePatch, FindingInputs) (Delivery, error) {
+			return Delivery{URL: "https://github.com/appknox/mfva/compare/master...appknox-autofix/analysis-1?expand=1"}, nil
 		},
 	}
 }
@@ -139,16 +142,17 @@ func TestRunAutofix_LocateOnly_WhenNoRemediation(t *testing.T) {
 	require.Empty(t, out.Patches) // no remediation → no fix
 }
 
-func TestRunAutofix_FullFlow_AppliesPatch(t *testing.T) {
+func TestRunAutofix_FullFlow_PushesBranch(t *testing.T) {
 	root, rel := repoWithFile(t, "int r = new Random().nextInt();\n")
 	res := fixservice.Result{Changed: true, PatchedContent: "int r = new SecureRandom().nextInt();\n", Confidence: 0.95}
 	out, err := runAutofix(context.Background(), appknoxOpts(root),
 		deps(rel, res, oneClass("Insecure Random", "use SecureRandom")))
 	require.NoError(t, err)
 	require.Len(t, out.Patches, 1)
-	require.True(t, out.Patches[0].Applied)
+	require.Contains(t, out.BranchURL, "compare")
+	require.False(t, out.Patches[0].Applied)
 	got, _ := os.ReadFile(filepath.Join(root, rel))
-	require.Contains(t, string(got), "SecureRandom")
+	require.Contains(t, string(got), "Random().nextInt") // local checkout is not rewritten
 }
 
 func TestRunAutofix_MultiClass_FixesEachLocatedFile(t *testing.T) {
@@ -170,9 +174,10 @@ func TestRunAutofix_MultiClass_FixesEachLocatedFile(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"app/A.java", "app/B.java"}, out.Located)
 	require.Len(t, out.Patches, 2)
+	require.Contains(t, out.BranchURL, "compare")
 	for _, rel := range []string{"app/A.java", "app/B.java"} {
 		got, _ := os.ReadFile(filepath.Join(root, rel))
-		require.Equal(t, "fixed\n", string(got)) // BOTH classes fixed
+		require.Equal(t, "orig\n", string(got)) // pushed, not written locally
 	}
 }
 
@@ -190,12 +195,12 @@ func TestRunAutofix_MultiClass_PushBranch_OneBranch(t *testing.T) {
 	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
 		return FindingInputs{Finding: "Multi", ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}, nil
 	}
-	d.deliver = func(_ context.Context, _ AutofixOptions, patches []filePatch, _ FindingInputs) (string, error) {
+	d.deliver = func(_ context.Context, _ AutofixOptions, patches []filePatch, _ FindingInputs) (Delivery, error) {
 		delivered = patches // all files pushed together in one call
-		return "https://github.com/o/r/compare/master...b?expand=1", nil
+		return Delivery{URL: "https://github.com/o/r/compare/master...b?expand=1"}, nil
 	}
 	opts := appknoxOpts(root)
-	opts.Repo, opts.PushBranch = "appknox/mfva", true
+	opts.Repo = "appknox/mfva"
 	out, err := runAutofix(context.Background(), opts, d)
 	require.NoError(t, err)
 	require.Len(t, delivered, 2) // both files in ONE deliver call → one branch
@@ -218,14 +223,59 @@ func TestRunAutofix_DryRun_DoesNotWrite(t *testing.T) {
 func TestRunAutofix_PushBranch(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
 	opts := appknoxOpts(root)
-	opts.Repo, opts.PushBranch = "appknox/mfva", true
+	opts.Repo = "appknox/mfva"
 	out, err := runAutofix(context.Background(), opts,
 		deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r")))
 	require.NoError(t, err)
 	require.Contains(t, out.BranchURL, "compare")
-	require.False(t, out.Patches[0].Applied)      // delivered as a branch, not applied locally
+	require.False(t, out.Patches[0].Applied)
 	got, _ := os.ReadFile(filepath.Join(root, rel))
 	require.Equal(t, "orig\n", string(got))
+}
+
+func TestRunAutofix_PushBranch_ReportsToAppknox(t *testing.T) {
+	root, rel := repoWithFile(t, "orig\n")
+	del := Delivery{
+		URL:    "https://github.com/appknox/mfva/compare/master...appknox-autofix/analysis-1?expand=1",
+		Branch: "appknox-autofix/analysis-1", Base: "master",
+		CommitSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	var gotOpts AutofixOptions
+	var gotDel Delivery
+	var gotPatches []filePatch
+	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
+	d.deliver = func(_ context.Context, _ AutofixOptions, _ []filePatch, _ FindingInputs) (Delivery, error) {
+		return del, nil
+	}
+	d.report = func(_ context.Context, opts AutofixOptions, reported Delivery, patches []filePatch) error {
+		gotOpts, gotDel, gotPatches = opts, reported, patches
+		return nil
+	}
+	opts := appknoxOpts(root)
+	opts.Repo = "appknox/mfva"
+	out, err := runAutofix(context.Background(), opts, d)
+	require.NoError(t, err)
+	require.Equal(t, del.URL, out.BranchURL)
+	require.Equal(t, del.CommitSHA, out.CommitSHA)
+	require.Equal(t, del.Branch, out.Branch)
+	require.Equal(t, 1, gotOpts.FileID)
+	require.Equal(t, 1, gotOpts.AnalysisID)
+	require.Equal(t, del, gotDel)
+	require.Equal(t, rel, gotPatches[0].Path)
+}
+
+func TestRunAutofix_PushBranch_ReportError(t *testing.T) {
+	root, rel := repoWithFile(t, "orig\n")
+	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
+	d.report = func(context.Context, AutofixOptions, Delivery, []filePatch) error {
+		return errors.New("mycroft down")
+	}
+	opts := appknoxOpts(root)
+	opts.Repo = "appknox/mfva"
+	_, err := runAutofix(context.Background(), opts, d)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to record on Appknox")
+	require.Contains(t, err.Error(), "mycroft down")
 }
 
 func TestRunAutofix_AgentFixMode(t *testing.T) {
@@ -239,9 +289,10 @@ func TestRunAutofix_AgentFixMode(t *testing.T) {
 	out, err := runAutofix(context.Background(), opts, d)
 	require.NoError(t, err)
 	require.Len(t, out.Patches, 1)
-	require.True(t, out.Patches[0].Applied)
+	require.Equal(t, "agent-fixed\n", out.Patches[0].Content)
+	require.Contains(t, out.BranchURL, "compare")
 	got, _ := os.ReadFile(filepath.Join(root, rel))
-	require.Equal(t, "agent-fixed\n", string(got))
+	require.Equal(t, "orig\n", string(got))
 }
 
 func TestRunAutofix_EmptyPatchNotApplied(t *testing.T) {

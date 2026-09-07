@@ -46,12 +46,19 @@ func fakeGitHub(t *testing.T, fileExists bool) (*httptest.Server, *[]string) {
 				_, hasSHA := b["sha"]
 				require.False(t, hasSHA) // new file: no sha
 			}
-			w.WriteHeader(http.StatusCreated)
+			writeContentsPut(w, testCommitSHA)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	return srv, seen
+}
+
+const testCommitSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func writeContentsPut(w http.ResponseWriter, sha string) {
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]any{"commit": map[string]string{"sha": sha}})
 }
 
 func change() Change {
@@ -64,10 +71,13 @@ func change() Change {
 func TestPushBranch_ExistingFile(t *testing.T) {
 	srv, seen := fakeGitHub(t, true)
 	defer srv.Close()
-	url, err := PushBranch(context.Background(),
+	res, err := PushBranch(context.Background(),
 		Config{Owner: "appknox", Repo: "mfva", BaseRef: "master", Token: "ghtok", APIBase: srv.URL}, change())
 	require.NoError(t, err)
-	require.Contains(t, url, "/appknox/mfva/compare/master...appknox-autofix/analysis-42")
+	require.Contains(t, res.URL, "/appknox/mfva/compare/master...appknox-autofix/analysis-42")
+	require.Equal(t, "appknox-autofix/analysis-42", res.Branch)
+	require.Equal(t, "master", res.Base)
+	require.Equal(t, testCommitSHA, res.CommitSHA)
 	require.Contains(t, *seen, "POST /repos/appknox/mfva/git/refs")
 }
 
@@ -100,16 +110,17 @@ func TestPushBranch_ReusesExistingBranch(t *testing.T) {
 			var b map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&b)
 			require.Equal(t, "BRANCHBLOB", b["sha"]) // the branch's file sha, not base
-			w.WriteHeader(http.StatusCreated)
+			writeContentsPut(w, testCommitSHA)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer srv.Close()
-	url, err := PushBranch(context.Background(),
+	res, err := PushBranch(context.Background(),
 		Config{Owner: "o", Repo: "r", BaseRef: "master", Token: "ghtok", APIBase: srv.URL}, change())
 	require.NoError(t, err)
-	require.Contains(t, url, "/compare/")
+	require.Contains(t, res.URL, "/compare/")
+	require.Equal(t, testCommitSHA, res.CommitSHA)
 }
 
 func TestPushBranch_ResolvesDefaultBranch(t *testing.T) {
@@ -126,16 +137,18 @@ func TestPushBranch_ResolvesDefaultBranch(t *testing.T) {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			w.WriteHeader(http.StatusCreated)
+			writeContentsPut(w, testCommitSHA)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer srv.Close()
-	url, err := PushBranch(context.Background(),
+	res, err := PushBranch(context.Background(),
 		Config{Owner: "o", Repo: "r", Token: "ghtok", APIBase: srv.URL}, change()) // no BaseRef
 	require.NoError(t, err)
-	require.Contains(t, url, "/compare/main...") // resolved default branch
+	require.Contains(t, res.URL, "/compare/main...") // resolved default branch
+	require.Equal(t, "main", res.Base)
+	require.Equal(t, testCommitSHA, res.CommitSHA)
 }
 
 func TestPushFiles_MultipleFiles(t *testing.T) {
@@ -150,13 +163,16 @@ func TestPushFiles_MultipleFiles(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound) // new files
 		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/contents/"):
 			puts++
-			w.WriteHeader(http.StatusCreated)
+			writeContentsPut(w, []string{
+				"1111111111111111111111111111111111111111",
+				"2222222222222222222222222222222222222222",
+			}[puts-1])
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer srv.Close()
-	url, err := PushFiles(context.Background(),
+	res, err := PushFiles(context.Background(),
 		Config{Owner: "o", Repo: "r", BaseRef: "master", Token: "ghtok", APIBase: srv.URL},
 		"appknox-autofix/analysis-42",
 		[]FileChange{
@@ -165,7 +181,8 @@ func TestPushFiles_MultipleFiles(t *testing.T) {
 		})
 	require.NoError(t, err)
 	require.Equal(t, 2, puts) // one commit per file
-	require.Contains(t, url, "/compare/master...appknox-autofix/analysis-42")
+	require.Contains(t, res.URL, "/compare/master...appknox-autofix/analysis-42")
+	require.Equal(t, "2222222222222222222222222222222222222222", res.CommitSHA) // last file's commit
 }
 
 func TestPushFiles_NoFiles(t *testing.T) {

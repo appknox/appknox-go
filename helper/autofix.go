@@ -16,18 +16,17 @@ import (
 
 // AutofixOptions carries the flags for the client-side autofix flow.
 type AutofixOptions struct {
-	Repo        string // GitHub owner/name to auto-fetch
-	Ref         string // git ref (branch/tag/sha); empty = default branch
-	RepoPath    string // already-checked-out repo (alternative to Repo)
-	FileID      int    // Appknox file id (with AnalysisID → finding + remediation)
-	AnalysisID  int    // Appknox analysis id
-	Finding     string // manual finding detail (when not using file/analysis id)
-	ClassHint   string // manual class/symbol hint
-	FixURL      string // Appknox fix-service/gateway base URL
+	Repo         string // GitHub owner/name from CI (GITHUB_REPOSITORY)
+	Ref          string // git ref (branch/tag/sha); empty = default branch
+	RepoPath     string // already-checked-out repo (CI: GITHUB_WORKSPACE)
+	FileID       int    // Appknox file id (with AnalysisID → finding + remediation)
+	AnalysisID   int    // Appknox analysis id
+	Finding      string // manual finding detail (when not using file/analysis id)
+	ClassHint    string // manual class/symbol hint
+	FixURL       string // Appknox fix-service/gateway base URL
 	FixToken     string // scoped fix-service token
-	GithubToken  string // GitHub token for the --repo fetch
-	DryRun       bool   // locate + fix but do not write the patch
-	PushBranch   bool   // push the fix to a new GitHub branch instead of local apply
+	GithubToken  string // GitHub token for the --repo fetch and branch push
+	DryRun       bool   // locate + fix but do not push a branch
 	FixMode      string // "server" (default, /v1/fix) or "agent" (client-side Edit, no upload)
 	ListAnalyses bool   // print the file's analyses + class hints, then exit
 }
@@ -38,7 +37,8 @@ type autofixDeps struct {
 	fetch    func(ctx context.Context, fileID, analysisID int) (FindingInputs, error)
 	submit   func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
 	agentFix func(ctx context.Context, cfg agent.Config, req agent.FixRequest) (agent.FixResult, error)
-	deliver  func(ctx context.Context, opts AutofixOptions, patches []filePatch, inputs FindingInputs) (string, error)
+	deliver  func(ctx context.Context, opts AutofixOptions, patches []filePatch, inputs FindingInputs) (Delivery, error)
+	report   func(ctx context.Context, opts AutofixOptions, d Delivery, patches []filePatch) error
 }
 
 func defaultDeps() autofixDeps {
@@ -48,6 +48,7 @@ func defaultDeps() autofixDeps {
 		submit:   fixservice.SubmitAndAwait,
 		agentFix: agent.FixFile,
 		deliver:  deliverBranch,
+		report:   reportAutofixPR,
 	}
 }
 
@@ -64,7 +65,9 @@ type filePatch struct {
 type Outcome struct {
 	Located   []string    // every located path
 	Patches   []filePatch // per-file fixes that changed something
-	BranchURL string      // set when --push-branch delivered a branch (compare URL)
+	BranchURL string      // compare URL after the fix branch is pushed
+	CommitSHA string      // git commit SHA of the pushed branch
+	Branch    string      // pushed branch name
 }
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
@@ -86,6 +89,7 @@ func ProcessAutofix(opts AutofixOptions) {
 
 // runAutofix: resolve inputs → locate each class → fix each file → deliver.
 func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcome, error) {
+	opts = applyCIDefaults(opts)
 	token := firstNonEmpty(opts.FixToken, os.Getenv("APPKNOX_AUTOFIX_FIX_TOKEN"))
 	if token == "" {
 		return Outcome{}, errors.New("fix-service token required (--fix-token or APPKNOX_AUTOFIX_FIX_TOKEN)")
@@ -186,21 +190,19 @@ func (s fixSession) produceFix(ctx context.Context, path string) (fixservice.Res
 	})
 }
 
-// deliver pushes all patches to one branch (--push-branch) or applies them locally.
+// deliver pushes all patches to one GitHub branch and records the delivery on Appknox.
 func (s fixSession) deliver(ctx context.Context, out Outcome) (Outcome, error) {
-	if s.opts.PushBranch {
-		url, err := s.d.deliver(ctx, s.opts, out.Patches, s.inputs)
-		if err != nil {
-			return out, err
-		}
-		out.BranchURL = url
-		return out, nil
+	del, err := s.d.deliver(ctx, s.opts, out.Patches, s.inputs)
+	if err != nil {
+		return out, err
 	}
-	for i := range out.Patches {
-		if err := applyPatch(s.root, out.Patches[i].Path, out.Patches[i].Content); err != nil {
-			return out, err
+	out.BranchURL = del.URL
+	out.CommitSHA = del.CommitSHA
+	out.Branch = del.Branch
+	if s.d.report != nil {
+		if err := s.d.report(ctx, s.opts, del, out.Patches); err != nil {
+			return out, fmt.Errorf("pushed %s but failed to record on Appknox: %w", del.URL, err)
 		}
-		out.Patches[i].Applied = true
 	}
 	return out, nil
 }
@@ -219,14 +221,14 @@ func resolveInputs(
 	return FindingInputs{Finding: opts.Finding, ClassHints: []string{opts.ClassHint}}, nil
 }
 
-// resolveRepoRoot returns the repo root and a cleanup func: a local --repo-path,
-// or a freshly fetched GitHub tarball (cleanup removes the temp dir).
+// resolveRepoRoot returns the repo root and a cleanup func: a local checkout
+// (--repo-path or GITHUB_WORKSPACE), or a freshly fetched GitHub tarball.
 func resolveRepoRoot(ctx context.Context, opts AutofixOptions) (string, func(), error) {
 	if opts.RepoPath != "" {
 		return opts.RepoPath, func() {}, nil
 	}
 	if opts.Repo == "" {
-		return "", nil, errors.New("provide --repo owner/name (auto-fetch) or --repo-path <dir>")
+		return "", nil, errors.New("autofix needs a CI checkout (GITHUB_WORKSPACE) or --repo-path <dir>")
 	}
 	owner, name, err := splitRepo(opts.Repo)
 	if err != nil {
@@ -330,15 +332,18 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 	printDelivery(opts, out)
 }
 
-// printDelivery renders the delivery outcome (dry-run / branch / applied).
+// printDelivery renders the delivery outcome (dry-run or pushed branch).
 func printDelivery(opts AutofixOptions, out Outcome) {
 	switch {
 	case opts.DryRun:
-		fmt.Printf("\n[dry-run] not writing %d patched file(s).\n", len(out.Patches))
+		fmt.Printf("\n[dry-run] not pushing %d patched file(s).\n", len(out.Patches))
 	case out.BranchURL != "":
 		fmt.Printf("\nPushed %d file(s) to a branch — open a PR: %s\n", len(out.Patches), out.BranchURL)
+		if out.CommitSHA != "" {
+			fmt.Printf("commit: %s\n", out.CommitSHA)
+		}
 	default:
-		fmt.Printf("\nApplied fix to %d file(s): %s\n", len(out.Patches), patchPaths(out.Patches))
+		fmt.Printf("\nGenerated fix for %d file(s): %s\n", len(out.Patches), patchPaths(out.Patches))
 	}
 }
 

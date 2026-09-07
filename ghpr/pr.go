@@ -56,36 +56,50 @@ type FileChange struct {
 	Message string
 }
 
+// Result is the outcome of pushing a branch (compare URL + last commit SHA).
+type Result struct {
+	URL       string // compare URL that pre-fills a PR
+	Branch    string
+	Base      string
+	CommitSHA string // SHA of the last commit written to the branch
+}
+
 // PushBranch pushes a single patched file to a new branch (thin wrapper).
-func PushBranch(ctx context.Context, cfg Config, ch Change) (string, error) {
+func PushBranch(ctx context.Context, cfg Config, ch Change) (Result, error) {
 	return PushFiles(ctx, cfg, ch.Branch, []FileChange{{Path: ch.Path, Content: ch.Content, Message: ch.Message}})
 }
 
 // PushFiles creates branch off the base ref and commits each patched file to it
 // (one commit per file), returning a compare URL that pre-fills a PR. Idempotent:
 // an existing branch is reused. It does not open the PR itself.
-func PushFiles(ctx context.Context, cfg Config, branch string, files []FileChange) (string, error) {
+func PushFiles(ctx context.Context, cfg Config, branch string, files []FileChange) (Result, error) {
 	if cfg.Owner == "" || cfg.Repo == "" || cfg.Token == "" {
-		return "", errors.New("ghpr: owner, repo, and token are required")
+		return Result{}, errors.New("ghpr: owner, repo, and token are required")
 	}
 	if len(files) == 0 {
-		return "", errors.New("ghpr: no files to push")
+		return Result{}, errors.New("ghpr: no files to push")
 	}
 	base, err := resolveBase(ctx, cfg)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 	baseSHA, err := branchSHA(ctx, cfg, base)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 	if err := createBranch(ctx, cfg, branch, baseSHA); err != nil {
-		return "", err
+		return Result{}, err
 	}
-	if err := commitFiles(ctx, cfg, branch, files); err != nil {
-		return "", err
+	sha, err := commitFiles(ctx, cfg, branch, files)
+	if err != nil {
+		return Result{}, err
 	}
-	return compareURL(cfg, base, branch), nil
+	return Result{
+		URL:       compareURL(cfg, base, branch),
+		Branch:    branch,
+		Base:      base,
+		CommitSHA: sha,
+	}, nil
 }
 
 // resolveBase returns the configured base ref or the repo's default branch.
@@ -98,18 +112,24 @@ func resolveBase(ctx context.Context, cfg Config) (string, error) {
 
 // commitFiles commits each file to the branch, one commit per file. On a re-run
 // the file's current blob sha on the branch is used so the update is accepted.
-func commitFiles(ctx context.Context, cfg Config, branch string, files []FileChange) error {
+// The SHA of the last commit is returned.
+func commitFiles(ctx context.Context, cfg Config, branch string, files []FileChange) (string, error) {
+	var lastSHA string
 	for _, f := range files {
 		fileSHA, err := currentFileSHA(ctx, cfg, f.Path, branch)
 		if err != nil {
-			return err
+			return "", err
 		}
 		ch := Change{Branch: branch, Path: f.Path, Content: f.Content, Message: f.Message}
-		if err := putFile(ctx, cfg, ch, fileSHA); err != nil {
-			return err
+		sha, err := putFile(ctx, cfg, ch, fileSHA)
+		if err != nil {
+			return "", err
+		}
+		if sha != "" {
+			lastSHA = sha
 		}
 	}
-	return nil
+	return lastSHA, nil
 }
 
 func defaultBranch(ctx context.Context, cfg Config) (string, error) {
@@ -170,7 +190,7 @@ func currentFileSHA(ctx context.Context, cfg Config, path, ref string) (string, 
 	return out.SHA, nil
 }
 
-func putFile(ctx context.Context, cfg Config, ch Change, fileSHA string) error {
+func putFile(ctx context.Context, cfg Config, ch Change, fileSHA string) (string, error) {
 	body := map[string]string{
 		"message": ch.Message,
 		"content": base64.StdEncoding.EncodeToString([]byte(ch.Content)),
@@ -179,7 +199,15 @@ func putFile(ctx context.Context, cfg Config, ch Change, fileSHA string) error {
 	if fileSHA != "" {
 		body["sha"] = fileSHA
 	}
-	return cfg.do(ctx, http.MethodPut, contentsURL(cfg, ch.Path), body, nil)
+	var out struct {
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := cfg.do(ctx, http.MethodPut, contentsURL(cfg, ch.Path), body, &out); err != nil {
+		return "", err
+	}
+	return out.Commit.SHA, nil
 }
 
 // contentsURL builds the Contents API URL with each path segment escaped.
@@ -233,7 +261,7 @@ func (c Config) do(ctx context.Context, method, rawURL string, body, out any) er
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("ghpr: %s %s -> HTTP %d: %s", method, req.URL.Path, resp.StatusCode, ghMessage(data))
 	}
-	if out == nil {
+	if out == nil || len(data) == 0 {
 		return nil
 	}
 	return json.Unmarshal(data, out)

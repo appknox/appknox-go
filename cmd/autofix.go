@@ -9,15 +9,16 @@ import (
 var autofixCmd = &cobra.Command{
 	Use:   "autofix",
 	Short: "Locate the source file to fix for a finding (client-side).",
-	Long: `Fetch the repository (from a GitHub link with --repo, or an already-checked-out
---repo-path) and locate the single source file that a scan finding points to.
+	Long: `Locate the source file for a scan finding, generate a fix, and push it to a
+new GitHub branch. Repo, checkout, token, and source PR come from CI
+(GITHUB_REPOSITORY, GITHUB_WORKSPACE, GITHUB_TOKEN, GITHUB_REF / event payload).
+When --file-id and --analysis-id are set, the delivery is recorded on Appknox.
 
 The repository stays on this machine; only model turns route through the Appknox
 gateway (which holds the provider key). No provider key is needed here.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		f := cmd.Flags()
 		opts := helper.AutofixOptions{}
-		opts.Repo, _ = f.GetString("repo")
 		opts.Ref, _ = f.GetString("ref")
 		opts.RepoPath, _ = f.GetString("repo-path")
 		opts.FileID, _ = f.GetInt("file-id")
@@ -28,7 +29,6 @@ gateway (which holds the provider key). No provider key is needed here.`,
 		opts.FixToken, _ = f.GetString("fix-token")
 		opts.GithubToken, _ = f.GetString("github-token")
 		opts.DryRun, _ = f.GetBool("dry-run")
-		opts.PushBranch, _ = f.GetBool("push-branch")
 		opts.FixMode, _ = f.GetString("fix-mode")
 		opts.ListAnalyses, _ = f.GetBool("list-analyses")
 		helper.ProcessAutofix(opts)
@@ -38,18 +38,16 @@ gateway (which holds the provider key). No provider key is needed here.`,
 func init() {
 	RootCmd.AddCommand(autofixCmd)
 	f := autofixCmd.Flags()
-	f.String("repo", "", "GitHub repo owner/name to auto-fetch (client-side)")
-	f.String("ref", "", "Git ref (branch, tag, or SHA); default branch if empty")
-	f.String("repo-path", "", "Path to an already-checked-out repo (instead of --repo)")
+	f.String("ref", "", "Git ref (branch, tag, or SHA); CI uses GITHUB_BASE_REF if empty")
+	f.String("repo-path", "", "Path to an already-checked-out repo (CI uses GITHUB_WORKSPACE if empty)")
 	f.Int("file-id", 0, "Appknox file id (with --analysis-id → finding + KnoxIQ remediation)")
 	f.Int("analysis-id", 0, "Appknox analysis id")
 	f.String("finding", "", "Manual finding detail (when not using --file-id/--analysis-id)")
 	f.String("class-hint", "", "Manual class/symbol hint from the finding (optional)")
 	f.String("fix-url", "http://localhost:8100", "Appknox fix-service/gateway base URL")
 	f.String("fix-token", "", "Scoped fix-service token (or env APPKNOX_AUTOFIX_FIX_TOKEN)")
-	f.String("github-token", "", "GitHub token for --repo fetch (or env GITHUB_TOKEN)")
-	f.Bool("dry-run", false, "Locate + generate the fix but do not write the patch")
-	f.Bool("push-branch", false, "Push the fix to a new GitHub branch (needs --repo + GITHUB_TOKEN) instead of local apply")
+	f.String("github-token", "", "GitHub token for fetch + push (or env GITHUB_TOKEN)")
+	f.Bool("dry-run", false, "Locate + generate the fix but do not push a branch")
 	f.String("fix-mode", "agent", "How to generate the fix: 'agent' (default — LLM Edit tool via the agent SDK, no file upload) or 'server' (/v1/fix single-shot, uploads the file)")
 	f.Bool("list-analyses", false, "List the file's analyses + derived class hints, then exit (needs --file-id)")
 }

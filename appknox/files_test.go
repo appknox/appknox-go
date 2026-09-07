@@ -2,6 +2,7 @@ package appknox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -201,33 +202,100 @@ func TestFilesService_GetScansStatusSummary(t *testing.T) {
 		t.Errorf("Files.GetScansStatusSummary returned %+v, want %+v", summary, want)
 	}
 
-    // 403 Forbidden test
-    mux.HandleFunc("/api/v3/files/403/scans_status_summary", func(w http.ResponseWriter, r *http.Request) {
-        testMethod(t, r, "GET")
-        w.WriteHeader(http.StatusForbidden)
-        fmt.Fprint(w, `{"detail": "You do not have permission to perform this action."}`)
-    })
-    _, resp, err := client.Files.GetScansStatusSummary(context.Background(), 403)
-    if err == nil {
-        t.Errorf("Expected error for 403 Forbidden, got nil")
-    }
-    if resp == nil || resp.StatusCode != http.StatusForbidden {
-        t.Errorf("Expected response status 403, got %+v", resp)
-    }
+	// 403 Forbidden test
+	mux.HandleFunc("/api/v3/files/403/scans_status_summary", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"detail": "You do not have permission to perform this action."}`)
+	})
+	_, resp, err := client.Files.GetScansStatusSummary(context.Background(), 403)
+	if err == nil {
+		t.Errorf("Expected error for 403 Forbidden, got nil")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Errorf("Expected response status 403, got %+v", resp)
+	}
 
-    // 404 Not Found test
-    mux.HandleFunc("/api/v3/files/404/scans_status_summary", func(w http.ResponseWriter, r *http.Request) {
-        testMethod(t, r, "GET")
-        w.WriteHeader(http.StatusNotFound)
-        fmt.Fprint(w, `{"detail": "Not found."}`)
-    })
-    _, resp, err = client.Files.GetScansStatusSummary(context.Background(), 404)
-    if err == nil {
-        t.Errorf("Expected error for 404 Not Found, got nil")
-    }
-    if resp == nil || resp.StatusCode != http.StatusNotFound {
-        t.Errorf("Expected response status 404, got %+v", resp)
-    }
+	// 404 Not Found test
+	mux.HandleFunc("/api/v3/files/404/scans_status_summary", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"detail": "Not found."}`)
+	})
+	_, resp, err = client.Files.GetScansStatusSummary(context.Background(), 404)
+	if err == nil {
+		t.Errorf("Expected error for 404 Not Found, got nil")
+	}
+	if resp == nil || resp.StatusCode != http.StatusNotFound {
+		t.Errorf("Expected response status 404, got %+v", resp)
+	}
+}
+
+func TestAutofixPR_marshall(t *testing.T) {
+	testJSONMarshal(t, &AutofixPR{}, `{"analysis":0,"repo":"","base_branch":"","branch":"","pr_url":""}`)
+	sourcePR := 15
+	u := &AutofixPR{
+		ID:           1,
+		File:         118,
+		Analysis:     11754,
+		Repo:         "appknox/mfva",
+		BaseBranch:   "master",
+		Branch:       "appknox-autofix/analysis-11754",
+		PRURL:        "https://github.com/appknox/mfva/compare/master...b",
+		CommitSHA:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		SourcePR:     &sourcePR,
+		PatchedFiles: []string{"app/src/Main.java"},
+	}
+	want := `{
+		"id": 1,
+		"file": 118,
+		"analysis": 11754,
+		"repo": "appknox/mfva",
+		"base_branch": "master",
+		"branch": "appknox-autofix/analysis-11754",
+		"pr_url": "https://github.com/appknox/mfva/compare/master...b",
+		"commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"source_pr": 15,
+		"patched_files": ["app/src/Main.java"]
+	}`
+	testJSONMarshal(t, u, want)
+}
+
+func TestFilesService_CreateAutofixPR(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/v2/files/118/autofix_prs", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "POST")
+		var got AutofixPR
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if got.Analysis != 11754 {
+			t.Errorf("analysis = %d, want 11754", got.Analysis)
+		}
+		if got.CommitSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+			t.Errorf("commit_sha = %q", got.CommitSHA)
+		}
+		fmt.Fprint(w, `{"id":9,"file":118,"analysis":11754,"repo":"appknox/mfva","base_branch":"master","branch":"appknox-autofix/analysis-11754","pr_url":"https://github.com/appknox/mfva/compare/master...b","commit_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","patched_files":["app/src/Main.java"]}`)
+	})
+
+	in := &AutofixPR{
+		Analysis:     11754,
+		Repo:         "appknox/mfva",
+		BaseBranch:   "master",
+		Branch:       "appknox-autofix/analysis-11754",
+		PRURL:        "https://github.com/appknox/mfva/compare/master...b",
+		CommitSHA:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PatchedFiles: []string{"app/src/Main.java"},
+	}
+	got, _, err := client.Files.CreateAutofixPR(context.Background(), 118, in)
+	if err != nil {
+		t.Fatalf("Files.CreateAutofixPR returned error: %v", err)
+	}
+	if got.ID != 9 || got.File != 118 || got.Analysis != 11754 {
+		t.Errorf("CreateAutofixPR returned %+v", got)
+	}
 }
 
 func TestFilesService_GetHealthScore(t *testing.T) {

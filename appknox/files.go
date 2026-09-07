@@ -196,3 +196,29 @@ func (s *FilesService) GetHealthScore(ctx context.Context, fileID int, opt *Heal
 	resp, err := s.client.Do(ctx, req, &healthScore)
 	return &healthScore, resp, err
 }
+
+// AutofixPR is a delivered autofix (opened PR or pushed branch) for one finding.
+type AutofixPR struct {
+	ID           int      `json:"id,omitempty"`
+	File         int      `json:"file,omitempty"`
+	Analysis     int      `json:"analysis"`
+	Repo         string   `json:"repo"`
+	BaseBranch   string   `json:"base_branch"`
+	Branch       string   `json:"branch"`
+	PRURL        string   `json:"pr_url"`
+	CommitSHA    string   `json:"commit_sha,omitempty"`
+	SourcePR     *int     `json:"source_pr,omitempty"`
+	PatchedFiles []string `json:"patched_files,omitempty"`
+}
+
+// CreateAutofixPR records a delivered autofix against a file (upsert by analysis).
+func (s *FilesService) CreateAutofixPR(ctx context.Context, fileID int, pr *AutofixPR) (*AutofixPR, *Response, error) {
+	u := fmt.Sprintf("api/v2/files/%d/autofix_prs", fileID)
+	req, err := s.client.NewRequest("POST", u, pr)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out AutofixPR
+	resp, err := s.client.Do(ctx, req, &out)
+	return &out, resp, err
+}
