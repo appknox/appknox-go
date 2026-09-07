@@ -10,11 +10,53 @@ import (
 // KnoxIQService handles communication with the KnoxIQ related methods of the Appknox API.
 type KnoxIQService service
 
-// KnoxIQScanStatus represents the KnoxIQ scan status response.
-type KnoxIQScanStatus struct {
+// KnoxIQ scan status values from GET /api/knoxiq/file/{id}/knoxiq_scan/status.
+const (
+	KnoxIQScanStatusLegacy       = -1
+	KnoxIQScanStatusDisabled     = 0
+	KnoxIQScanStatusNotTriggered = 1
+	KnoxIQScanStatusPending      = 2
+	KnoxIQScanStatusRunning      = 3
+	KnoxIQScanStatusCompleted    = 4
+	KnoxIQScanStatusErrored      = 5
+)
+
+var knoxIQScanStatusLabels = map[int]string{
+	KnoxIQScanStatusLegacy:       "Legacy",
+	KnoxIQScanStatusDisabled:     "Disabled",
+	KnoxIQScanStatusNotTriggered: "Not Triggered",
+	KnoxIQScanStatusPending:      "Pending",
+	KnoxIQScanStatusRunning:      "Running",
+	KnoxIQScanStatusCompleted:    "Completed",
+	KnoxIQScanStatusErrored:      "Errored",
+}
+
+// KnoxIQScanStatusLabel is the Mycroft label for a scan-status int.
+func KnoxIQScanStatusLabel(v int) string {
+	if s, ok := knoxIQScanStatusLabels[v]; ok {
+		return s
+	}
+	return fmt.Sprintf("Unknown(%d)", v)
+}
+
+// KnoxIQFileScanStatus is the file-level SAST/DAST KnoxIQ status.
+type KnoxIQFileScanStatus struct {
 	ID         int `json:"id,omitempty"`
-	SastStatus int `json:"sast_status"`
-	DastStatus int `json:"dast_status"`
+	SASTStatus int `json:"sast_status"`
+	DASTStatus int `json:"dast_status"`
+}
+
+// Completed reports whether KnoxIQ has finished for autofix.
+// SAST complete is enough; DAST-only files (SAST disabled) need DAST complete.
+func (s *KnoxIQFileScanStatus) Completed() bool {
+	if s == nil {
+		return false
+	}
+	if s.SASTStatus == KnoxIQScanStatusCompleted {
+		return true
+	}
+	return s.SASTStatus == KnoxIQScanStatusDisabled &&
+		s.DASTStatus == KnoxIQScanStatusCompleted
 }
 
 // KnoxIQCICDAnalysis represents one triaged analysis row for the CI/CD pipeline.
@@ -40,16 +82,16 @@ type DRFResponseKnoxIQCICDAnalysis struct {
 	Results  []*KnoxIQCICDAnalysis `json:"results"`
 }
 
-// GetScanStatus fetches the KnoxIQ scan status for a file.
-func (s *KnoxIQService) GetScanStatus(ctx context.Context, fileID int) (*KnoxIQScanStatus, *Response, error) {
-	u := fmt.Sprintf("api/knoxiq/file/%v/knoxiq_scan/status", fileID)
+// GetScanStatus returns KnoxIQ SAST/DAST status for a file.
+func (s *KnoxIQService) GetScanStatus(ctx context.Context, fileID int) (*KnoxIQFileScanStatus, *Response, error) {
+	u := fmt.Sprintf("api/knoxiq/file/%d/knoxiq_scan/status", fileID)
 	req, err := s.client.NewRequest("GET", u, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	var scanStatus KnoxIQScanStatus
-	resp, err := s.client.Do(ctx, req, &scanStatus)
-	return &scanStatus, resp, err
+	var out KnoxIQFileScanStatus
+	resp, err := s.client.Do(ctx, req, &out)
+	return &out, resp, err
 }
 
 // ListCICDAnalyses lists the triaged analyses for a file.

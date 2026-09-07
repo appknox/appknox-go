@@ -71,7 +71,7 @@ type Client struct {
 	// Dynamic Scan service is used to interact with appknox DAST related APIs
 	DynamicScans *DynamicScanService
 
-	// KnoxIQ service is used to interact with appknox KnoxIQ APIs.
+	// KnoxIQ service is used to interact with KnoxIQ scan status and findings.
 	KnoxIQ *KnoxIQService
 }
 

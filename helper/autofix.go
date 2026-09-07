@@ -33,22 +33,24 @@ type AutofixOptions struct {
 
 // autofixDeps are the injectable collaborators (seams for cost-free tests).
 type autofixDeps struct {
-	locate   func(ctx context.Context, cfg agent.Config, req agent.Request) (string, error)
-	fetch    func(ctx context.Context, fileID, analysisID int) (FindingInputs, error)
-	submit   func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
-	agentFix func(ctx context.Context, cfg agent.Config, req agent.FixRequest) (agent.FixResult, error)
-	deliver  func(ctx context.Context, opts AutofixOptions, patches []filePatch, inputs FindingInputs) (Delivery, error)
-	report   func(ctx context.Context, opts AutofixOptions, d Delivery, patches []filePatch) error
+	locate      func(ctx context.Context, cfg agent.Config, req agent.Request) (string, error)
+	fetch       func(ctx context.Context, fileID, analysisID int) (FindingInputs, error)
+	submit      func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
+	agentFix    func(ctx context.Context, cfg agent.Config, req agent.FixRequest) (agent.FixResult, error)
+	deliver     func(ctx context.Context, opts AutofixOptions, patches []filePatch, inputs FindingInputs) (Delivery, error)
+	report      func(ctx context.Context, opts AutofixOptions, d Delivery, patches []filePatch) error
+	knoxiqReady func(ctx context.Context, fileID int) error
 }
 
 func defaultDeps() autofixDeps {
 	return autofixDeps{
-		locate:   agent.LocateFile,
-		fetch:    fetchAppknoxInputs,
-		submit:   fixservice.SubmitAndAwait,
-		agentFix: agent.FixFile,
-		deliver:  deliverBranch,
-		report:   reportAutofixPR,
+		locate:      agent.LocateFile,
+		fetch:       fetchAppknoxInputs,
+		submit:      fixservice.SubmitAndAwait,
+		agentFix:    agent.FixFile,
+		deliver:     deliverBranch,
+		report:      reportAutofixPR,
+		knoxiqReady: checkKnoxIQReady,
 	}
 }
 
@@ -73,6 +75,10 @@ type Outcome struct {
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
 func ProcessAutofix(opts AutofixOptions) {
 	if opts.ListAnalyses {
+		if err := checkKnoxIQReady(context.Background(), opts.FileID); err != nil {
+			PrintError(err)
+			os.Exit(1)
+		}
 		if err := listAnalyses(opts.FileID); err != nil {
 			PrintError(err)
 			os.Exit(1)
@@ -87,8 +93,13 @@ func ProcessAutofix(opts AutofixOptions) {
 	printOutcome(opts, out)
 }
 
-// runAutofix: resolve inputs → locate each class → fix each file → deliver.
+// runAutofix: KnoxIQ ready → resolve inputs → locate each class → fix → deliver.
 func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcome, error) {
+	if d.knoxiqReady != nil {
+		if err := d.knoxiqReady(ctx, opts.FileID); err != nil {
+			return Outcome{}, err
+		}
+	}
 	opts = applyCIDefaults(opts)
 	token := firstNonEmpty(opts.FixToken, os.Getenv("APPKNOX_AUTOFIX_FIX_TOKEN"))
 	if token == "" {

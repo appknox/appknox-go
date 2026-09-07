@@ -9,20 +9,49 @@ import (
 	"github.com/appknox/appknox-go/appknox/enums"
 )
 
-func TestKnoxIQ_GetScanStatus(t *testing.T) {
+func TestKnoxIQFileScanStatus_Completed(t *testing.T) {
+	cases := []struct {
+		sast, dast int
+		want       bool
+	}{
+		{KnoxIQScanStatusCompleted, KnoxIQScanStatusDisabled, true},
+		{KnoxIQScanStatusCompleted, KnoxIQScanStatusRunning, true},
+		{KnoxIQScanStatusDisabled, KnoxIQScanStatusCompleted, true},
+		{KnoxIQScanStatusPending, KnoxIQScanStatusDisabled, false},
+		{KnoxIQScanStatusRunning, KnoxIQScanStatusCompleted, false},
+		{KnoxIQScanStatusNotTriggered, KnoxIQScanStatusDisabled, false},
+		{KnoxIQScanStatusErrored, KnoxIQScanStatusDisabled, false},
+		{KnoxIQScanStatusDisabled, KnoxIQScanStatusPending, false},
+	}
+	for _, tc := range cases {
+		st := &KnoxIQFileScanStatus{SASTStatus: tc.sast, DASTStatus: tc.dast}
+		if got := st.Completed(); got != tc.want {
+			t.Errorf("sast=%d dast=%d Completed()=%v, want %v", tc.sast, tc.dast, got, tc.want)
+		}
+	}
+	if (*KnoxIQFileScanStatus)(nil).Completed() {
+		t.Error("nil status should not be completed")
+	}
+}
+
+func TestKnoxIQService_GetScanStatus(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()
-	mux.HandleFunc("/api/knoxiq/file/1/knoxiq_scan/status", func(w http.ResponseWriter, r *http.Request) {
+
+	mux.HandleFunc("/api/knoxiq/file/375/knoxiq_scan/status", func(w http.ResponseWriter, r *http.Request) {
 		testMethod(t, r, "GET")
-		fmt.Fprint(w, `{"id":1,"sast_status":4,"dast_status":0}`)
+		fmt.Fprint(w, `{"id":375,"sast_status":4,"dast_status":0}`)
 	})
 
-	status, _, err := client.KnoxIQ.GetScanStatus(context.Background(), 1)
+	got, _, err := client.KnoxIQ.GetScanStatus(context.Background(), 375)
 	if err != nil {
-		t.Errorf("KnoxIQ.GetScanStatus returned error: %v", err)
+		t.Fatalf("GetScanStatus returned error: %v", err)
 	}
-	if status.SastStatus != 4 || status.DastStatus != 0 {
-		t.Errorf("KnoxIQ.GetScanStatus = %+v, want sast=4 dast=0", status)
+	if got.ID != 375 || got.SASTStatus != KnoxIQScanStatusCompleted || got.DASTStatus != KnoxIQScanStatusDisabled {
+		t.Errorf("GetScanStatus returned %+v", got)
+	}
+	if !got.Completed() {
+		t.Error("expected completed status")
 	}
 }
 

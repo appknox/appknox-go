@@ -110,6 +110,37 @@ func oneClass(finding, remediation string) FindingInputs {
 	return FindingInputs{Finding: finding, ClassHints: []string{"com/x/C"}, Remediation: remediation}
 }
 
+func TestRunAutofix_KnoxIQNotCompleted_StopsBeforeFetch(t *testing.T) {
+	fetched := false
+	d := deps("app/A.java", fixservice.Result{}, oneClass("f", "r"))
+	d.knoxiqReady = func(context.Context, int) error {
+		return errors.New("knoxiq is not completed for file 1 (sast=Pending, dast=Disabled)")
+	}
+	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
+		fetched = true
+		return FindingInputs{}, nil
+	}
+	_, err := runAutofix(context.Background(), appknoxOpts(t.TempDir()), d)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "knoxiq is not completed")
+	require.False(t, fetched)
+}
+
+func TestRunAutofix_KnoxIQCompleted_Continues(t *testing.T) {
+	root, rel := repoWithFile(t, "orig\n")
+	checked := 0
+	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
+	d.knoxiqReady = func(_ context.Context, fileID int) error {
+		checked++
+		require.Equal(t, 1, fileID)
+		return nil
+	}
+	out, err := runAutofix(context.Background(), appknoxOpts(root), d)
+	require.NoError(t, err)
+	require.Equal(t, 1, checked)
+	require.Len(t, out.Patches, 1)
+}
+
 func TestRunAutofix_RequiresToken(t *testing.T) {
 	t.Setenv("APPKNOX_AUTOFIX_FIX_TOKEN", "")
 	_, err := runAutofix(context.Background(),
