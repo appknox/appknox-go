@@ -123,8 +123,12 @@ jobs:
       # requested one LAST so it wins JAVA_HOME and runs Gradle. The build step
       # points Gradle at the ladder via org.gradle.java.installations.fromEnv,
       # which older Gradle simply ignores as an unknown system property.
+      # Gated on toolchainLadder because INSTALLING the JDKs is what matters,
+      # not just advertising them: Gradle auto-detects installed JVMs, so
+      # omitting the -D flag while still installing five of them left
+      # element-android resolving compileJava to 21 against compileKotlin's 17.
       - name: Install the toolchain JDK ladder
-        if: inputs.fileId == ''
+        if: inputs.fileId == '' && inputs.toolchainLadder != 'false'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -191,8 +195,15 @@ jobs:
                    "$SDK/tools/bin/sdkmanager"; do
             if [ -x "$m" ]; then MGR="$m"; break; fi
           done || true
+          # sdkmanager is a modern Java program and will not start on JDK 8, so
+          # it cannot inherit JAVA_HOME from a build that needs an old one --
+          # diva-android builds on 8 and sdkmanager died with a ClassLoader
+          # error, leaving android-23 uninstalled and the failure looking like a
+          # broken app. Give it its own JDK, falling back to JAVA_HOME when the
+          # ladder was not installed.
+          SDKJAVA="${JAVA_HOME_17_X64:-${JAVA_HOME_21_X64:-$JAVA_HOME}}"
           if [ -n "$MGR" ]; then
-            yes | "$MGR" --licenses >/dev/null 2>&1 || true
+            yes | env JAVA_HOME="$SDKJAVA" "$MGR" --licenses >/dev/null 2>&1 || true
             # Lowest pinned compileSdk: the oldest is the one a modern runner is
             # most likely to be missing.
             #
@@ -209,7 +220,7 @@ jobs:
               # Logged, not silenced: an install that fails because the platform
               # is no longer published looks identical to one that never ran.
               echo "ensuring platforms;android-$csdk"
-              yes | "$MGR" "platforms;android-$csdk" 2>&1 | tail -3 || true
+              yes | env JAVA_HOME="$SDKJAVA" "$MGR" "platforms;android-$csdk" 2>&1 | tail -3 || true
             fi
           fi
 
