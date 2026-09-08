@@ -1,0 +1,281 @@
+# Appknox autofix, end to end: build the app, scan it, fix what KnoxIQ flags,
+# and check on the next scan whether the fixes actually held.
+#
+# This template is repo-agnostic on purpose. It is copied verbatim into every
+# repository in the autofix corpus, so nothing here may assume a particular
+# module layout, JDK, Gradle task, artifact path, baseline scan or vulnerability
+# id. Anything repo-specific is either discovered at run time or passed as an
+# input. The predecessor of this file was written for one app and hardcoded all
+# six of those things; each one silently produced a wrong answer somewhere else.
+#
+# The repository never leaves the runner. Two things cross the wire: API reads
+# from Appknox, and model turns through Sherrinford, which holds the provider
+# key. No source is uploaded to any model provider.
+#
+# workflow_dispatch ONLY. Never wire this to push or pull_request: every run
+# spends model budget, and on a public repository anyone able to open a PR could
+# otherwise spend it for you.
+name: Appknox Autofix
+
+on:
+  workflow_dispatch:
+    inputs:
+      javaVersion:
+        description: "JDK for the app build (8 for pre-2020 apps, 17 for modern)"
+        required: false
+        default: "17"
+      gradleTask:
+        description: "Gradle task (blank = try bundle, then assembleDebug)"
+        required: false
+        default: ""
+      riskThreshold:
+        description: "Lowest severity to attempt: critical|high|medium|low"
+        required: false
+        default: "low"
+      dryRun:
+        description: "Locate and fix but open no PR"
+        required: false
+        default: "true"
+      analysisId:
+        description: "Fix one analysis only (blank = every finding on the file)"
+        required: false
+        default: ""
+      fileId:
+        description: "Reuse an existing Appknox file id (blank = build and upload)"
+        required: false
+        default: ""
+      baselineFileId:
+        description: "Scan to compare against (blank = auto-detect the previous scan)"
+        required: false
+        default: ""
+      knoxiqTimeoutMinutes:
+        description: "Minutes to wait for KnoxIQ (regular 15-20, exceptional ~120)"
+        required: false
+        default: "90"
+      listAnalysesOnly:
+        description: "List findings and stop, without fixing anything"
+        required: false
+        default: "false"
+
+env:
+  APPKNOX_API_HOST: https://sherlock-knoxiq-uat.staging.appknox.io/
+  SHERRINFORD_URL: https://sherrinford-uat.staging.appknox.io
+  AUTOFIX_CLI_REF: feat/autofix-v2
+
+jobs:
+  autofix:
+    runs-on: ubuntu-latest
+    # Must exceed the KnoxIQ wait, or the job dies before the answer lands.
+    timeout-minutes: 180
+    permissions:
+      # Mints the OIDC id-token Sherrinford exchanges for a session token.
+      # Without it there is no gateway credential at all.
+      id-token: write
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Build the appknox CLI
+        run: |
+          git clone --depth 1 --branch "$AUTOFIX_CLI_REF" \
+            https://github.com/appknox/appknox-go.git /tmp/appknox-go
+          cd /tmp/appknox-go && go build -o /usr/local/bin/appknox .
+          appknox --help >/dev/null && echo "CLI built from $AUTOFIX_CLI_REF"
+
+      - name: Set up JDK
+        if: inputs.fileId == ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.javaVersion || '17' }}
+
+      # Corpus repos disagree about almost everything: bundle vs assemble, one
+      # variant vs a flavour matrix, app/ vs a differently named module. So the
+      # task is attempted in order of preference and the artifact is discovered
+      # afterwards rather than assumed.
+      - name: Build the app
+        id: build
+        if: inputs.fileId == ''
+        run: |
+          set -o pipefail
+          chmod +x ./gradlew
+          task="${{ inputs.gradleTask }}"
+          if [ -n "$task" ]; then
+            ./gradlew --no-daemon "$task"
+          else
+            ./gradlew --no-daemon bundle || ./gradlew --no-daemon assembleDebug
+          fi
+
+          # Prefer an .aab (Appknox reads more from it); fall back to an .apk.
+          # Unsigned and unaligned intermediates are never the upload candidate.
+          artifact=$(find . -path '*/build/outputs/*' \( -name '*.aab' -o -name '*.apk' \) \
+            ! -name '*unsigned*' ! -name '*unaligned*' -print0 \
+            | xargs -0 ls -S 2>/dev/null | head -1)
+          if [ -z "$artifact" ]; then
+            echo "::error::the build produced no .aab or .apk under build/outputs"
+            find . -path '*/build/outputs/*' -type f | head -20
+            exit 1
+          fi
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "built $artifact"
+
+      - name: Upload to Appknox
+        id: upload
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
+        run: |
+          if [ -n "${{ inputs.fileId }}" ]; then
+            echo "file_id=${{ inputs.fileId }}" >> "$GITHUB_OUTPUT"
+            echo "reusing file ${{ inputs.fileId }}"
+            exit 0
+          fi
+          # upload prints the file id as its only stdout output
+          file_id=$(appknox upload "${{ steps.build.outputs.artifact }}" --host "$APPKNOX_API_HOST")
+          echo "file_id=${file_id}" >> "$GITHUB_OUTPUT"
+          echo "uploaded as file ${file_id}"
+
+      - name: Wait for the static scan
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
+        run: |
+          # cicheck blocks until the static scan finishes, then exits non-zero if
+          # anything breaches the threshold. Only the wait is wanted here: the
+          # findings are autofix's input, not a reason to stop.
+          appknox cicheck "${{ steps.upload.outputs.file_id }}" \
+            --risk-threshold critical --host "$APPKNOX_API_HOST" || true
+
+      - name: What is and is not a fix target
+        if: inputs.listAnalysesOnly == 'true'
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
+        run: |
+          appknox autofix --list-analyses \
+            --file-id "${{ steps.upload.outputs.file_id }}" \
+            --host "$APPKNOX_API_HOST"
+          echo "::notice::listAnalysesOnly - stopping before any fix"
+
+      # Verification runs HERE, before the KnoxIQ wait, and the order matters.
+      #
+      # KnoxIQ produces the remediation autofix consumes. It has no part in
+      # deciding whether a finding cleared -- that is the static scan, which has
+      # already finished by now. Sequencing this after KnoxIQ made the answer
+      # wait up to two hours on a service it does not depend on, and a KnoxIQ
+      # timeout destroyed the verification result along with the fixes.
+      - name: Did the previous run's fixes hold?
+        if: inputs.listAnalysesOnly != 'true'
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
+        run: |
+          current="${{ steps.upload.outputs.file_id }}"
+          baseline="${{ inputs.baselineFileId }}"
+
+          api() { curl -sf -H "Authorization: Token $APPKNOX_ACCESS_TOKEN" "$1"; }
+
+          # No baseline given: find this project's previous scan. A corpus repo
+          # has no memorable file id, and hardcoding one per repo is exactly the
+          # per-repo knowledge this template exists to avoid.
+          if [ -z "$baseline" ]; then
+            project=$(api "${APPKNOX_API_HOST}api/v2/files/${current}" \
+              | python3 -c 'import sys,json;print(json.load(sys.stdin).get("project",""))')
+            if [ -n "$project" ]; then
+              # One line on purpose: a multi-line -c string would have to sit at
+              # column 0 to keep Python happy, and that closes the YAML block
+              # scalar early. $current is passed as argv, never interpolated
+              # into the program text.
+              baseline=$(api "${APPKNOX_API_HOST}api/v2/projects/${project}/files?limit=50" \
+                | python3 -c 'import sys,json;c=int(sys.argv[1]);i=[f["id"] for f in json.load(sys.stdin).get("results",[]) if f["id"]<c];print(max(i) if i else "")' "$current")
+            fi
+          fi
+
+          if [ -z "$baseline" ]; then
+            echo "::notice::no earlier scan to compare against - this run becomes the baseline"
+            exit 0
+          fi
+          echo "comparing file $current against baseline $baseline"
+
+          api "${APPKNOX_API_HOST}api/v2/files/$baseline/analyses?limit=200" > /tmp/baseline.json
+          api "${APPKNOX_API_HOST}api/v2/files/$current/analyses?limit=200"  > /tmp/current.json
+
+          python3 - <<'PY'
+          import json
+
+          def risky(path):
+              """vulnerability id -> computed risk, for anything above Passed."""
+              with open(path) as fh:
+                  data = json.load(fh)
+              return {a["vulnerability"]: a.get("computed_risk", 0)
+                      for a in data.get("results", [])
+                      if a.get("computed_risk", 0) > 0}
+
+          before, after = risky("/tmp/baseline.json"), risky("/tmp/current.json")
+          cleared    = sorted(set(before) - set(after))
+          remaining  = sorted(set(before) & set(after))
+          introduced = sorted(set(after) - set(before))
+
+          print(f"baseline risky findings : {len(before)}")
+          print(f"current  risky findings : {len(after)}")
+          print(f"CLEARED                 : {cleared}")
+          print(f"STILL PRESENT           : {remaining}")
+          print(f"NEWLY INTRODUCED        : {introduced}")
+
+          # Reported, never asserted. A finding can persist because the patch was
+          # wrong OR because the flagged code sits in a bundled dependency the
+          # patch cannot reach; this step cannot tell those apart, so failing the
+          # job here would turn an unremarkable outcome into a red build.
+          if introduced:
+              print("::warning::this build introduced findings the baseline did not have")
+          PY
+
+      # Only autofix needs KnoxIQ: it writes the per-finding remediation and
+      # validation the fixer reads, and there is nothing to read until it lands.
+      - name: Wait for the KnoxIQ analysis
+        if: inputs.listAnalysesOnly != 'true'
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
+        run: |
+          # 4 = COMPLETED, 5 = ERRORED (mycroft KnoxIQScanStatus).
+          url="${APPKNOX_API_HOST}api/knoxiq/file/${{ steps.upload.outputs.file_id }}/knoxiq_scan/status"
+          deadline=$(( $(date +%s) + ${{ inputs.knoxiqTimeoutMinutes || '90' }} * 60 ))
+          while :; do
+            status=$(curl -sf -H "Authorization: Token $APPKNOX_ACCESS_TOKEN" "$url" \
+              | python3 -c 'import sys,json;print(json.load(sys.stdin).get("sast_status"))')
+            echo "knoxiq sast_status=$status"
+            case "$status" in
+              4) echo "KnoxIQ analysis complete"; break ;;
+              5) echo "::error::KnoxIQ analysis errored"; exit 1 ;;
+            esac
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::KnoxIQ did not finish in time"
+              exit 1
+            fi
+            sleep 30
+          done
+
+      # Exits 0 when there is nothing to fix. A clean app, an app whose findings
+      # are all third-party, and an app KnoxIQ declined to remediate are all
+      # successful runs -- across a corpus most runs are one of those, and
+      # failing them would paint healthy repositories red.
+      - name: Autofix every finding
+        if: inputs.listAnalysesOnly != 'true'
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # No --fix-token: in CI the gateway credential is minted from this
+          # run's OIDC identity and expires with the job.
+          appknox autofix \
+            --repo-path . \
+            --repo "${{ github.repository }}" \
+            --file-id "${{ steps.upload.outputs.file_id }}" \
+            --risk-threshold "${{ inputs.riskThreshold || 'low' }}" \
+            ${{ inputs.analysisId != '' && format('--analysis-id {0}', inputs.analysisId) || '' }} \
+            --host "$APPKNOX_API_HOST" \
+            --fix-url "$SHERRINFORD_URL" \
+            --allow-unverified \
+            ${{ inputs.dryRun == 'false' && '--push-branch' || '--dry-run' }}
