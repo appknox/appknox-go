@@ -24,6 +24,10 @@ on:
         description: "JDK for the app build (8 for pre-2020 apps, 17 for modern)"
         required: false
         default: "17"
+      appDir:
+        description: "Directory holding gradlew (blank = repo root; e.g. InsecureBankv2)"
+        required: false
+        default: ""
       gradleTask:
         description: "Gradle task (blank = try bundle, then assembleDebug)"
         required: false
@@ -104,6 +108,13 @@ jobs:
         if: inputs.fileId == ''
         run: |
           set -o pipefail
+          # Most corpus repos keep the Gradle project in a subdirectory -- the app
+          # sits beside exploit code, a second flavour of the same app, or docs.
+          # Quoted throughout: at least one of them has a space in the path.
+          app_dir="${{ inputs.appDir }}"
+          cd "${app_dir:-.}"
+          echo "building in $(pwd)"
+
           chmod +x ./gradlew
           task="${{ inputs.gradleTask }}"
           if [ -n "$task" ]; then
@@ -112,6 +123,9 @@ jobs:
             ./gradlew --no-daemon bundle || ./gradlew --no-daemon assembleDebug
           fi
 
+          # Searched from the repo root, so the path recorded is repo-relative
+          # whether or not the build ran in a subdirectory.
+          cd "$GITHUB_WORKSPACE"
           # Prefer an .aab (Appknox reads more from it); fall back to an .apk.
           # Unsigned and unaligned intermediates are never the upload candidate.
           artifact=$(find . -path '*/build/outputs/*' \( -name '*.aab' -o -name '*.apk' \) \
