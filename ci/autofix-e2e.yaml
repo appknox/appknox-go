@@ -28,6 +28,10 @@ on:
         description: "Stop after the build - no upload, scan, KnoxIQ or fix"
         required: false
         default: "false"
+      toolchainLadder:
+        description: "Offer Gradle every installed JDK. Set false if the build reports inconsistent JVM-target"
+        required: false
+        default: "true"
       appDir:
         description: "Directory holding gradlew (blank = repo root; e.g. InsecureBankv2)"
         required: false
@@ -83,7 +87,12 @@ jobs:
       pull-requests: write
 
     steps:
+      # Submodules included: davx5-ose keeps its translations in one and fails
+      # its own verifyTranslations task without them. A shallow submodule fetch
+      # is cheap next to the Gradle build that follows.
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       # Skipped in buildOnly mode: nothing there calls the CLI, and building it
       # costs about a minute on every run.
@@ -149,24 +158,49 @@ jobs:
           cd "${app_dir:-.}"
           echo "building in $(pwd)"
 
-          # Let Gradle see every JDK the ladder installed, so a toolchain
-          # request for an exact version can be satisfied by something other
-          # than the JDK running Gradle. Unknown to Gradle < 6.7, which ignores
-          # it rather than failing.
-          TOOLCHAINS="-Dorg.gradle.java.installations.fromEnv=JAVA_HOME_8_X64,JAVA_HOME_11_X64,JAVA_HOME_17_X64,JAVA_HOME_18_X64,JAVA_HOME_21_X64"
+          # Offer Gradle every installed JDK, so a toolchain request for an exact
+          # version can be met by something other than the JDK running Gradle.
+          # Unknown to Gradle < 6.7, which ignores it rather than failing.
+          #
+          # Disable it for a build that reports "Inconsistent JVM-target
+          # compatibility": with several JDKs visible the Java and Kotlin
+          # compilers can independently resolve to DIFFERENT ones, which is a
+          # worse failure than the single-JDK case the ladder was added to fix.
+          # element-android is the example -- compileJava landed on 21 while
+          # compileKotlin stayed on 17.
+          TOOLCHAINS=""
+          if [ "${{ inputs.toolchainLadder || 'true' }}" = "true" ]; then
+            TOOLCHAINS="-Dorg.gradle.java.installations.fromEnv=JAVA_HOME_8_X64,JAVA_HOME_11_X64,JAVA_HOME_17_X64,JAVA_HOME_18_X64,JAVA_HOME_21_X64"
+          fi
 
-          # Accept Android SDK licences before Gradle asks for them. Runners
-          # pre-accept only the packages they ship; a project pinning any other
-          # NDK or build-tools version fails configuration with
-          # LicenceNotAcceptedException, which reads like a broken app but is
-          # purely a missing runner licence. Never fatal -- an image without
-          # sdkmanager should not stop a build that needs no extra package.
+          # Accept Android SDK licences before Gradle asks for them, and install
+          # the platform the project pins. Runners carry only what they ship, so
+          # a project wanting another NDK fails with LicenceNotAcceptedException
+          # (ovaa) and one wanting an older platform fails with "failed to find
+          # target with hash string 'android-N'" (diva-android, android-23).
+          # Both read like broken apps and are missing runner packages.
+          #
+          # Never fatal: an image without sdkmanager must not stop a build that
+          # needs no extra package.
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-          for mgr in "$SDK/cmdline-tools/latest/bin/sdkmanager" \
-                     "$SDK/cmdline-tools/bin/sdkmanager" \
-                     "$SDK/tools/bin/sdkmanager"; do
-            [ -x "$mgr" ] && { yes | "$mgr" --licenses >/dev/null 2>&1 || true; break; }
+          MGR=""
+          for m in "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+                   "$SDK/cmdline-tools/bin/sdkmanager" \
+                   "$SDK/tools/bin/sdkmanager"; do
+            [ -x "$m" ] && { MGR="$m"; break; }
           done
+          if [ -n "$MGR" ]; then
+            yes | "$MGR" --licenses >/dev/null 2>&1 || true
+            # Lowest pinned compileSdk: the oldest is the one a modern runner is
+            # most likely to be missing.
+            csdk=$(grep -rhoE 'compileSdk(Version)?[ =]+[0-9]+' \
+                     --include=build.gradle --include=build.gradle.kts . 2>/dev/null \
+                   | grep -oE '[0-9]+' | sort -un | head -1)
+            if [ -n "$csdk" ]; then
+              echo "ensuring platforms;android-$csdk"
+              yes | "$MGR" "platforms;android-$csdk" >/dev/null 2>&1 || true
+            fi
+          fi
 
           chmod +x ./gradlew
           task="${{ inputs.gradleTask }}"
