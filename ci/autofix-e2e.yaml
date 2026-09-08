@@ -12,12 +12,23 @@
 # from Appknox, and model turns through Sherrinford, which holds the provider
 # key. No source is uploaded to any model provider.
 #
-# workflow_dispatch ONLY. Never wire this to push or pull_request: every run
-# spends model budget, and on a public repository anyone able to open a PR could
-# otherwise spend it for you.
+# Never wire this to pull_request. A fixing run spends model budget, and on a
+# public repository anyone able to open a PR could then spend it for you. The
+# push trigger below is limited to one branch and cannot fix anything: with no
+# inputs it resolves to build-only.
 name: Appknox Autofix
 
 on:
+  # workflow_dispatch only registers once the file reaches a repository's
+  # DEFAULT branch. Where committing there is not on the table -- an org repo
+  # somebody else owns -- pushing this branch is the only way to trigger a run,
+  # which is why the push trigger exists alongside it.
+  #
+  # Safe because a push carries no inputs, and every input falls back to a
+  # build-only default (see the job env below): a push builds and stops. It
+  # never uploads, never calls KnoxIQ, and never spends model budget.
+  push:
+    branches: [ci/appknox-autofix]
   workflow_dispatch:
     inputs:
       javaVersion:
@@ -77,6 +88,19 @@ env:
 jobs:
   autofix:
     runs-on: ubuntu-latest
+    # Every knob resolved ONCE here, so the steps below never have to care
+    # whether this run came from a dispatch or a push. On a push `inputs` is
+    # empty, and an empty string is falsy in a GitHub expression, so each
+    # fallback applies -- BUILD_ONLY becomes "true" and the run stops after the
+    # build. On a dispatch the input wins, including the literal string "false",
+    # which is truthy here and therefore not overridden.
+    env:
+      BUILD_ONLY: ${{ inputs.buildOnly || 'true' }}
+      LIST_ONLY: ${{ inputs.listAnalysesOnly || 'false' }}
+      LADDER: ${{ inputs.toolchainLadder || 'true' }}
+      JAVA_V: ${{ inputs.javaVersion || '17' }}
+      APP_DIR: ${{ inputs.appDir }}
+      REUSE_FILE_ID: ${{ inputs.fileId }}
     # Must exceed the KnoxIQ wait, or the job dies before the answer lands.
     timeout-minutes: 180
     permissions:
@@ -97,12 +121,12 @@ jobs:
       # Skipped in buildOnly mode: nothing there calls the CLI, and building it
       # costs about a minute on every run.
       - uses: actions/setup-go@v5
-        if: inputs.buildOnly != 'true'
+        if: env.BUILD_ONLY != 'true'
         with:
           go-version: "1.24"
 
       - name: Build the appknox CLI
-        if: inputs.buildOnly != 'true'
+        if: env.BUILD_ONLY != 'true'
         run: |
           git clone --depth 1 --branch "$AUTOFIX_CLI_REF" \
             https://github.com/appknox/appknox-go.git /tmp/appknox-go
@@ -128,7 +152,7 @@ jobs:
       # omitting the -D flag while still installing five of them left
       # element-android resolving compileJava to 21 against compileKotlin's 17.
       - name: Install the toolchain JDK ladder
-        if: inputs.fileId == '' && inputs.toolchainLadder != 'false'
+        if: env.REUSE_FILE_ID == '' && env.LADDER != 'false'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -140,11 +164,11 @@ jobs:
             21
 
       - name: Set up the JDK that runs Gradle
-        if: inputs.fileId == ''
+        if: env.REUSE_FILE_ID == ''
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ inputs.javaVersion || '17' }}
+          java-version: ${{ env.JAVA_V }}
 
       # Corpus repos disagree about almost everything: bundle vs assemble, one
       # variant vs a flavour matrix, app/ vs a differently named module. So the
@@ -152,13 +176,13 @@ jobs:
       # afterwards rather than assumed.
       - name: Build the app
         id: build
-        if: inputs.fileId == ''
+        if: env.REUSE_FILE_ID == ''
         run: |
           set -o pipefail
           # Most corpus repos keep the Gradle project in a subdirectory -- the app
           # sits beside exploit code, a second flavour of the same app, or docs.
           # Quoted throughout: at least one of them has a space in the path.
-          app_dir="${{ inputs.appDir }}"
+          app_dir="${APP_DIR}"
           cd "${app_dir:-.}"
           echo "building in $(pwd)"
 
@@ -173,7 +197,7 @@ jobs:
           # element-android is the example -- compileJava landed on 21 while
           # compileKotlin stayed on 17.
           TOOLCHAINS=""
-          if [ "${{ inputs.toolchainLadder || 'true' }}" = "true" ]; then
+          if [ "$LADDER" = "true" ]; then
             TOOLCHAINS="-Dorg.gradle.java.installations.fromEnv=JAVA_HOME_8_X64,JAVA_HOME_11_X64,JAVA_HOME_17_X64,JAVA_HOME_18_X64,JAVA_HOME_21_X64"
           fi
 
@@ -266,7 +290,7 @@ jobs:
       # indistinguishable from an app that does not compile.
       - name: Upload to Appknox
         id: upload
-        if: inputs.buildOnly != 'true'
+        if: env.BUILD_ONLY != 'true'
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
         run: |
@@ -281,7 +305,7 @@ jobs:
           echo "uploaded as file ${file_id}"
 
       - name: Wait for the static scan
-        if: inputs.buildOnly != 'true'
+        if: env.BUILD_ONLY != 'true'
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
         run: |
@@ -292,7 +316,7 @@ jobs:
             --risk-threshold critical --host "$APPKNOX_API_HOST" || true
 
       - name: What is and is not a fix target
-        if: inputs.buildOnly != 'true' && inputs.listAnalysesOnly == 'true'
+        if: env.BUILD_ONLY != 'true' && env.LIST_ONLY == 'true'
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
         run: |
@@ -309,7 +333,7 @@ jobs:
       # wait up to two hours on a service it does not depend on, and a KnoxIQ
       # timeout destroyed the verification result along with the fixes.
       - name: Did the previous run's fixes hold?
-        if: inputs.buildOnly != 'true' && inputs.listAnalysesOnly != 'true'
+        if: env.BUILD_ONLY != 'true' && env.LIST_ONLY != 'true'
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
         run: |
@@ -376,7 +400,7 @@ jobs:
       # Only autofix needs KnoxIQ: it writes the per-finding remediation and
       # validation the fixer reads, and there is nothing to read until it lands.
       - name: Wait for the KnoxIQ analysis
-        if: inputs.buildOnly != 'true' && inputs.listAnalysesOnly != 'true'
+        if: env.BUILD_ONLY != 'true' && env.LIST_ONLY != 'true'
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
         run: |
@@ -403,7 +427,7 @@ jobs:
       # successful runs -- across a corpus most runs are one of those, and
       # failing them would paint healthy repositories red.
       - name: Autofix every finding
-        if: inputs.buildOnly != 'true' && inputs.listAnalysesOnly != 'true'
+        if: env.BUILD_ONLY != 'true' && env.LIST_ONLY != 'true'
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
