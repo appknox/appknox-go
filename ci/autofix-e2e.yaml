@@ -222,6 +222,17 @@ jobs:
               echo "ensuring platforms;android-$csdk"
               yes | env JAVA_HOME="$SDKJAVA" "$MGR" "platforms;android-$csdk" 2>&1 | tail -3 || true
             fi
+            # Build tools are a separate package from the platform, and an old
+            # project pins an old revision: diva-android got past "failed to
+            # find target android-23" only to stop at "failed to find Build
+            # Tools revision 23.0.2".
+            btv=$( { grep -rhoE 'buildToolsVersion[ =]+"[0-9.]+"' \
+                       --include=build.gradle --include=build.gradle.kts . 2>/dev/null \
+                     | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -uV | head -1; } || true )
+            if [ -n "$btv" ]; then
+              echo "ensuring build-tools;$btv"
+              yes | env JAVA_HOME="$SDKJAVA" "$MGR" "build-tools;$btv" 2>&1 | tail -3 || true
+            fi
           fi
 
           chmod +x ./gradlew
