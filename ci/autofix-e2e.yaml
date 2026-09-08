@@ -184,21 +184,32 @@ jobs:
           # needs no extra package.
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
           MGR=""
+          # `|| true` again: without a match the loop's status is the last failed
+          # test, which set -e would treat as a build failure.
           for m in "$SDK/cmdline-tools/latest/bin/sdkmanager" \
                    "$SDK/cmdline-tools/bin/sdkmanager" \
                    "$SDK/tools/bin/sdkmanager"; do
-            [ -x "$m" ] && { MGR="$m"; break; }
-          done
+            if [ -x "$m" ]; then MGR="$m"; break; fi
+          done || true
           if [ -n "$MGR" ]; then
             yes | "$MGR" --licenses >/dev/null 2>&1 || true
             # Lowest pinned compileSdk: the oldest is the one a modern runner is
             # most likely to be missing.
-            csdk=$(grep -rhoE 'compileSdk(Version)?[ =]+[0-9]+' \
-                     --include=build.gradle --include=build.gradle.kts . 2>/dev/null \
-                   | grep -oE '[0-9]+' | sort -un | head -1)
+            #
+            # The `|| true` is load-bearing. This step runs under `bash -e` with
+            # pipefail, so a grep that matches NOTHING returns 1, the command
+            # substitution inherits it, and set -e kills the build -- meaning
+            # every repo whose compileSdk this pattern misses would fail because
+            # of the fix rather than despite it. That is exactly what happened
+            # to davx5-ose and element-android.
+            csdk=$( { grep -rhoE 'compileSdk(Version)?[ =]+[0-9]+' \
+                        --include=build.gradle --include=build.gradle.kts . 2>/dev/null \
+                      | grep -oE '[0-9]+' | sort -un | head -1; } || true )
             if [ -n "$csdk" ]; then
+              # Logged, not silenced: an install that fails because the platform
+              # is no longer published looks identical to one that never ran.
               echo "ensuring platforms;android-$csdk"
-              yes | "$MGR" "platforms;android-$csdk" >/dev/null 2>&1 || true
+              yes | "$MGR" "platforms;android-$csdk" 2>&1 | tail -3 || true
             fi
           fi
 
