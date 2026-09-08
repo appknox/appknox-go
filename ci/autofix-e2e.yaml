@@ -21,9 +21,13 @@ on:
   workflow_dispatch:
     inputs:
       javaVersion:
-        description: "JDK for the app build (8 for pre-2020 apps, 17 for modern)"
+        description: "JDK that RUNS Gradle (8 for Gradle<7, 17 for AGP 8, 21 for AGP 9)"
         required: false
         default: "17"
+      buildOnly:
+        description: "Stop after the build - no upload, scan, KnoxIQ or fix"
+        required: false
+        default: "false"
       appDir:
         description: "Directory holding gradlew (blank = repo root; e.g. InsecureBankv2)"
         required: false
@@ -81,18 +85,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Skipped in buildOnly mode: nothing there calls the CLI, and building it
+      # costs about a minute on every run.
       - uses: actions/setup-go@v5
+        if: inputs.buildOnly != 'true'
         with:
           go-version: "1.24"
 
       - name: Build the appknox CLI
+        if: inputs.buildOnly != 'true'
         run: |
           git clone --depth 1 --branch "$AUTOFIX_CLI_REF" \
             https://github.com/appknox/appknox-go.git /tmp/appknox-go
           cd /tmp/appknox-go && go build -o /usr/local/bin/appknox .
           appknox --help >/dev/null && echo "CLI built from $AUTOFIX_CLI_REF"
 
-      - name: Set up JDK
+      # TWO JDK concerns, routinely confused, and a single install cannot serve
+      # both:
+      #
+      #   1. The JDK that RUNS Gradle. Old Gradle cannot run on a new JDK at all
+      #      (Gradle 4.x needs 8), and AGP 8/9 refuse to run on an old one.
+      #   2. The JDK that COMPILES the code. AGP derives a Java toolchain from
+      #      compileOptions, and Gradle matches a toolchain EXACTLY -- a request
+      #      for 18 is not satisfied by 21. termux-app wants Gradle on 17+ while
+      #      targeting Java 8; allsafe-android wants a toolchain of exactly 18.
+      #
+      # So: install a ladder of JDKs for toolchain resolution, then install the
+      # requested one LAST so it wins JAVA_HOME and runs Gradle. The build step
+      # points Gradle at the ladder via org.gradle.java.installations.fromEnv,
+      # which older Gradle simply ignores as an unknown system property.
+      - name: Install the toolchain JDK ladder
+        if: inputs.fileId == ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            11
+            17
+            18
+            21
+
+      - name: Set up the JDK that runs Gradle
         if: inputs.fileId == ''
         uses: actions/setup-java@v4
         with:
@@ -115,12 +149,19 @@ jobs:
           cd "${app_dir:-.}"
           echo "building in $(pwd)"
 
+          # Let Gradle see every JDK the ladder installed, so a toolchain
+          # request for an exact version can be satisfied by something other
+          # than the JDK running Gradle. Unknown to Gradle < 6.7, which ignores
+          # it rather than failing.
+          TOOLCHAINS="-Dorg.gradle.java.installations.fromEnv=JAVA_HOME_8_X64,JAVA_HOME_11_X64,JAVA_HOME_17_X64,JAVA_HOME_18_X64,JAVA_HOME_21_X64"
+
           chmod +x ./gradlew
           task="${{ inputs.gradleTask }}"
           if [ -n "$task" ]; then
-            ./gradlew --no-daemon "$task"
+            ./gradlew --no-daemon $TOOLCHAINS "$task"
           else
-            ./gradlew --no-daemon bundle || ./gradlew --no-daemon assembleDebug
+            ./gradlew --no-daemon $TOOLCHAINS bundle \
+              || ./gradlew --no-daemon $TOOLCHAINS assembleDebug
           fi
 
           # Searched from the repo root, so the path recorded is repo-relative
@@ -139,8 +180,13 @@ jobs:
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
           echo "built $artifact"
 
+      # buildOnly stops here. Build triage across a corpus is a separate
+      # question from fixing anything, and it must stay answerable while the
+      # Appknox API is unreachable -- otherwise an upload outage looks
+      # indistinguishable from an app that does not compile.
       - name: Upload to Appknox
         id: upload
+        if: inputs.buildOnly != 'true'
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
         run: |
@@ -155,6 +201,7 @@ jobs:
           echo "uploaded as file ${file_id}"
 
       - name: Wait for the static scan
+        if: inputs.buildOnly != 'true'
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
         run: |
@@ -165,7 +212,7 @@ jobs:
             --risk-threshold critical --host "$APPKNOX_API_HOST" || true
 
       - name: What is and is not a fix target
-        if: inputs.listAnalysesOnly == 'true'
+        if: inputs.buildOnly != 'true' && inputs.listAnalysesOnly == 'true'
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
         run: |
@@ -182,7 +229,7 @@ jobs:
       # wait up to two hours on a service it does not depend on, and a KnoxIQ
       # timeout destroyed the verification result along with the fixes.
       - name: Did the previous run's fixes hold?
-        if: inputs.listAnalysesOnly != 'true'
+        if: inputs.buildOnly != 'true' && inputs.listAnalysesOnly != 'true'
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
         run: |
@@ -249,7 +296,7 @@ jobs:
       # Only autofix needs KnoxIQ: it writes the per-finding remediation and
       # validation the fixer reads, and there is nothing to read until it lands.
       - name: Wait for the KnoxIQ analysis
-        if: inputs.listAnalysesOnly != 'true'
+        if: inputs.buildOnly != 'true' && inputs.listAnalysesOnly != 'true'
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
         run: |
@@ -276,7 +323,7 @@ jobs:
       # successful runs -- across a corpus most runs are one of those, and
       # failing them would paint healthy repositories red.
       - name: Autofix every finding
-        if: inputs.listAnalysesOnly != 'true'
+        if: inputs.buildOnly != 'true' && inputs.listAnalysesOnly != 'true'
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
