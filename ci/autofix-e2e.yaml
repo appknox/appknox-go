@@ -303,7 +303,7 @@ jobs:
         id: upload
         if: env.BUILD_ONLY != 'true'
         env:
-          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
         run: |
           if [ -n "${{ inputs.fileId }}" ]; then
             echo "file_id=${{ inputs.fileId }}" >> "$GITHUB_OUTPUT"
@@ -318,7 +318,7 @@ jobs:
       - name: Wait for the static scan
         if: env.BUILD_ONLY != 'true'
         env:
-          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
         run: |
           # cicheck blocks until the static scan finishes, then exits non-zero if
           # anything breaches the threshold. Only the wait is wanted here: the
@@ -329,7 +329,7 @@ jobs:
       - name: What is and is not a fix target
         if: env.BUILD_ONLY != 'true' && env.LIST_ONLY == 'true'
         env:
-          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
         run: |
           appknox autofix --list-analyses \
             --file-id "${{ steps.upload.outputs.file_id }}" \
@@ -346,7 +346,7 @@ jobs:
       - name: Did the previous run's fixes hold?
         if: env.BUILD_ONLY != 'true' && env.LIST_ONLY != 'true'
         env:
-          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
         run: |
           current="${{ steps.upload.outputs.file_id }}"
           baseline="${{ inputs.baselineFileId }}"
@@ -413,7 +413,7 @@ jobs:
       - name: Wait for the KnoxIQ analysis
         if: env.BUILD_ONLY != 'true' && env.LIST_ONLY != 'true'
         env:
-          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
         run: |
           # 4 = COMPLETED, 5 = ERRORED (mycroft KnoxIQScanStatus).
           url="${APPKNOX_API_HOST}api/knoxiq/file/${{ steps.upload.outputs.file_id }}/knoxiq_scan/status"
@@ -440,7 +440,7 @@ jobs:
       - name: Autofix every finding
         if: env.BUILD_ONLY != 'true' && env.LIST_ONLY != 'true'
         env:
-          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # No --fix-token: in CI the gateway credential is minted from this
