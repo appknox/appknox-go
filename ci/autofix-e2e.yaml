@@ -155,6 +155,19 @@ jobs:
           # it rather than failing.
           TOOLCHAINS="-Dorg.gradle.java.installations.fromEnv=JAVA_HOME_8_X64,JAVA_HOME_11_X64,JAVA_HOME_17_X64,JAVA_HOME_18_X64,JAVA_HOME_21_X64"
 
+          # Accept Android SDK licences before Gradle asks for them. Runners
+          # pre-accept only the packages they ship; a project pinning any other
+          # NDK or build-tools version fails configuration with
+          # LicenceNotAcceptedException, which reads like a broken app but is
+          # purely a missing runner licence. Never fatal -- an image without
+          # sdkmanager should not stop a build that needs no extra package.
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          for mgr in "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+                     "$SDK/cmdline-tools/bin/sdkmanager" \
+                     "$SDK/tools/bin/sdkmanager"; do
+            [ -x "$mgr" ] && { yes | "$mgr" --licenses >/dev/null 2>&1 || true; break; }
+          done
+
           chmod +x ./gradlew
           task="${{ inputs.gradleTask }}"
           if [ -n "$task" ]; then
