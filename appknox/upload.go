@@ -88,6 +88,33 @@ func (s *UploadService) UploadFile(ctx context.Context, file *os.File) (*File, *
 	return s.CheckSubmission(ctx, *submissionID)
 }
 
+// SubmissionTimeout bounds the wait for a submission to become a file.
+//
+// It was 5 minutes, which is shorter than the backend routinely takes: an mfva
+// upload on 8 Sep took about 14 minutes to go from submission to file. The
+// upload had succeeded, the file was created and the static scan completed --
+// and the CLI still reported "Request timed out" and exited non-zero, so a
+// working pipeline looked broken. Larger apps take longer again.
+//
+// Override with APPKNOX_SUBMISSION_TIMEOUT_MINUTES for a slow environment or an
+// unusually large artifact.
+var SubmissionTimeout = submissionTimeoutFromEnv(30 * time.Minute)
+
+// submissionTimeoutFromEnv reads the override, falling back to def when the
+// variable is unset or is not a positive integer. A malformed value must not
+// silently become a zero timeout, which would fail every upload instantly.
+func submissionTimeoutFromEnv(def time.Duration) time.Duration {
+	raw := os.Getenv("APPKNOX_SUBMISSION_TIMEOUT_MINUTES")
+	if raw == "" {
+		return def
+	}
+	minutes, err := strconv.Atoi(raw)
+	if err != nil || minutes <= 0 {
+		return def
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
 // CheckSubmission will check submission validation and return a valid file object.
 func (s *UploadService) CheckSubmission(ctx context.Context, submissionID int) (*File, *Response, error) {
 	start := time.Now()
@@ -101,8 +128,11 @@ func (s *UploadService) CheckSubmission(ctx context.Context, submissionID int) (
 		if reason != "" {
 			return nil, nil, errors.New(reason)
 		}
-		if time.Since(start) > 5*time.Minute {
-			return nil, nil, errors.New("Request timed out")
+		if time.Since(start) > SubmissionTimeout {
+			return nil, nil, fmt.Errorf(
+				"submission %d did not become a file within %s; it may still be "+
+					"processing (raise APPKNOX_SUBMISSION_TIMEOUT_MINUTES)",
+				submissionID, SubmissionTimeout)
 		}
 		fileID = submission.File
 		if fileID == 0 {
