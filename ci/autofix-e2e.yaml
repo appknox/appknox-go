@@ -259,13 +259,24 @@ jobs:
             fi
           fi
 
+          # Override any org.gradle.java.home committed to gradle.properties.
+          # AndroidDemoAPK carries a developer's macOS path
+          # (/Library/Java/JavaVirtualMachines/zulu-17.jdk/...), which cannot
+          # exist on a Linux runner; Gradle then fails outright rather than
+          # falling back to JAVA_HOME. Without this the repo is unbuildable in
+          # CI, and overriding needs no change to the repo itself.
+          JAVAHOME_OVERRIDE="-Dorg.gradle.java.home=$JAVA_HOME"
+
           chmod +x ./gradlew
           task="${{ inputs.gradleTask }}"
           if [ -n "$task" ]; then
-            ./gradlew --no-daemon $TOOLCHAINS "$task"
+            ./gradlew --no-daemon $TOOLCHAINS $JAVAHOME_OVERRIDE "$task"
           else
-            ./gradlew --no-daemon $TOOLCHAINS bundle \
-              || ./gradlew --no-daemon $TOOLCHAINS assembleDebug
+            # assemble last: some projects define neither bundle nor
+            # assembleDebug at the root, but do respond to assemble.
+            ./gradlew --no-daemon $TOOLCHAINS $JAVAHOME_OVERRIDE bundle \
+              || ./gradlew --no-daemon $TOOLCHAINS $JAVAHOME_OVERRIDE assembleDebug \
+              || ./gradlew --no-daemon $TOOLCHAINS $JAVAHOME_OVERRIDE assemble
           fi
 
           # Searched from the repo root, so the path recorded is repo-relative
