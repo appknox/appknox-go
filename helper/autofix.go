@@ -107,6 +107,12 @@ type Outcome struct {
 }
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
+//
+// "Nothing to fix" is NOT an error here. A clean app, an app whose findings are
+// all third-party, and an app KnoxIQ declined to remediate are all successful
+// runs that happen to produce no patch, and they exit 0. Only a run that could
+// not reach a verdict at all -- unreachable KnoxIQ, a rejected credential, no
+// repository to read -- exits 1. See ErrNothingFixable.
 func ProcessAutofix(opts AutofixOptions) {
 	if opts.ListAnalyses {
 		if err := listAnalyses(opts.FileID); err != nil {
@@ -116,6 +122,10 @@ func ProcessAutofix(opts AutofixOptions) {
 		return
 	}
 	out, err := runAutofix(context.Background(), opts, defaultDeps())
+	if errors.Is(err, ErrNothingFixable) {
+		fmt.Printf("Nothing to fix: %v\n", err)
+		return
+	}
 	if err != nil {
 		PrintError(err)
 		os.Exit(1)

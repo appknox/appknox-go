@@ -14,6 +14,20 @@ import (
 // rather than one per finding, which is the difference between a review and an
 // inbox.
 
+// ErrNothingFixable marks a run that reached everything it needed and found
+// nothing to fix. That is a real answer, not a failure.
+//
+// The distinction is load-bearing at corpus scale. Across many repositories most
+// runs legitimately have nothing to remediate: the app is clean, every finding is
+// third-party, or KnoxIQ judged none of them worth a patch. Exiting non-zero
+// there paints healthy repositories red and teaches everyone to ignore the
+// signal -- which then hides the runs that failed for real reasons, an
+// unreachable KnoxIQ or a bad credential among them.
+//
+// Callers separate the two with errors.Is rather than by matching message text,
+// so the wording below stays free to change.
+var ErrNothingFixable = errors.New("nothing to fix")
+
 // analysisTarget is one analysis to attempt, with its resolved inputs.
 type analysisTarget struct {
 	AnalysisID int
@@ -85,8 +99,8 @@ func everyLocatableAnalysis(
 	}
 	if len(ids) == 0 {
 		return nil, fmt.Errorf(
-			"no analysis on file %d both names a first-party class and meets the risk threshold",
-			opts.FileID)
+			"no analysis on file %d meets the risk threshold: %w",
+			opts.FileID, ErrNothingFixable)
 	}
 	fmt.Printf("Considering %d analyses on file %d\n", len(ids), opts.FileID)
 
@@ -103,7 +117,8 @@ func everyLocatableAnalysis(
 		targets = append(targets, analysisTarget{AnalysisID: id, Inputs: inputs})
 	}
 	if len(targets) == 0 {
-		return nil, fmt.Errorf("KnoxIQ has nothing fixable on file %d", opts.FileID)
+		return nil, fmt.Errorf("KnoxIQ has nothing fixable on file %d: %w",
+			opts.FileID, ErrNothingFixable)
 	}
 	fmt.Printf("%d analysis(es) have a fix to attempt\n", len(targets))
 	return targets, nil

@@ -134,15 +134,45 @@ func TestResolveTargets_skipsAnalysesThatFailToResolve(t *testing.T) {
 	require.Equal(t, 2, targets[0].AnalysisID)
 }
 
-func TestResolveTargets_errorsWhenNothingIsFixable(t *testing.T) {
+// "Nothing to fix" and "the run failed" must stay distinguishable, because CI
+// derives its exit code from the difference. Across a corpus of repositories
+// most runs legitimately have nothing to remediate, so collapsing the two paints
+// healthy repositories red and buries the runs someone actually needs to act on.
+//
+// Asserted with errors.Is rather than on message text: a substring match would
+// also pass on an unrelated error that happened to mention the same words.
+func TestResolveTargets_nothingFixableIsNotAFailure(t *testing.T) {
 	d := defaultDeps()
 	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{1}, nil }
 	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
 		return FindingInputs{Finding: "x"}, nil // no remediation
 	}
 	_, err := resolveTargets(context.Background(), AutofixOptions{FileID: 9}, d)
+	require.Error(t, err, "the caller still has to know no patch was produced")
+	require.ErrorIs(t, err, ErrNothingFixable)
+}
+
+// The same verdict when the risk threshold excludes every analysis: a clean
+// scan, reported as such.
+func TestResolveTargets_noAnalysisMeetsThreshold_isNothingFixable(t *testing.T) {
+	d := defaultDeps()
+	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return nil, nil }
+	_, err := resolveTargets(context.Background(), AutofixOptions{FileID: 9}, d)
+	require.ErrorIs(t, err, ErrNothingFixable)
+}
+
+// The counterpart, and the reason the sentinel has to stay narrow: a genuine
+// failure to reach a verdict must never read as a clean run. If this ever
+// matches ErrNothingFixable, CI goes green during an outage.
+func TestResolveTargets_unreachableBackend_isNotNothingFixable(t *testing.T) {
+	d := defaultDeps()
+	d.analysisIDs = func(context.Context, int, int) ([]int, error) {
+		return nil, errors.New("knoxiq unreachable: 503")
+	}
+	_, err := resolveTargets(context.Background(), AutofixOptions{FileID: 9}, d)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "nothing fixable")
+	require.NotErrorIs(t, err, ErrNothingFixable,
+		"an unreachable backend is an outage; exiting 0 there hides it")
 }
 
 func TestResolveTargets_singleAnalysisStillWorks(t *testing.T) {
