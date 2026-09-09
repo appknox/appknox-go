@@ -388,12 +388,18 @@ jobs:
             project=$(api "${APPKNOX_API_HOST}api/v2/files/${current}" \
               | python3 -c 'import sys,json;print(json.load(sys.stdin).get("project",""))')
             if [ -n "$project" ]; then
+              # api/projects/... NOT api/v2/projects/...: the v2 path 404s, and
+              # with `curl -sf` that yields an empty body, so the parse below
+              # died with "Expecting value: line 1 column 1" -- a JSON error
+              # standing in for a wrong URL.
+              #
               # One line on purpose: a multi-line -c string would have to sit at
               # column 0 to keep Python happy, and that closes the YAML block
               # scalar early. $current is passed as argv, never interpolated
-              # into the program text.
-              baseline=$(api "${APPKNOX_API_HOST}api/v2/projects/${project}/files?limit=50" \
-                | python3 -c 'import sys,json;c=int(sys.argv[1]);i=[f["id"] for f in json.load(sys.stdin).get("results",[]) if f["id"]<c];print(max(i) if i else "")' "$current")
+              # into the program text. `or true` keeps a missing baseline
+              # non-fatal -- the comparison is informative, not a gate.
+              baseline=$( { api "${APPKNOX_API_HOST}api/projects/${project}/files?limit=50" \
+                | python3 -c 'import sys,json;c=int(sys.argv[1]);i=[f["id"] for f in json.load(sys.stdin).get("results",[]) if f["id"]<c];print(max(i) if i else "")' "$current"; } || true )
             fi
           fi
 
