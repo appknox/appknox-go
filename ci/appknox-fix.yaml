@@ -17,6 +17,15 @@
 name: Appknox Fix
 
 on:
+  # workflow_dispatch only registers once the file reaches a repository's
+  # DEFAULT branch. Where committing there is not on the table, pushing this
+  # branch is the only way to trigger a run.
+  #
+  # A push carries NO inputs, so fileId must be baked into the copy deployed to
+  # that repo (see the job env below). Without it the run refuses rather than
+  # guessing which scan to fix.
+  push:
+    branches: [ci/appknox-autofix]
   workflow_dispatch:
     inputs:
       fileId:
@@ -55,6 +64,13 @@ env:
 jobs:
   fix:
     runs-on: ubuntu-latest
+    # Resolved once, so the steps never care whether this was a dispatch or a
+    # push. On a push `inputs` is empty and every fallback applies.
+    env:
+      FILE_ID: ${{ inputs.fileId }}
+      DRY_RUN: ${{ inputs.dryRun || 'false' }}
+      RISK: ${{ inputs.riskThreshold || 'low' }}
+      ALLOW_UNVERIFIED: ${{ inputs.allowUnverified || 'true' }}
     timeout-minutes: 60
     permissions:
       # Mints the OIDC id-token Sherrinford exchanges for a session token.
@@ -85,7 +101,14 @@ jobs:
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
         run: |
-          file_id="${{ inputs.fileId }}"
+          file_id="$FILE_ID"
+          # A push carries no inputs. If the deployed copy has no fileId baked
+          # in, refuse: guessing which scan to fix would apply one app's
+          # remediation to another app's source.
+          if [ -z "$file_id" ]; then
+            echo "::error::no fileId. Dispatch with one, or bake it into FILE_ID in this repo's copy of the workflow."
+            exit 1
+          fi
           api() { curl -sf -H "Authorization: Token $APPKNOX_ACCESS_TOKEN" "$1"; }
 
           risky=$(api "${APPKNOX_API_HOST}api/v2/files/${file_id}/analyses?limit=200" \
@@ -115,16 +138,16 @@ jobs:
           appknox autofix \
             --repo-path . \
             --repo "${{ github.repository }}" \
-            --file-id "${{ inputs.fileId }}" \
-            --risk-threshold "${{ inputs.riskThreshold || 'low' }}" \
+            --file-id "$FILE_ID" \
+            --risk-threshold "$RISK" \
             ${{ inputs.analysisId != '' && format('--analysis-id {0}', inputs.analysisId) || '' }} \
             ${{ inputs.prNumber != '' && format('--pr-number {0} --scope {1}', inputs.prNumber, inputs.scope) || '' }} \
             --host "$APPKNOX_API_HOST" \
             --fix-url "$SHERRINFORD_URL" \
-            ${{ inputs.allowUnverified == 'true' && '--allow-unverified' || '' }} \
-            ${{ inputs.dryRun == 'false' && '--push-branch' || '--dry-run' }}
+            ${{ env.ALLOW_UNVERIFIED == 'true' && '--allow-unverified' || '' }} \
+            ${{ env.DRY_RUN == 'false' && '--push-branch' || '--dry-run' }}
 
       - name: What to do next
-        if: inputs.dryRun == 'false'
+        if: env.DRY_RUN == 'false'
         run: |
           echo "::notice::If a PR was opened, verify it with appknox-verify-pr.yaml and pass baselineFileId=${{ inputs.fileId }}, so the rescan is compared against the scan these fixes were derived from."
