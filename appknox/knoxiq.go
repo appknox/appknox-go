@@ -31,9 +31,31 @@ type KnoxIQRemediation struct {
 	// Verification is KnoxIQ's own "how to confirm the fix worked" steps --
 	// the criteria a generated patch is checked against.
 	//
-	// It is EMPTY for findings analysed before the storage layer stopped
-	// discarding the field. Empty therefore means "could not check", never
-	// "passed": a caller with no criteria must refuse to certify the patch.
+	// Empty means "could not check", never "passed": a caller with no criteria
+	// must refuse to certify the patch.
+	//
+	// TODO(autofix-verification): this is ALWAYS empty against the KnoxIQ
+	// currently deployed, so every fix ships under --allow-unverified and the
+	// criteria gate is inert. Confirmed against a live payload (file 412,
+	// analysis 40231) on 2026-09-09:
+	//
+	//	remediation keys : [code_examples references remediation source steps]
+	//	poc keys         : [expected_evidence poc_title source verification_steps]
+	//
+	// The field is absent because copilot-core's FindingRemediationResult does
+	// not model it on the branch KnoxIQ is deployed from. The fix exists on
+	// copilot-core's feat/autofix-v2 (commit 6befb01) and is not yet released.
+	//
+	// The path read here is CORRECT. Do NOT repoint it at
+	// poc.verification_steps: that is a different artifact -- objects of
+	// {step_number,title,command,expected_result} carrying adb commands that
+	// prove the vulnerability is real on a running device BEFORE any fix. They
+	// cannot be matched against a source diff, so switching would turn a
+	// silently-empty gate into a permanently-failing one.
+	//
+	// To close this: release copilot-core's fix, re-run KnoxIQ on the affected
+	// files (already-analysed files do not gain it retroactively), then drop
+	// --allow-unverified from the fix workflows.
 	Verification []string `json:"verification"`
 
 	// Source records provenance: source_type, kb_id, llm_model, confidence.
