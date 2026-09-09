@@ -1,0 +1,130 @@
+# Autofix an ALREADY-SCANNED file, and open a pull request with the patches.
+#
+# Deliberately does NOT build or upload anything. The app has already been built,
+# uploaded and scanned by appknox-autofix.yaml, and KnoxIQ has already run; this
+# workflow consumes that result. Splitting it out matters for three reasons:
+#
+#   1. A rebuild here would produce a DIFFERENT artifact from the one that was
+#      scanned, so remediation derived from one build would be applied to
+#      another.
+#   2. Rebuilding a large app costs 15-30 minutes before any fixing starts, and
+#      fixing is the part being iterated on.
+#   3. KnoxIQ is triggered by hand. Coupling the fix to a build would mean
+#      rebuilding every time somebody wanted to retry a fix.
+#
+# The verification half lives in appknox-verify-pr.yaml, which runs against the
+# pull request this produces and answers "did the fix actually clear it?".
+name: Appknox Fix
+
+on:
+  workflow_dispatch:
+    inputs:
+      fileId:
+        description: "Appknox file id to fix - ALREADY uploaded, scanned and KnoxIQ-analysed"
+        required: true
+      analysisId:
+        description: "Fix one analysis only (blank = every finding on the file)"
+        required: false
+        default: ""
+      riskThreshold:
+        description: "Lowest severity to attempt: critical|high|medium|low"
+        required: false
+        default: "low"
+      dryRun:
+        description: "Produce the patches but open no PR"
+        required: false
+        default: "true"
+      allowUnverified:
+        description: "Deliver fixes KnoxIQ gave no criteria for (PR is stamped NOT VERIFIED)"
+        required: false
+        default: "true"
+      prNumber:
+        description: "Originating PR: names the branch and scopes the fix to its files"
+        required: false
+        default: ""
+      scope:
+        description: "pr = only files changed in prNumber; repo = anywhere"
+        required: false
+        default: "repo"
+
+env:
+  APPKNOX_API_HOST: https://sherlock-knoxiq-uat.staging.appknox.io/
+  SHERRINFORD_URL: https://sherrinford-uat.staging.appknox.io
+  AUTOFIX_CLI_REF: feat/autofix-v2
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      # Mints the OIDC id-token Sherrinford exchanges for a session token.
+      id-token: write
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Build the appknox CLI
+        run: |
+          git clone --depth 1 --branch "$AUTOFIX_CLI_REF" \
+            https://github.com/appknox/appknox-go.git /tmp/appknox-go
+          cd /tmp/appknox-go && go build -o /usr/local/bin/appknox .
+          appknox --help >/dev/null && echo "CLI built from $AUTOFIX_CLI_REF"
+
+      # Fail early and legibly rather than deep inside the fixer. A file whose
+      # KnoxIQ analysis has not finished carries no remediation, and the fixer
+      # would simply report nothing to do -- indistinguishable from a clean app.
+      - name: Check the file is ready to fix
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
+        run: |
+          file_id="${{ inputs.fileId }}"
+          api() { curl -sf -H "Authorization: Token $APPKNOX_ACCESS_TOKEN" "$1"; }
+
+          risky=$(api "${APPKNOX_API_HOST}api/v2/files/${file_id}/analyses?limit=200" \
+            | python3 -c 'import sys,json;print(sum(1 for a in json.load(sys.stdin)["results"] if a.get("computed_risk",0)>0))')
+          echo "file $file_id has $risky risky finding(s)"
+
+          # 4 = COMPLETED, 5 = ERRORED (mycroft KnoxIQScanStatus).
+          status=$(api "${APPKNOX_API_HOST}api/knoxiq/file/${file_id}/knoxiq_scan/status" \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin).get("sast_status"))')
+          echo "knoxiq sast_status=$status"
+          case "$status" in
+            4) echo "KnoxIQ is complete - remediation is available" ;;
+            5) echo "::error::KnoxIQ errored on this file; there is no remediation to apply"; exit 1 ;;
+            *) echo "::error::KnoxIQ has not finished (sast_status=$status). Trigger it, then re-run."; exit 1 ;;
+          esac
+
+      # Exits 0 when there is nothing to fix: a clean app, findings that are all
+      # third-party, and remediation KnoxIQ declined to produce are all
+      # successful outcomes that happen to yield no patch.
+      - name: Autofix the file
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # No --fix-token: in CI the gateway credential is minted from this
+          # run's OIDC identity and expires with the job.
+          appknox autofix \
+            --repo-path . \
+            --repo "${{ github.repository }}" \
+            --file-id "${{ inputs.fileId }}" \
+            --risk-threshold "${{ inputs.riskThreshold || 'low' }}" \
+            ${{ inputs.analysisId != '' && format('--analysis-id {0}', inputs.analysisId) || '' }} \
+            ${{ inputs.prNumber != '' && format('--pr-number {0} --scope {1}', inputs.prNumber, inputs.scope) || '' }} \
+            --host "$APPKNOX_API_HOST" \
+            --fix-url "$SHERRINFORD_URL" \
+            ${{ inputs.allowUnverified == 'true' && '--allow-unverified' || '' }} \
+            ${{ inputs.dryRun == 'false' && '--push-branch' || '--dry-run' }}
+
+      - name: What to do next
+        if: inputs.dryRun == 'false'
+        run: |
+          echo "::notice::If a PR was opened, verify it with appknox-verify-pr.yaml and pass baselineFileId=${{ inputs.fileId }}, so the rescan is compared against the scan these fixes were derived from."

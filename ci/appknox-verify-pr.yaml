@@ -1,0 +1,225 @@
+# Did the autofix PR actually fix anything?
+#
+# Rebuilds the PULL REQUEST's code, uploads that build, scans it, and compares
+# the result against the scan the fixes were derived from. This is the only
+# question that matters and the only one a diff cannot answer: a patch can look
+# correct, compile, satisfy its criteria, and still leave the scanner reporting
+# the vulnerability -- because it missed a second call site, or the flagged
+# class lives in a bundled dependency the patch cannot reach.
+#
+# The rebuild here is the point, and it is why this is a separate workflow from
+# appknox-fix.yaml: fixing must NOT rebuild (it would apply remediation derived
+# from one artifact to a different one), and verifying MUST rebuild (there is
+# nothing to measure otherwise).
+#
+# Spends no model budget: it never calls Sherrinford and never invokes the
+# fixer. It does consume one Appknox scan.
+name: Appknox Verify PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      baselineFileId:
+        description: "The pre-fix scan to compare against - the fileId given to Appknox Fix"
+        required: true
+      javaVersion:
+        description: "JDK that runs Gradle (8 for Gradle<7, 17 for AGP 8, 21 for AGP 9)"
+        required: false
+        default: "17"
+      appDir:
+        description: "Directory holding gradlew (blank = repo root)"
+        required: false
+        default: ""
+      gradleTask:
+        description: "Gradle task (blank = try bundle, then assembleDebug, then assemble)"
+        required: false
+        default: ""
+      toolchainLadder:
+        description: "Offer Gradle every installed JDK. false if the build reports inconsistent JVM-target"
+        required: false
+        default: "true"
+  # Verifies an autofix PR as soon as it appears. Safe to wire to pull_request
+  # because this workflow cannot fix anything and cannot spend model budget --
+  # unlike the fixing pipeline, which must never carry this trigger.
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  APPKNOX_API_HOST: https://sherlock-knoxiq-uat.staging.appknox.io/
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    # On a pull_request event, restrict to autofix's own branches: any other PR
+    # would burn a scan answering a question nobody asked.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.head_ref, 'appknox-autofix/') ||
+      startsWith(github.head_ref, 'bugfix/appknox-autofix')
+    timeout-minutes: 120
+
+    steps:
+      # Explicitly the PR's head: the whole purpose is to measure the code as it
+      # would land, not the base branch.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Build the appknox CLI
+        run: |
+          git clone --depth 1 --branch feat/autofix-v2 \
+            https://github.com/appknox/appknox-go.git /tmp/appknox-go
+          cd /tmp/appknox-go && go build -o /usr/local/bin/appknox .
+
+      - name: Install the toolchain JDK ladder
+        if: inputs.toolchainLadder != 'false'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            11
+            17
+            18
+            21
+
+      - name: Set up the JDK that runs Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.javaVersion || '17' }}
+
+      - name: Build the PR
+        id: build
+        run: |
+          set -o pipefail
+          app_dir="${{ inputs.appDir }}"
+          cd "${app_dir:-.}"
+          echo "building in $(pwd)"
+
+          TOOLCHAINS=""
+          if [ "${{ inputs.toolchainLadder || 'true' }}" = "true" ]; then
+            TOOLCHAINS="-Dorg.gradle.java.installations.fromEnv=JAVA_HOME_8_X64,JAVA_HOME_11_X64,JAVA_HOME_17_X64,JAVA_HOME_18_X64,JAVA_HOME_21_X64"
+          fi
+          # Overrides a committed org.gradle.java.home pointing at somebody's
+          # local JDK, which cannot exist on a runner.
+          JAVAHOME_OVERRIDE="-Dorg.gradle.java.home=$JAVA_HOME"
+
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          MGR=""
+          for m in "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+                   "$SDK/cmdline-tools/bin/sdkmanager" \
+                   "$SDK/tools/bin/sdkmanager"; do
+            if [ -x "$m" ]; then MGR="$m"; break; fi
+          done || true
+          # sdkmanager will not start on JDK 8, so it gets its own.
+          SDKJAVA="${JAVA_HOME_17_X64:-${JAVA_HOME_21_X64:-$JAVA_HOME}}"
+          if [ -n "$MGR" ]; then
+            yes | env JAVA_HOME="$SDKJAVA" "$MGR" --licenses >/dev/null 2>&1 || true
+          fi
+
+          chmod +x ./gradlew
+          task="${{ inputs.gradleTask }}"
+          if [ -n "$task" ]; then
+            ./gradlew --no-daemon $TOOLCHAINS $JAVAHOME_OVERRIDE "$task"
+          else
+            ./gradlew --no-daemon $TOOLCHAINS $JAVAHOME_OVERRIDE bundle \
+              || ./gradlew --no-daemon $TOOLCHAINS $JAVAHOME_OVERRIDE assembleDebug \
+              || ./gradlew --no-daemon $TOOLCHAINS $JAVAHOME_OVERRIDE assemble
+          fi
+
+          cd "$GITHUB_WORKSPACE"
+          artifact=$(find . -path '*/build/outputs/*' \( -name '*.aab' -o -name '*.apk' \) \
+            ! -name '*unsigned*' ! -name '*unaligned*' -print0 \
+            | xargs -0 ls -S 2>/dev/null | head -1)
+          if [ -z "$artifact" ]; then
+            echo "::error::the PR build produced no .aab or .apk"
+            exit 1
+          fi
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "built $artifact"
+
+      - name: Upload the PR build
+        id: upload
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
+        run: |
+          file_id=$(appknox upload "${{ steps.build.outputs.artifact }}" --host "$APPKNOX_API_HOST")
+          echo "file_id=${file_id}" >> "$GITHUB_OUTPUT"
+          echo "uploaded as file ${file_id}"
+
+      - name: Wait for the static scan
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
+        run: |
+          appknox cicheck "${{ steps.upload.outputs.file_id }}" \
+            --risk-threshold critical --host "$APPKNOX_API_HOST" || true
+
+      # KnoxIQ takes no part here. It produces the remediation the fixer
+      # consumes; whether a finding CLEARED is the static scanner's answer, and
+      # that has already arrived. Waiting on KnoxIQ would delay the verdict by up
+      # to two hours for nothing, and lose it entirely on a timeout.
+      - name: Did the fixes hold?
+        env:
+          APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
+        run: |
+          baseline="${{ inputs.baselineFileId }}"
+          current="${{ steps.upload.outputs.file_id }}"
+          if [ -z "$baseline" ]; then
+            echo "::error::baselineFileId is required to say whether anything cleared"
+            exit 1
+          fi
+          echo "comparing PR build (file $current) against pre-fix scan (file $baseline)"
+
+          api() { curl -sf -H "Authorization: Token $APPKNOX_ACCESS_TOKEN" "$1"; }
+          api "${APPKNOX_API_HOST}api/v2/files/$baseline/analyses?limit=200" > /tmp/baseline.json
+          api "${APPKNOX_API_HOST}api/v2/files/$current/analyses?limit=200"  > /tmp/current.json
+
+          python3 - <<'PY' | tee /tmp/verdict.md
+          import json
+
+          def risky(path):
+              """vulnerability id -> computed risk, for anything above Passed."""
+              with open(path) as fh:
+                  data = json.load(fh)
+              return {a["vulnerability"]: a.get("computed_risk", 0)
+                      for a in data.get("results", [])
+                      if a.get("computed_risk", 0) > 0}
+
+          before, after = risky("/tmp/baseline.json"), risky("/tmp/current.json")
+          cleared    = sorted(set(before) - set(after))
+          remaining  = sorted(set(before) & set(after))
+          introduced = sorted(set(after) - set(before))
+
+          print("## Appknox autofix verification\n")
+          print(f"- before the fix   : **{len(before)}** risky findings")
+          print(f"- after the fix    : **{len(after)}** risky findings")
+          print(f"- **cleared**      : {len(cleared)} {cleared}")
+          print(f"- still present    : {len(remaining)} {remaining}")
+          print(f"- newly introduced : {len(introduced)} {introduced}\n")
+          if introduced:
+              print("> A finding present here but absent from the baseline was "
+                    "introduced by this PR. Review before merging.")
+          elif cleared:
+              print("> The fixes cleared findings and introduced none.")
+          else:
+              print("> Nothing cleared. The patch may miss a second call site, or the "
+                    "flagged class may sit in a bundled dependency it cannot reach.")
+          PY
+
+          # Reported, never asserted: a finding surviving for a reason the patch
+          # could not address is a real result, not a broken build.
+          if [ -n "$GITHUB_STEP_SUMMARY" ]; then cat /tmp/verdict.md >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Comment the verdict on the PR
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" --body-file /tmp/verdict.md || true
