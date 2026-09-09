@@ -330,9 +330,12 @@ jobs:
         env:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
         run: |
-          if [ -n "${{ inputs.fileId }}" ]; then
-            echo "file_id=${{ inputs.fileId }}" >> "$GITHUB_OUTPUT"
-            echo "reusing file ${{ inputs.fileId }}"
+          # REUSE_FILE_ID, not inputs.fileId: on a push event `inputs` is empty,
+          # so reading it directly ignored the resolved default and attempted a
+          # real upload with no artifact built.
+          if [ -n "$REUSE_FILE_ID" ]; then
+            echo "file_id=$REUSE_FILE_ID" >> "$GITHUB_OUTPUT"
+            echo "reusing file $REUSE_FILE_ID"
             exit 0
           fi
           # upload prints the file id as its only stdout output
