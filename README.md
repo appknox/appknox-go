@@ -293,6 +293,68 @@ The `cicheck` command supports two modes for validating scan results:
 
 Both modes support the `--timeout` flag to set the static scan timeout in minutes (default: 30).
 
+### KnoxIQ Triage
+
+KnoxIQ adds AI-assisted exploitability triage on top of SAST results. It is opt-in per build:
+
+```bash
+# Request KnoxIQ triage for this build once the SAST scan completes
+appknox upload /path/to/app.apk --knoxiq
+```
+
+`cicheck` and `sarif` will then wait for triage and fall back to plain SAST results if it
+doesn't complete in time. The wait is bounded by `--timeout` plus `--knoxiq-timeout`, measured
+from the start of the run, so time the static scan does not use carries over to KnoxIQ — with
+both at their defaults that is 60 minutes in total:
+
+- `--exploit-likelihood-threshold` (`low`, `medium`, `high`) — fails the build if a triaged
+  vulnerability's exploit likelihood is at or above the threshold. Can be combined with
+  `--risk-threshold` or `--health-score-threshold`.
+- `--include-needs-review` — by default, vulnerabilities KnoxIQ flags as "needs review" are
+  excluded from the build decision; this flag includes them. It is a `cicheck` flag; for
+  `sarif` set it through `appknox config` or `APPKNOX_INCLUDE_NEEDS_REVIEW` instead.
+- `--knoxiq-timeout <minutes>` — how long to wait for KnoxIQ triage before falling back to SAST
+  results (1-240, default: 30).
+
+```bash
+appknox cicheck 12345 --exploit-likelihood-threshold high
+appknox cicheck 12345 --risk-threshold high --include-needs-review
+appknox cicheck 12345 --exploit-likelihood-threshold high --knoxiq-timeout 45
+```
+
+`sarif` decorates results with AEIS score and exploit likelihood when KnoxIQ triage is available,
+and excludes needs-review findings unless `include-needs-review` is set:
+
+```bash
+appknox config set include-needs-review true
+appknox sarif 12345 --output report.sarif
+```
+
+Use `--no-knoxiq` to skip the KnoxIQ wait entirely and produce the plain SAST report
+immediately. The report is not decorated with AEIS score or exploit likelihood, and keeps every
+finding, including the ones flagged as needs review:
+
+```bash
+appknox sarif 12345 --output report.sarif --no-knoxiq
+```
+
+`--knoxiq-timeout` and `--include-needs-review` can also be set persistently instead of passing
+them on every command:
+
+```bash
+appknox config set knoxiq-timeout 45
+appknox config set include-needs-review true
+appknox config get knoxiq-timeout
+```
+
+Use `reports knoxiq <file_id>` to generate and download the KnoxIQ PDF report in one step — it
+waits for triage to complete (if the build requested it) before downloading, saving to
+`./reports/{file_id}/` by default:
+
+```bash
+appknox reports knoxiq 12345 --output /path/to/reports/
+```
+
 ### Download PDF Report
 
 Use `reports create <file_id>` to generate a report and get the report ID, then `reports download pdf <report_id>` to download it.

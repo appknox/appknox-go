@@ -40,7 +40,10 @@ func ProcessInit() {
 		fmt.Println("Please enter a valid access token")
 		os.Exit(1)
 	}
-	viper.WriteConfig()
+	if err := viper.WriteConfig(); err != nil {
+		fmt.Printf("Failed to save config: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Println("Appknox CLI has been initialized.")
 }
 
