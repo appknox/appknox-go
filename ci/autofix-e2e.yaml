@@ -295,6 +295,31 @@ jobs:
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
           echo "built $artifact"
 
+      # Publish the artifact so it can be uploaded from somewhere other than
+      # this runner.
+      #
+      # Setting a repository secret requires admin, which a contributor with
+      # push access does not have -- AndroidDemoAPK is the case in point. With no
+      # secret the step below cannot authenticate, so that repo could never be
+      # scanned however well it builds. Publishing the artifact breaks the
+      # dependency: anyone who can read the run fetches it with
+      #
+      #     gh run download <run-id> --repo <owner>/<repo> --name app-artifact
+      #     appknox upload <file> --host <api-host>
+      #
+      # using their own credential. Private repos are fine -- the download obeys
+      # the same permissions as the repository itself.
+      #
+      # Short retention: these are build outputs, not releases.
+      - name: Publish the artifact for out-of-band upload
+        if: steps.build.outputs.artifact != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-artifact
+          path: ${{ steps.build.outputs.artifact }}
+          retention-days: 5
+          if-no-files-found: error
+
       # buildOnly stops here. Build triage across a corpus is a separate
       # question from fixing anything, and it must stay answerable while the
       # Appknox API is unreachable -- otherwise an upload outage looks
