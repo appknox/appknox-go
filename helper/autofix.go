@@ -104,6 +104,15 @@ type Outcome struct {
 	// the reason it gave. Declining is a legitimate outcome under the fix
 	// contract; reporting it without the reason is not.
 	Declined []declinedFile
+
+	// Truncated explains why the run stopped before attempting every analysis,
+	// and is empty when it did not.
+	//
+	// The gateway budget is per SESSION and one run is one session, so a large
+	// scan can exhaust it partway through. Discarding the fixes already produced
+	// would waste every model call the run had spent and leave the developer
+	// with nothing to review, so the work is kept, delivered, and labelled.
+	Truncated string
 }
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
@@ -165,11 +174,25 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	// delivered together. One branch per scan, not one per finding.
 	var out Outcome
 	work := newWorkingTree(root)
-	for _, t := range targets {
+	for i, t := range targets {
 		session := fixSession{opts: opts, d: d, root: root, fixCfg: fixCfg, inputs: t.Inputs, work: work}
-		if err := session.attempt(ctx, t, &out); err != nil {
-			return out, err
+		err := session.attempt(ctx, t, &out)
+		if err == nil {
+			continue
 		}
+		// A spent gateway budget stops the run but does not void it: deliver
+		// what was fixed before it ran out, and say what was left. Aborting
+		// here would discard every patch already paid for and hand the
+		// developer nothing, which is strictly worse than a partial branch.
+		if isGatewayBudgetExhausted(err) {
+			out.Truncated = fmt.Sprintf(
+				"the gateway session budget ran out after %d of %d analyses; "+
+					"the remaining %d were not attempted. Re-run to continue from here.",
+				i, len(targets), len(targets)-i)
+			fmt.Printf("\n!! %s\n", out.Truncated)
+			break
+		}
+		return out, err
 	}
 	// One entry per file, carrying every fix applied to it.
 	out.Patches = latestPerPath(out.Patches)
@@ -263,6 +286,9 @@ func deliverAll(
 	if len(targets) > 1 {
 		inputs = FindingInputs{Finding: fmt.Sprintf("%d findings", len(out.Analyses))}
 	}
+	// Carried into the PR body: a branch from a truncated run must say so, or
+	// the findings it never reached look fixed.
+	inputs.RunNote = out.Truncated
 	if opts.PushBranch {
 		url, err := d.deliver(ctx, opts, out.Patches, inputs)
 		if err != nil {
@@ -539,6 +565,11 @@ func analysisMarker(n int) string {
 
 // printOutcome renders the run result (one or more files) to stdout.
 func printOutcome(opts AutofixOptions, out Outcome) {
+	// Printed first: a partial run is the single most important thing to know
+	// about the result, and it explains a finding count lower than the scan's.
+	if out.Truncated != "" {
+		fmt.Printf("PARTIAL RUN: %s\n", out.Truncated)
+	}
 	if len(out.Located) == 0 {
 		fmt.Println("No source file located for this finding (advisory only).")
 		return

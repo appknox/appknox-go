@@ -106,6 +106,12 @@ func prBody(inputs FindingInputs, patches []filePatch) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Automated fix for **%s**.\n\n", findingName(inputs))
 
+	// Above everything else: a reviewer who misses this reads an incomplete
+	// branch as a complete one, and treats findings never attempted as fixed.
+	if inputs.RunNote != "" {
+		fmt.Fprintf(&b, "> **Incomplete run.** %s\n\n", inputs.RunNote)
+	}
+
 	b.WriteString("Files changed:\n")
 	for _, p := range patches {
 		fmt.Fprintf(&b, "- `%s`\n", p.Path)

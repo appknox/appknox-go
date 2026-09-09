@@ -38,6 +38,15 @@ type FindingInputs struct {
 	// DeveloperPrompt is KnoxIQ's guidance written for a human developer. More
 	// specific than the generic remediation prose, so the fixer gets it too.
 	DeveloperPrompt string
+
+	// RunNote describes the RUN rather than the finding, and is rendered in the
+	// pull request body.
+	//
+	// It carries the one thing a reviewer cannot infer from the diff: that the
+	// run stopped early, so this branch is incomplete. A partial branch that
+	// looks complete is worse than no branch, because the findings it never
+	// reached appear to have been fixed.
+	RunNote string
 }
 
 // stripHTML removes tags for source-free remediation text.
