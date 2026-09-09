@@ -35,6 +35,14 @@ on:
         description: "Fix one analysis only (blank = every finding on the file)"
         required: false
         default: ""
+      model:
+        description: "Model for BOTH turns (blank = Sonnet). This is the model that writes the patch"
+        required: false
+        default: ""
+      locateModel:
+        description: "Cheaper model for the locate turn only; does not affect the patch"
+        required: false
+        default: ""
       riskThreshold:
         description: "Lowest severity to attempt: critical|high|medium|low"
         required: false
@@ -71,6 +79,8 @@ jobs:
       DRY_RUN: ${{ inputs.dryRun || 'false' }}
       RISK: ${{ inputs.riskThreshold || 'low' }}
       ALLOW_UNVERIFIED: ${{ inputs.allowUnverified || 'true' }}
+      MODEL: ${{ inputs.model }}
+      LOCATE_MODEL: ${{ inputs.locateModel }}
     timeout-minutes: 60
     permissions:
       # Mints the OIDC id-token Sherrinford exchanges for a session token.
@@ -140,6 +150,8 @@ jobs:
             --repo "${{ github.repository }}" \
             --file-id "$FILE_ID" \
             --risk-threshold "$RISK" \
+            ${MODEL:+--model "$MODEL"} \
+            ${LOCATE_MODEL:+--locate-model "$LOCATE_MODEL"} \
             ${{ inputs.analysisId != '' && format('--analysis-id {0}', inputs.analysisId) || '' }} \
             ${{ inputs.prNumber != '' && format('--pr-number {0} --scope {1}', inputs.prNumber, inputs.scope) || '' }} \
             --host "$APPKNOX_API_HOST" \
