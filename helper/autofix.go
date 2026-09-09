@@ -26,6 +26,19 @@ type AutofixOptions struct {
 	ClassHint    string // manual class/symbol hint
 	FixURL       string // Appknox fix-service/gateway base URL
 	FixToken     string // scoped fix-service token
+
+	// Model overrides the model used for BOTH turns. Empty keeps the SDK
+	// default (Sonnet), which is what every run has used so far.
+	Model string
+
+	// LocateModel overrides the model for the LOCATE turn only, falling back to
+	// Model and then the default.
+	//
+	// The two turns are not equally demanding. Locating answers "which file
+	// holds this class?" from grep and glob output; fixing writes the security
+	// patch that ships. Running a cheaper model for locate is where the saving
+	// is, and it does not put the patch itself on a weaker model.
+	LocateModel string
 	GithubToken  string // GitHub token for the --repo fetch
 	DryRun       bool   // locate + fix but do not write the patch
 	PushBranch   bool   // push the fix to a new GitHub branch instead of local apply
@@ -409,7 +422,13 @@ func (s fixSession) locateAll(ctx context.Context) ([]string, error) {
 		hints = []string{""}
 	}
 	for _, hint := range hints {
-		p, err := s.d.locate(ctx, agent.Config{FixURL: s.fixCfg.URL, Token: s.fixCfg.Token},
+		// LocateModel first: locating is the cheaper question, so it is the turn
+		// worth running on a smaller model. Falls back to Model, then the SDK
+		// default.
+		p, err := s.d.locate(ctx, agent.Config{
+			FixURL: s.fixCfg.URL, Token: s.fixCfg.Token,
+			Model: firstNonEmpty(s.opts.LocateModel, s.opts.Model),
+		},
 			agent.Request{RepoRoot: s.root, ClassHint: hint, Finding: s.inputs.Finding})
 		if err != nil {
 			return nil, err
@@ -429,7 +448,11 @@ func (s fixSession) locateAll(ctx context.Context) ([]string, error) {
 // the provider key. No file is ever uploaded: the repository does not move, and
 // Sherrinford has no endpoint that would accept it.
 func (s fixSession) produceFix(ctx context.Context, path string) (agent.FixResult, error) {
-	return s.d.agentFix(ctx, agent.Config{FixURL: s.fixCfg.URL, Token: s.fixCfg.Token},
+	// Model only, never LocateModel: this turn writes the patch that ships, and
+	// must not silently inherit a model chosen to make file-finding cheaper.
+	return s.d.agentFix(ctx, agent.Config{
+		FixURL: s.fixCfg.URL, Token: s.fixCfg.Token, Model: s.opts.Model,
+	},
 		agent.FixRequest{RepoRoot: s.root, Path: path,
 			Finding: s.inputs.Finding, Remediation: s.inputs.Remediation,
 			DeveloperPrompt: s.inputs.DeveloperPrompt, Criteria: s.inputs.Criteria})
