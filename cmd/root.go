@@ -150,7 +150,7 @@ func initConfig() {
 		os.Exit(1)
 	}
 	if _, statErr := os.Stat(configFile); statErr == nil {
-		fmt.Println("Warning: config file exists but could not be read; recreating it.")
+		fmt.Fprintln(os.Stderr, "Warning: config file exists but could not be read; recreating it.")
 	}
 	if err := createDefaultConfigFile(configFile); err != nil {
 		fmt.Println(err.Error())
