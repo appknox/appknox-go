@@ -28,7 +28,14 @@ on:
   # build-only default (see the job env below): a push builds and stops. It
   # never uploads, never calls KnoxIQ, and never spends model budget.
   push:
-    branches: [ci/appknox-autofix]
+    # autofix-** as well as the CI branch: the fixer names its branch
+    # autofix-<base>, and the only way to prove a patch is any good is to build
+    # it. Without this the branches carrying the fixes were the one thing that
+    # could never be compiled -- 5 of the first 12 checked did not build, and
+    # nothing in the pipeline would have said so.
+    branches:
+      - ci/appknox-autofix
+      - "autofix-**"
   workflow_dispatch:
     inputs:
       javaVersion:
