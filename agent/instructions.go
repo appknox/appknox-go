@@ -32,6 +32,28 @@ import (
 // The rules below closed those. Re-measured on 20 items: same pass count, same
 // zero build breaks, total diff 1153 -> ~435 lines. An unreviewable diff is a
 // defect here, not a stylistic complaint -- it lands in a customer's repository.
+//
+// That evidence base is Java-only, one self-contained file at a time, scored
+// with javac. Run against 20 real Android repositories on 2026-09-09, 8 of 20
+// autofix branches did not compile -- and the corpus was manifests, resources,
+// Gradle scripts, flavour matrices and cross-file imports, none of which the
+// 50-file study contained. "Zero build breaks" was true inside its domain and
+// said nothing about this one.
+//
+// Every one of those 8 was a multi-file remediation reaching a single-file
+// fixer. KnoxIQ writes for a developer holding the whole repository: create
+// res/xml/foo.xml then reference it; delete the trust manager then remove its
+// use in LaunchWarmup.java; set debuggable in the manifest then set it again in
+// build.gradle. Handed one file and a step it cannot perform, the fixer did one
+// of two things, both fatal -- executed the destructive half alone, or
+// improvised the change in whatever file it did have.
+//
+// SCOPE already told it to abstain. It abstained in none of the 8. So WHERE,
+// ATOMIC and XML below do not add advice; they name the three shapes that
+// produced the breaks, because "declare it out of scope" was too abstract to
+// act on at the moment it mattered. The point is not to make the fixer capable
+// of a multi-file fix -- no wording can -- but to make a reported gap, which is
+// recoverable, beat a broken build, which is not.
 
 // fixSystemPrompt states what a correct fix is.
 //
@@ -66,6 +88,43 @@ SCOPE - the file decides, not the remediation prose.
   describes: no extra helpers, no configuration, no tests. That is an edit, and
   it is in scope. You cannot create files, so a remediation that genuinely
   requires a separate module or a build-file change is out of scope: say so.
+
+  WHERE the remediation says the change belongs decides whether it is yours. If
+  it names a file - a manifest, a resource, a build script, another source file
+  - and that is not the file you were given, make NO edit and report it. Do not
+  approximate the change in the file you do have: a manifest fix has no Java
+  equivalent and a build-script fix has no manifest equivalent, so producing one
+  invents a fix nobody asked for and leaves the real defect in place.
+
+  Never write a reference to a file, resource or type you have not read - not an
+  import, not @xml/name, not a class literal. A generated symbol (BuildConfig,
+  R, a databinding or DI class) counts as unread: it may not exist for this
+  module, and naming it costs a compile.
+
+ATOMIC - steps that depend on one another are all-or-nothing.
+  Partial application is correct only across INDEPENDENT sites: three unsafe
+  calls, fix the two you can, skip the third. It is NOT correct across a
+  dependent sequence. "Create res/xml/foo.xml" then "reference it from the
+  manifest" is one fix in two steps, and you cannot create files - so doing the
+  second alone points the build at something that does not exist. Likewise
+  "delete the insecure class" then "remove its usage in OtherFile.java":
+  deleting alone breaks every file that imports it. If any step in such a chain
+  is beyond what you can edit, perform NONE of them and report the whole
+  remediation as out of scope.
+
+  Never delete a top-level type, even one that is itself the vulnerability. You
+  cannot see which files import it. Make it safe where it stands - a trust
+  manager that validates, a verifier that checks the hostname - so its callers
+  keep compiling and the scanner stops flagging it.
+
+XML - a manifest or resource is a document, not a text file.
+  It must still parse after your edit: one root element, every tag closed once,
+  in order. Never emit a closing root tag other than at the very end. A project
+  may carry several manifests - flavours, build types, library modules - that
+  are merged; you can see only one, so an attribute another manifest also sets
+  (allowBackup, debuggable, launchMode) may conflict at merge time. Change such
+  an attribute only when the remediation names this file, and say in your report
+  that a merge conflict is possible.
 
 MINIMAL - change the named construct, not the call around it.
   Do NOT alter a method signature, argument list, overload, import, or exception
