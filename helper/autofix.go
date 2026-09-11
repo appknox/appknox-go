@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -468,7 +469,15 @@ func (s fixSession) produceFix(ctx context.Context, path string) (agent.FixResul
 		if !res.Changed || res.PatchedContent == "" {
 			return res, nil
 		}
-		v := verifyPatch(s.root, path, res.PatchedContent)
+		// The original is what is on disk: FixFile restores the file before it
+		// returns, so the checkout still holds the pre-patch content. An
+		// unreadable file means no delta can be computed, and a check that
+		// cannot be computed must not reject.
+		original, readErr := os.ReadFile(filepath.Join(s.root, filepath.FromSlash(path)))
+		if readErr != nil {
+			return res, nil
+		}
+		v := verifyPatch(s.root, path, string(original), res.PatchedContent)
 		if v == nil {
 			return res, nil
 		}

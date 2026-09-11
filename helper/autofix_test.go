@@ -365,7 +365,7 @@ func retrySession(t *testing.T, patches ...string) (fixSession, *[]string) {
 // told the specific fact rather than the rule it broke.
 func TestProduceFix_RetriesOnceWithTheViolation(t *testing.T) {
 	s, told := retrySession(t,
-		"import com.example.Missing;\nclass A {}\n", // unresolved import
+		"import com.example.BuildConfig;\nclass A {}\n", // generated symbol
 		"class A { int x; }\n")                      // clean
 
 	res, err := s.produceFix(context.Background(), "A.java")
@@ -375,22 +375,22 @@ func TestProduceFix_RetriesOnceWithTheViolation(t *testing.T) {
 	require.Equal(t, "class A { int x; }\n", res.PatchedContent)
 	require.Len(t, *told, 2, "exactly one retry")
 	require.Empty(t, (*told)[0], "the first attempt is told nothing")
-	require.Contains(t, (*told)[1], "com.example.Missing")
+	require.Contains(t, (*told)[1], "com.example.BuildConfig")
 }
 
 // Exactly one retry: a patch that fails twice is discarded, not attempted a
 // third time, and the finding carries the reason instead of an edit.
 func TestProduceFix_DiscardsAfterOneRetry(t *testing.T) {
 	s, told := retrySession(t,
-		"import com.example.Missing;\nclass A {}\n",
-		"import com.example.StillMissing;\nclass A {}\n")
+		"import com.example.BuildConfig;\nclass A {}\n",
+		"import com.other.BuildConfig;\nclass A {}\n")
 
 	res, err := s.produceFix(context.Background(), "A.java")
 
 	require.NoError(t, err)
 	require.False(t, res.Changed)
 	require.Empty(t, res.PatchedContent, "the bad patch must not ship")
-	require.Contains(t, res.Reason, "unresolved-import")
+	require.Contains(t, res.Reason, "generated-symbol")
 	require.Len(t, *told, 2, "no second retry")
 }
 
