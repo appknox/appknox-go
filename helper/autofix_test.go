@@ -9,6 +9,7 @@ import (
 
 	"github.com/appknox/appknox-go/agent"
 	"github.com/appknox/appknox-go/fixservice"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -148,9 +149,30 @@ func TestRunAutofix_RequiresToken(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRunAutofix_RejectsPlaintextRemoteFixURL(t *testing.T) {
+func TestRunAutofix_UsesResolvedAPIHost(t *testing.T) {
+	prev := viper.GetString("host")
+	t.Cleanup(func() { viper.Set("host", prev) })
+	viper.Set("host", "https://autofix.staging.appknox.io/")
+
+	var got string
+	d := deps("", fixservice.Result{}, FindingInputs{})
+	d.locate = func(_ context.Context, cfg agent.Config, _ agent.Request) (string, error) {
+		got = cfg.FixURL
+		return "", nil
+	}
 	_, err := runAutofix(context.Background(),
-		AutofixOptions{RepoPath: t.TempDir(), Finding: "x", FixToken: "tok", FixURL: "http://gateway.example.com"},
+		AutofixOptions{RepoPath: t.TempDir(), Finding: "x", FixToken: "tok"}, d)
+	require.NoError(t, err)
+	require.Equal(t, "https://autofix.staging.appknox.io/", got)
+}
+
+func TestRunAutofix_RejectsPlaintextRemoteAPIHost(t *testing.T) {
+	prev := viper.GetString("host")
+	t.Cleanup(func() { viper.Set("host", prev) })
+	viper.Set("host", "http://gateway.example.com")
+
+	_, err := runAutofix(context.Background(),
+		AutofixOptions{RepoPath: t.TempDir(), Finding: "x", FixToken: "tok"},
 		deps("app/A.java", fixservice.Result{}, FindingInputs{}))
 	require.Error(t, err)
 }

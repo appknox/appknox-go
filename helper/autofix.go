@@ -23,7 +23,6 @@ type AutofixOptions struct {
 	AnalysisID   int    // Appknox analysis id
 	Finding      string // manual finding detail (when not using file/analysis id)
 	ClassHint    string // manual class/symbol hint
-	FixURL       string // Appknox fix-service/gateway base URL
 	FixToken     string // scoped fix-service token
 	GithubToken  string // GitHub token for the --repo fetch and branch push
 	DryRun       bool   // locate + fix but do not push a branch
@@ -115,7 +114,11 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	}
 	defer cleanup()
 
-	fixCfg := fixservice.Config{URL: firstNonEmpty(opts.FixURL, "http://localhost:8100"), Token: token}
+	host, err := resolvedAPIHost()
+	if err != nil {
+		return Outcome{}, err
+	}
+	fixCfg := fixservice.Config{URL: host, Token: token}
 	// Gate the endpoint before ANY call: locate routes the same token+prompt
 	// through this URL first, so a plaintext-remote check only on the fix leg
 	// would still leak the token during locate (CWE-319).
