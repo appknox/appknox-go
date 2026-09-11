@@ -82,9 +82,12 @@ func verifyPatch(root, path, original, patched string) *patchViolation {
 	if v := checkEditablePath(path); v != nil {
 		return v
 	}
-	// Whole-file, and the one check that must be: a document either parses or
-	// it does not, and an edit can break it from any line.
+	// Whole-file, and the two that must be: a file either closes its structure
+	// or it does not, and an edit can break that from any line.
 	if v := checkXMLWellFormed(path, patched); v != nil {
+		return v
+	}
+	if v := checkBraceBalance(path, original, patched); v != nil {
 		return v
 	}
 	if v := checkResourceRefs(root, path, original, patched); v != nil {
@@ -150,6 +153,107 @@ func checkXMLWellFormed(path, content string) *patchViolation {
 				"closed once, in order, with a single root element.", path, err),
 		}
 	}
+}
+
+// checkBraceBalance rejects a Java or Kotlin patch that no longer closes its
+// braces.
+//
+// AndroGoat's fixer appended a duplicated tail past the class's final brace --
+// `String("") { "%02x".format(it) }`, a return, and two more closing braces --
+// and kotlinc answered with eleven "Expecting a top level declaration" errors.
+// That is the same property as XML well-formedness, which this file already
+// checks, and counting is all it takes.
+//
+// RELATIVE, never absolute: the patch is judged only when the ORIGINAL balances
+// by this same scanner. Anything the stripper below misreads -- an exotic
+// nested string template, a construct it does not model -- misreads both
+// versions identically, the original comes out non-zero, and the check abstains
+// rather than rejecting a good fix. Two rounds of false positives earned that
+// rule.
+func checkBraceBalance(path, original, patched string) *patchViolation {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".java", ".kt":
+	default:
+		return nil
+	}
+	if braceBalance(original) != 0 {
+		return nil // this scanner cannot read the file; do not judge the patch
+	}
+	got := braceBalance(patched)
+	if got == 0 {
+		return nil
+	}
+	side := fmt.Sprintf("%d unclosed '{'", got)
+	if got < 0 {
+		side = fmt.Sprintf("%d extra '}'", -got)
+	}
+	return &patchViolation{
+		Rule: "unbalanced-braces",
+		Detail: fmt.Sprintf("your edit leaves %s with %s. The original file balanced; "+
+			"check that your replacement text does not duplicate or drop a closing "+
+			"brace, and never append anything after the file's final '}'.", path, side),
+	}
+}
+
+// braceBalance counts '{' minus '}' in code, ignoring comments and literals.
+func braceBalance(src string) int {
+	code := stripLiteralsAndComments(src)
+	return strings.Count(code, "{") - strings.Count(code, "}")
+}
+
+// stripLiteralsAndComments removes comments, strings and char literals so that
+// a brace inside one of them is not counted as structure.
+//
+// Handles Kotlin raw strings ("""...""") as well: a regex-free scanner, because
+// the thing being counted is exactly what a regex cannot track.
+func stripLiteralsAndComments(src string) string {
+	var b strings.Builder
+	for i := 0; i < len(src); {
+		switch {
+		case strings.HasPrefix(src[i:], "//"):
+			for i < len(src) && src[i] != '\n' {
+				i++
+			}
+		case strings.HasPrefix(src[i:], "/*"):
+			i += 2
+			for i < len(src) && !strings.HasPrefix(src[i:], "*/") {
+				i++
+			}
+			i = min(i+2, len(src))
+		case strings.HasPrefix(src[i:], `"""`):
+			i += 3
+			for i < len(src) && !strings.HasPrefix(src[i:], `"""`) {
+				i++
+			}
+			i = min(i+3, len(src))
+		case src[i] == '"' || src[i] == '\'':
+			i = skipQuoted(src, i)
+		default:
+			b.WriteByte(src[i])
+			i++
+		}
+	}
+	return b.String()
+}
+
+// skipQuoted returns the index just past the literal starting at i.
+//
+// Stops at a newline as well as the closing quote: an unterminated literal must
+// not swallow the rest of the file, which would zero out every brace after it.
+func skipQuoted(src string, i int) int {
+	quote := src[i]
+	i++
+	for i < len(src) && src[i] != quote && src[i] != '\n' {
+		if src[i] == '\\' {
+			i += 2
+			continue
+		}
+		i++
+	}
+	if i < len(src) && src[i] == quote {
+		i++
+	}
+	return i
 }
 
 // checkResourceRefs rejects a NEWLY ADDED reference to a resource not on disk.

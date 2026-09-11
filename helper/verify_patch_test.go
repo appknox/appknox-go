@@ -147,6 +147,58 @@ func TestVerifyPatchIgnoresPreExistingBuildConfigImport(t *testing.T) {
 	require.Nil(t, verifyPatch(root, "app/src/main/java/A.java", original, patched))
 }
 
+// AndroGoat appended a duplicated tail past the class's final brace, and
+// kotlinc answered with eleven "Expecting a top level declaration" errors.
+func TestVerifyPatchRejectsTrailingBraces(t *testing.T) {
+	root := writeRepo(t, map[string]string{"app/src/main/java/A.kt": "class A {\n}\n"})
+	original := "class A {\n    fun f() {\n        return\n    }\n}\n"
+	patched := original + "String(\"\") { \"%02x\".format(it) }\n        return md\n    }\n}\n"
+	v := verifyPatch(root, "app/src/main/java/A.kt", original, patched)
+	require.NotNil(t, v)
+	require.Equal(t, "unbalanced-braces", v.Rule)
+	require.Contains(t, v.Detail, "extra '}'")
+}
+
+func TestVerifyPatchRejectsDroppedClosingBrace(t *testing.T) {
+	root := writeRepo(t, map[string]string{"app/src/main/java/A.java": "class A {}\n"})
+	original := "class A {\n    void f() {\n    }\n}\n"
+	patched := "class A {\n    void f() {\n        if (x) {\n    }\n}\n"
+	v := verifyPatch(root, "app/src/main/java/A.java", original, patched)
+	require.NotNil(t, v)
+	require.Equal(t, "unbalanced-braces", v.Rule)
+	require.Contains(t, v.Detail, "unclosed '{'")
+}
+
+// A brace inside a string, a char literal, a comment or a Kotlin raw string is
+// text, not structure. Counting it would reject correct code.
+func TestVerifyPatchIgnoresBracesInLiteralsAndComments(t *testing.T) {
+	root := writeRepo(t, map[string]string{"app/src/main/java/A.kt": "class A {}\n"})
+	original := "class A {\n}\n"
+	patched := "class A {\n" +
+		"    val s = \"a { b\"\n" +
+		"    val c = '{'\n" +
+		"    // a stray } in a comment\n" +
+		"    /* and { another */\n" +
+		"    val raw = \"\"\"unclosed { in a raw string\"\"\"\n" +
+		"}\n"
+	require.Nil(t, verifyPatch(root, "app/src/main/java/A.kt", original, patched))
+}
+
+// When the scanner cannot even balance the ORIGINAL, it does not understand the
+// file and must not judge the patch.
+func TestVerifyPatchAbstainsWhenOriginalIsUnbalanced(t *testing.T) {
+	root := writeRepo(t, map[string]string{"app/src/main/java/A.kt": "x\n"})
+	original := "class A {\n"             // already unbalanced to this scanner
+	patched := "class A {\n  val x = 1\n" // still unbalanced; not our business
+	require.Nil(t, verifyPatch(root, "app/src/main/java/A.kt", original, patched))
+}
+
+// Brace counting applies to code, not to every file that happens to have braces.
+func TestVerifyPatchSkipsBraceCheckForNonSource(t *testing.T) {
+	root := writeRepo(t, map[string]string{"app/src/main/res/raw/data.json": "{}\n"})
+	require.Nil(t, verifyPatch(root, "app/src/main/res/raw/data.json", "{}\n", "{ \"a\": 1\n"))
+}
+
 func TestVerifyPatchRejectsManifestMergeConflict(t *testing.T) {
 	// Anki-Android and thunderbird: allowBackup changed in one manifest of a
 	// merged flavour set.
