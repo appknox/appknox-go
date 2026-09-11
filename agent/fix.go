@@ -25,6 +25,15 @@ type FixRequest struct {
 	// Criteria are the checks the patch will be measured against, passed in so
 	// the fixer aims at them rather than discovering a miss afterwards.
 	Criteria []string
+	// PriorViolation is the fact a previous attempt at this same file got wrong
+	// -- a build script it may not edit, XML it left unparseable, a resource or
+	// type that is not in the checkout. Set only on a retry, and only ever once.
+	//
+	// It is a fact about the repository, not a critique. The fixer has no
+	// compiler and can see only its one file, so "@xml/foo does not exist here"
+	// is information the prompt by itself could never supply -- which is why
+	// two repos given the same remediation and the same rule still diverged.
+	PriorViolation string
 }
 
 // FixResult is the outcome of a client-side agent fix. It is side-effect-free:

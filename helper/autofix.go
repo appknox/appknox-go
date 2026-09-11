@@ -447,15 +447,58 @@ func (s fixSession) locateAll(ctx context.Context) ([]string, error) {
 // Only the model turns cross the wire, and they go to Sherrinford, which holds
 // the provider key. No file is ever uploaded: the repository does not move, and
 // Sherrinford has no endpoint that would accept it.
+// A patch that fails a static check is retried EXACTLY once. A second retry
+// doubles gateway spend on the files least likely to converge, and the run
+// already has a session call budget it can exhaust -- on 2026-09-09 two repos
+// hit it mid-corpus and had to be truncated.
+//
+// No build runs here. Compiling each patch would cost minutes per file and
+// duplicate the branch build the pipeline already performs downstream; the
+// checks in verify_patch.go are filesystem facts and cost milliseconds.
+const maxFixRetries = 1
+
 func (s fixSession) produceFix(ctx context.Context, path string) (agent.FixResult, error) {
-	// Model only, never LocateModel: this turn writes the patch that ships, and
-	// must not silently inherit a model chosen to make file-finding cheaper.
+	for attempt, violation := 0, ""; ; attempt++ {
+		res, err := s.attemptFix(ctx, path, violation)
+		if err != nil {
+			return res, err
+		}
+		// Nothing to check. An abstention is already the safe outcome -- the
+		// gate exists to turn a bad edit into one of these.
+		if !res.Changed || res.PatchedContent == "" {
+			return res, nil
+		}
+		v := verifyPatch(s.root, path, res.PatchedContent)
+		if v == nil {
+			return res, nil
+		}
+		if attempt >= maxFixRetries {
+			// Discard the patch rather than ship it, and keep the reason so the
+			// finding reads as a reported gap instead of silence. A gap is
+			// recoverable; a branch that does not compile is not.
+			fmt.Printf("   !! %s rejected (%s); no edit made\n", path, v.Rule)
+			return agent.FixResult{Reason: fmt.Sprintf(
+				"rejected by the %s check after %d attempts -- %s",
+				v.Rule, attempt+1, v.Detail)}, nil
+		}
+		fmt.Printf("   .. %s rejected (%s); retrying once\n", path, v.Rule)
+		violation = v.Detail
+	}
+}
+
+// attemptFix runs one fix turn, telling the fixer what the previous attempt got
+// wrong when there was one.
+//
+// Model only, never LocateModel: this turn writes the patch that ships, and must
+// not silently inherit a model chosen to make file-finding cheaper.
+func (s fixSession) attemptFix(ctx context.Context, path, prior string) (agent.FixResult, error) {
 	return s.d.agentFix(ctx, agent.Config{
 		FixURL: s.fixCfg.URL, Token: s.fixCfg.Token, Model: s.opts.Model,
 	},
 		agent.FixRequest{RepoRoot: s.root, Path: path,
 			Finding: s.inputs.Finding, Remediation: s.inputs.Remediation,
-			DeveloperPrompt: s.inputs.DeveloperPrompt, Criteria: s.inputs.Criteria})
+			DeveloperPrompt: s.inputs.DeveloperPrompt, Criteria: s.inputs.Criteria,
+			PriorViolation: prior})
 }
 
 // deliver pushes all patches to one branch (--push-branch) or applies them locally.

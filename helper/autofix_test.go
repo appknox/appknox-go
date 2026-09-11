@@ -338,3 +338,88 @@ func TestLocateAll_AttemptsOnceWhenThereAreNoClassHints(t *testing.T) {
 	require.Equal(t, []string{""}, seen, "one attempt, with an empty hint")
 	require.Equal(t, []string{"app/src/main/AndroidManifest.xml"}, paths)
 }
+
+// retrySession returns a session over a one-file checkout whose fixer answers
+// with the given patches in order, recording each PriorViolation it was told.
+func retrySession(t *testing.T, patches ...string) (fixSession, *[]string) {
+	t.Helper()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "A.java"), []byte("class A {}\n"), 0o644))
+
+	var told []string
+	n := 0
+	return fixSession{
+		root: root,
+		d: autofixDeps{agentFix: func(_ context.Context, _ agent.Config,
+			req agent.FixRequest) (agent.FixResult, error) {
+			told = append(told, req.PriorViolation)
+			body := patches[n]
+			n++
+			return agent.FixResult{Changed: true, PatchedContent: body}, nil
+		}},
+	}, &told
+}
+
+// A first patch that fails a static check is retried once, and the retry is
+// told the specific fact rather than the rule it broke.
+func TestProduceFix_RetriesOnceWithTheViolation(t *testing.T) {
+	s, told := retrySession(t,
+		"import com.example.Missing;\nclass A {}\n", // unresolved import
+		"class A { int x; }\n")                      // clean
+
+	res, err := s.produceFix(context.Background(), "A.java")
+
+	require.NoError(t, err)
+	require.True(t, res.Changed)
+	require.Equal(t, "class A { int x; }\n", res.PatchedContent)
+	require.Len(t, *told, 2, "exactly one retry")
+	require.Empty(t, (*told)[0], "the first attempt is told nothing")
+	require.Contains(t, (*told)[1], "com.example.Missing")
+}
+
+// Exactly one retry: a patch that fails twice is discarded, not attempted a
+// third time, and the finding carries the reason instead of an edit.
+func TestProduceFix_DiscardsAfterOneRetry(t *testing.T) {
+	s, told := retrySession(t,
+		"import com.example.Missing;\nclass A {}\n",
+		"import com.example.StillMissing;\nclass A {}\n")
+
+	res, err := s.produceFix(context.Background(), "A.java")
+
+	require.NoError(t, err)
+	require.False(t, res.Changed)
+	require.Empty(t, res.PatchedContent, "the bad patch must not ship")
+	require.Contains(t, res.Reason, "unresolved-import")
+	require.Len(t, *told, 2, "no second retry")
+}
+
+// A patch that passes is delivered on the first turn, with no extra spend.
+func TestProduceFix_NoRetryWhenClean(t *testing.T) {
+	s, told := retrySession(t, "class A { int x; }\n")
+
+	res, err := s.produceFix(context.Background(), "A.java")
+
+	require.NoError(t, err)
+	require.True(t, res.Changed)
+	require.Len(t, *told, 1)
+}
+
+// An abstention is already the safe outcome, so it is never retried.
+func TestProduceFix_DoesNotRetryAnAbstention(t *testing.T) {
+	calls := 0
+	s := fixSession{
+		root: t.TempDir(),
+		d: autofixDeps{agentFix: func(_ context.Context, _ agent.Config,
+			_ agent.FixRequest) (agent.FixResult, error) {
+			calls++
+			return agent.FixResult{Changed: false, Reason: "step names another file"}, nil
+		}},
+	}
+
+	res, err := s.produceFix(context.Background(), "A.java")
+
+	require.NoError(t, err)
+	require.Equal(t, 1, calls)
+	require.Equal(t, "step names another file", res.Reason)
+}

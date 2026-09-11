@@ -216,5 +216,16 @@ func fixUserPrompt(req FixRequest) string {
 	}
 	b.WriteString("\nRead the whole file first, then apply the fix. Use one edit " +
 		"per occurrence; several occurrences need several edits.")
+
+	// Last, so it is the final thing read before the model acts. This is a
+	// checked fact about the repository rather than a rule -- the rules were
+	// already present on the attempt that produced the violation, and being
+	// present was not enough.
+	if v := strings.TrimSpace(req.PriorViolation); v != "" {
+		fmt.Fprintf(&b, "\n\nA previous attempt at this file was rejected. This is the "+
+			"reason, checked against the repository on disk:\n%s\n"+
+			"That attempt has been discarded; you are starting from the original file. "+
+			"Produce a fix that does not repeat it, or make no edit and report why.", v)
+	}
 	return b.String()
 }
