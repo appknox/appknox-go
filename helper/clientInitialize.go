@@ -64,8 +64,8 @@ func ResolveHostAndRegion(host, region string, hostMappings map[string]string) (
 	return hostMappings["global"], nil
 }
 
-// resolvedAPIHost is the Appknox base URL used by the API client and the
-// autofix gateway. --host / APPKNOX_API_HOST wins; else --region; else global.
+// resolvedAPIHost is the Mycroft base URL used by every CLI command, including
+// autofix. --host / APPKNOX_API_HOST wins; else --region; else global.
 func resolvedAPIHost() (string, error) {
 	return ResolveHostAndRegion(
 		viper.GetString("host"),

@@ -31,7 +31,7 @@ var terminal = map[string]bool{"succeeded": true, "failed": true, "expired": tru
 
 // Config points the client at the fix service with its scoped token.
 type Config struct {
-	URL          string        // base URL, e.g. http://localhost:8100
+	URL          string        // Mycroft API host (same as APPKNOX_API_HOST)
 	Token        string        // scoped fix-service token (sent as Bearer)
 	PollInterval time.Duration // 0 = default (1s)
 	MaxPolls     int           // 0 = default (180)
@@ -186,7 +186,7 @@ func doJSON(req *http.Request, out interface{}) error {
 func ValidateEndpoint(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return fmt.Errorf("fixservice: invalid fix-url: %w", err)
+		return fmt.Errorf("fixservice: invalid host: %w", err)
 	}
 	if u.Scheme == "https" {
 		return nil

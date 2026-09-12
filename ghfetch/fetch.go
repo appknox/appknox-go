@@ -4,7 +4,7 @@
 //
 // This is client-side only: it pulls from GitHub with the caller's token and
 // writes to the local machine. Nothing is uploaded, so the residency guarantee
-// (only the located file reaches the Appknox gateway) is preserved.
+// (only the located file reaches Mycroft) is preserved.
 package ghfetch
 
 import (

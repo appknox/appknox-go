@@ -2,9 +2,9 @@
 //
 // The model plans and calls local read-only tools (read_file, grep, glob) over
 // the checked-out repository and returns the single source file to fix. Only the
-// model turns leave the machine, and they are routed through the Appknox gateway
-// (BaseURL + a scoped session token, never a provider key), which injects the
-// server-held provider key. No file is edited here — the fix stays server-side.
+// model turns leave the machine, and they are routed through Mycroft
+// ({APPKNOX_API_HOST}/api/autofix + a PAT, never a provider key). Mycroft
+// forwards to Sherrinford, which injects the server-held provider key.
 package agent
 
 import (
@@ -13,9 +13,15 @@ import (
 	"fmt"
 	"strings"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
+	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
+
+// autofixBaseURL is the Mycroft autofix prefix on the same API host. The SDK
+// appends /v1/messages → POST {APPKNOX_API_HOST}/api/autofix/v1/messages.
+func autofixBaseURL(host string) string {
+	return strings.TrimRight(host, "/") + "/api/autofix"
+}
 
 const (
 	defaultMaxTokens     = 1024
@@ -28,10 +34,10 @@ const locateSystemPrompt = "You are a security code-locating assistant. A SAST s
 	"vulnerable code. Never edit anything. When found, reply with ONLY the repository-relative " +
 	"path of that file and nothing else. If you cannot confidently identify it, reply with exactly NONE."
 
-// Config carries the gateway endpoint and the scoped token (not a provider key).
+// Config uses the same Mycroft API host as every other CLI command.
 type Config struct {
-	FixURL        string // hosted fix-service base, e.g. http://localhost:8100
-	Token         string // scoped session/fix token used as the gateway credential
+	Host          string // APPKNOX_API_HOST; messages go to {Host}/api/autofix
+	Token         string // Appknox PAT presented to Mycroft (not a provider key)
 	Model         string // optional; defaults to Claude Sonnet
 	MaxTokens     int64  // optional; defaults to defaultMaxTokens
 	MaxIterations int    // optional; defaults to defaultMaxIterations
@@ -63,18 +69,18 @@ func locateWith(ctx context.Context, cfg Config, req Request, run locateRunner) 
 	return extractLocatedPath(text, req.RepoRoot), nil
 }
 
-// sdkLocate drives the anthropic-sdk-go Tool Runner through the gateway.
+// sdkLocate drives the model tool-runner through Mycroft autofix.
 func sdkLocate(ctx context.Context, cfg Config, req Request) (string, error) {
-	if cfg.FixURL == "" || cfg.Token == "" {
-		return "", errors.New("agent: FixURL and Token are required to reach the gateway")
+	if cfg.Host == "" || cfg.Token == "" {
+		return "", errors.New("agent: Host and Token are required to reach Mycroft")
 	}
 	tools, err := buildLocateTools(req.RepoRoot)
 	if err != nil {
 		return "", err
 	}
-	client := anthropic.NewClient(
-		option.WithBaseURL(strings.TrimRight(cfg.FixURL, "/")+"/anthropic"),
-		option.WithAPIKey(cfg.Token), // scoped gateway token (like ANTHROPIC_API_KEY), NOT a provider key
+	client := sdk.NewClient(
+		option.WithBaseURL(autofixBaseURL(cfg.Host)),
+		option.WithAPIKey(cfg.Token),
 	)
 	runner := client.Beta.Messages.NewToolRunner(tools, locateParams(cfg, req))
 	final, err := runner.RunToCompletion(ctx)
@@ -85,16 +91,16 @@ func sdkLocate(ctx context.Context, cfg Config, req Request) (string, error) {
 }
 
 // locateParams builds the Tool Runner params for the locate pass.
-func locateParams(cfg Config, req Request) anthropic.BetaToolRunnerParams {
+func locateParams(cfg Config, req Request) sdk.BetaToolRunnerParams {
 	return runnerParams(cfg, locateSystemPrompt, locateUserPrompt(req))
 }
 
 // runnerParams builds Tool Runner params with cfg's model/token/iteration
 // defaults and the given system + user prompts. Shared by locate and fix.
-func runnerParams(cfg Config, system, user string) anthropic.BetaToolRunnerParams {
+func runnerParams(cfg Config, system, user string) sdk.BetaToolRunnerParams {
 	model := cfg.Model
 	if model == "" {
-		model = string(anthropic.ModelClaudeSonnet5)
+		model = string(sdk.ModelClaudeSonnet5)
 	}
 	maxTokens := cfg.MaxTokens
 	if maxTokens <= 0 {
@@ -104,12 +110,12 @@ func runnerParams(cfg Config, system, user string) anthropic.BetaToolRunnerParam
 	if maxIter <= 0 {
 		maxIter = defaultMaxIterations
 	}
-	return anthropic.BetaToolRunnerParams{
-		BetaMessageNewParams: anthropic.BetaMessageNewParams{
-			Model:     anthropic.Model(model),
+	return sdk.BetaToolRunnerParams{
+		BetaMessageNewParams: sdk.BetaMessageNewParams{
+			Model:     sdk.Model(model),
 			MaxTokens: maxTokens,
-			System:    []anthropic.BetaTextBlockParam{{Text: system}},
-			Messages:  []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(user))},
+			System:    []sdk.BetaTextBlockParam{{Text: system}},
+			Messages:  []sdk.BetaMessageParam{sdk.NewBetaUserMessage(sdk.NewBetaTextBlock(user))},
 		},
 		MaxIterations: maxIter,
 	}

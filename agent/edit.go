@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
+	sdk "github.com/anthropics/anthropic-sdk-go"
 )
 
 // editInput is the str_replace edit tool input.
@@ -31,9 +31,9 @@ func cleanRel(p string) string { return filepath.ToSlash(filepath.Clean(p)) }
 // located file), applies the change on disk (CWE-22 guarded), and records it.
 // old_string must be unique so the edit is unambiguous, mirroring the SDK's
 // native Edit tool.
-func editHandler(root, allowedPath string, edits *[]editRecord) func(context.Context, editInput) (anthropic.BetaToolResultBlockParamContentUnion, error) {
-	return func(_ context.Context, in editInput) (anthropic.BetaToolResultBlockParamContentUnion, error) {
-		zero := anthropic.BetaToolResultBlockParamContentUnion{}
+func editHandler(root, allowedPath string, edits *[]editRecord) func(context.Context, editInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
+	return func(_ context.Context, in editInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
+		zero := sdk.BetaToolResultBlockParamContentUnion{}
 		if cleanRel(in.Path) != cleanRel(allowedPath) {
 			return zero, fmt.Errorf("agent: edit is restricted to %s (got %s)", allowedPath, in.Path)
 		}

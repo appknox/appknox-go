@@ -14,8 +14,8 @@ new GitHub branch. Repo, checkout, token, and source PR come from CI
 (GITHUB_REPOSITORY, GITHUB_WORKSPACE, GITHUB_TOKEN, GITHUB_REF / event payload).
 When --file-id and --analysis-id are set, the delivery is recorded on Appknox.
 
-The repository stays on this machine; only model turns route through the Appknox
-gateway (which holds the provider key). No provider key is needed here.`,
+The repository stays on this machine; only model turns route through Mycroft
+({APPKNOX_API_HOST}/api/autofix). No provider key is needed here.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		f := cmd.Flags()
 		opts := helper.AutofixOptions{}

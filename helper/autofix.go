@@ -118,14 +118,12 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	if err != nil {
 		return Outcome{}, err
 	}
-	fixCfg := fixservice.Config{URL: host, Token: token}
-	// Gate the endpoint before ANY call: locate routes the same token+prompt
-	// through this URL first, so a plaintext-remote check only on the fix leg
-	// would still leak the token during locate (CWE-319).
-	if err := fixservice.ValidateEndpoint(fixCfg.URL); err != nil {
+	// Same Mycroft host as upload/cicheck. Gate before locate so a
+	// plaintext-remote check only on the fix leg cannot leak the token (CWE-319).
+	if err := fixservice.ValidateEndpoint(host); err != nil {
 		return Outcome{}, err
 	}
-	return fixSession{opts: opts, d: d, root: root, fixCfg: fixCfg, inputs: inputs}.run(ctx)
+	return fixSession{opts: opts, d: d, root: root, host: host, token: token, inputs: inputs}.run(ctx)
 }
 
 // fixSession carries the resolved context for locating + fixing one finding's
@@ -134,7 +132,8 @@ type fixSession struct {
 	opts   AutofixOptions
 	d      autofixDeps
 	root   string
-	fixCfg fixservice.Config
+	host   string
+	token  string
 	inputs FindingInputs
 }
 
@@ -169,7 +168,7 @@ func (s fixSession) locateAll(ctx context.Context) ([]string, error) {
 	seen := map[string]bool{}
 	var paths []string
 	for _, hint := range s.inputs.ClassHints {
-		p, err := s.d.locate(ctx, agent.Config{FixURL: s.fixCfg.URL, Token: s.fixCfg.Token},
+		p, err := s.d.locate(ctx, agent.Config{Host: s.host, Token: s.token},
 			agent.Request{RepoRoot: s.root, ClassHint: hint, Finding: s.inputs.Finding})
 		if err != nil {
 			return nil, err
@@ -186,7 +185,7 @@ func (s fixSession) locateAll(ctx context.Context) ([]string, error) {
 // tool (--fix-mode agent — NO upload), or server-side via /v1/fix (default).
 func (s fixSession) produceFix(ctx context.Context, path string) (fixservice.Result, error) {
 	if s.opts.FixMode == "agent" {
-		fr, err := s.d.agentFix(ctx, agent.Config{FixURL: s.fixCfg.URL, Token: s.fixCfg.Token},
+		fr, err := s.d.agentFix(ctx, agent.Config{Host: s.host, Token: s.token},
 			agent.FixRequest{RepoRoot: s.root, Path: path,
 				Finding: s.inputs.Finding, Remediation: s.inputs.Remediation})
 		if err != nil {
@@ -198,7 +197,7 @@ func (s fixSession) produceFix(ctx context.Context, path string) (fixservice.Res
 	if err != nil {
 		return fixservice.Result{}, err
 	}
-	return s.d.submit(ctx, s.fixCfg, fixservice.Request{
+	return s.d.submit(ctx, fixservice.Config{URL: s.host, Token: s.token}, fixservice.Request{
 		Filename: path, FileContent: content, Remediation: s.inputs.Remediation,
 		Finding: s.inputs.Finding, Language: detectLanguage(path),
 	})

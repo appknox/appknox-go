@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
+	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,7 +43,7 @@ func TestExtractLocatedPath_IgnoresNonSource(t *testing.T) {
 }
 
 func TestExtractText_JoinsTextBlocks(t *testing.T) {
-	msg := &anthropic.BetaMessage{Content: []anthropic.BetaContentBlockUnion{
+	msg := &sdk.BetaMessage{Content: []sdk.BetaContentBlockUnion{
 		{Type: "text", Text: "app/A.java"},
 		{Type: "tool_use"},
 	}}

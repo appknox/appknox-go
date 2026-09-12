@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
+	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,7 +47,7 @@ func TestLocateWith_PropagatesRunnerError(t *testing.T) {
 
 func TestLocateParams_AppliesDefaults(t *testing.T) {
 	p := locateParams(Config{}, Request{ClassHint: "X", Finding: "y"})
-	require.Equal(t, anthropic.ModelClaudeSonnet5, p.Model)
+	require.Equal(t, sdk.ModelClaudeSonnet5, p.Model)
 	require.Equal(t, int64(defaultMaxTokens), p.MaxTokens)
 	require.Equal(t, defaultMaxIterations, p.MaxIterations)
 	require.NotEmpty(t, p.System)
@@ -56,13 +56,20 @@ func TestLocateParams_AppliesDefaults(t *testing.T) {
 
 func TestLocateParams_HonoursOverrides(t *testing.T) {
 	p := locateParams(Config{Model: "claude-x", MaxTokens: 42, MaxIterations: 3}, Request{})
-	require.Equal(t, anthropic.Model("claude-x"), p.Model)
+	require.Equal(t, sdk.Model("claude-x"), p.Model)
 	require.Equal(t, int64(42), p.MaxTokens)
 	require.Equal(t, 3, p.MaxIterations)
 }
 
 func TestSdkLocate_RequiresConfig(t *testing.T) {
-	// Missing FixURL/Token must fail before any network call.
+	// Missing Host/Token must fail before any network call.
 	_, err := sdkLocate(context.Background(), Config{}, Request{RepoRoot: t.TempDir()})
 	require.Error(t, err)
+}
+
+func TestAutofixBaseURL_UsesMycroftAPIPrefix(t *testing.T) {
+	require.Equal(t, "https://api.example.com/api/autofix",
+		autofixBaseURL("https://api.example.com/"))
+	require.Equal(t, "https://api.example.com/api/autofix",
+		autofixBaseURL("https://api.example.com"))
 }

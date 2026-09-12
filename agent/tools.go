@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
+	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/toolrunner"
 )
 
@@ -26,20 +26,20 @@ type globInput struct {
 }
 
 // textResult wraps a plain-text tool result.
-func textResult(s string) anthropic.BetaToolResultBlockParamContentUnion {
-	return anthropic.BetaToolResultBlockParamContentUnion{OfText: &anthropic.BetaTextBlockParam{Text: s}}
+func textResult(s string) sdk.BetaToolResultBlockParamContentUnion {
+	return sdk.BetaToolResultBlockParamContentUnion{OfText: &sdk.BetaTextBlockParam{Text: s}}
 }
 
 // readFileHandler returns a read_file handler scoped to root (CWE-22 guarded).
-func readFileHandler(root string) func(context.Context, readFileInput) (anthropic.BetaToolResultBlockParamContentUnion, error) {
-	return func(_ context.Context, in readFileInput) (anthropic.BetaToolResultBlockParamContentUnion, error) {
+func readFileHandler(root string) func(context.Context, readFileInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
+	return func(_ context.Context, in readFileInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
 		abs, err := resolveUnderRoot(root, in.Path)
 		if err != nil {
-			return anthropic.BetaToolResultBlockParamContentUnion{}, err
+			return sdk.BetaToolResultBlockParamContentUnion{}, err
 		}
 		data, truncated, err := readCapped(abs, maxReadBytes)
 		if err != nil {
-			return anthropic.BetaToolResultBlockParamContentUnion{}, fmt.Errorf("agent: read_file %q: %w", in.Path, err)
+			return sdk.BetaToolResultBlockParamContentUnion{}, fmt.Errorf("agent: read_file %q: %w", in.Path, err)
 		}
 		text := string(data)
 		if truncated {
@@ -50,11 +50,11 @@ func readFileHandler(root string) func(context.Context, readFileInput) (anthropi
 }
 
 // grepHandler returns a grep handler that scans real source files under root.
-func grepHandler(root string) func(context.Context, grepInput) (anthropic.BetaToolResultBlockParamContentUnion, error) {
-	return func(_ context.Context, in grepInput) (anthropic.BetaToolResultBlockParamContentUnion, error) {
+func grepHandler(root string) func(context.Context, grepInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
+	return func(_ context.Context, in grepInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
 		re, err := regexp.Compile(in.Pattern)
 		if err != nil {
-			return anthropic.BetaToolResultBlockParamContentUnion{}, fmt.Errorf("agent: grep pattern: %w", err)
+			return sdk.BetaToolResultBlockParamContentUnion{}, fmt.Errorf("agent: grep pattern: %w", err)
 		}
 		out, truncated := grepFiles(root, re)
 		if len(out) == 0 {
@@ -92,8 +92,8 @@ func grepFiles(root string, re *regexp.Regexp) ([]string, bool) {
 }
 
 // globHandler returns a glob handler that lists matching source files under root.
-func globHandler(root string) func(context.Context, globInput) (anthropic.BetaToolResultBlockParamContentUnion, error) {
-	return func(_ context.Context, in globInput) (anthropic.BetaToolResultBlockParamContentUnion, error) {
+func globHandler(root string) func(context.Context, globInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
+	return func(_ context.Context, in globInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
 		var out []string
 		truncated := false
 		walkSourceFiles(root, func(rel, _ string) error {
@@ -132,7 +132,7 @@ func globMatches(pattern, rel string) bool {
 }
 
 // buildLocateTools builds the read-only Read/Grep/Glob tool set scoped to root.
-func buildLocateTools(root string) ([]anthropic.BetaTool, error) {
+func buildLocateTools(root string) ([]sdk.BetaTool, error) {
 	read, err := toolrunner.NewBetaToolFromJSONSchema(
 		"read_file", "Read a source file by repository-relative path.", readFileHandler(root))
 	if err != nil {
@@ -148,5 +148,5 @@ func buildLocateTools(root string) ([]anthropic.BetaTool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []anthropic.BetaTool{read, grep, glob}, nil
+	return []sdk.BetaTool{read, grep, glob}, nil
 }

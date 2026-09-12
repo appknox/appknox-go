@@ -157,7 +157,7 @@ func TestRunAutofix_UsesResolvedAPIHost(t *testing.T) {
 	var got string
 	d := deps("", fixservice.Result{}, FindingInputs{})
 	d.locate = func(_ context.Context, cfg agent.Config, _ agent.Request) (string, error) {
-		got = cfg.FixURL
+		got = cfg.Host
 		return "", nil
 	}
 	_, err := runAutofix(context.Background(),
@@ -169,7 +169,7 @@ func TestRunAutofix_UsesResolvedAPIHost(t *testing.T) {
 func TestRunAutofix_RejectsPlaintextRemoteAPIHost(t *testing.T) {
 	prev := viper.GetString("host")
 	t.Cleanup(func() { viper.Set("host", prev) })
-	viper.Set("host", "http://gateway.example.com")
+	viper.Set("host", "http://remote.example.com")
 
 	_, err := runAutofix(context.Background(),
 		AutofixOptions{RepoPath: t.TempDir(), Finding: "x", FixToken: "tok"},

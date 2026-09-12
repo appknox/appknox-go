@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
+	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/toolrunner"
 )
@@ -39,7 +39,7 @@ type FixResult struct {
 type fixRunner func(ctx context.Context, cfg Config, req FixRequest, edits *[]editRecord) error
 
 // FixFile fixes the located file locally via the agent's edit tool — NO file is
-// uploaded (only the model turns cross the gateway). Returns the patched content
+// uploaded (only the model turns go to Mycroft). Returns the patched content
 // and leaves the on-disk file unchanged; the caller applies or delivers it.
 func FixFile(ctx context.Context, cfg Config, req FixRequest) (FixResult, error) {
 	return fixWith(ctx, cfg, req, sdkFix)
@@ -75,17 +75,17 @@ func fixWith(ctx context.Context, cfg Config, req FixRequest, run fixRunner) (Fi
 }
 
 // sdkFix drives the Tool Runner with read-only tools + the edit tool, routed
-// through the gateway.
+// through Mycroft.
 func sdkFix(ctx context.Context, cfg Config, req FixRequest, edits *[]editRecord) error {
-	if cfg.FixURL == "" || cfg.Token == "" {
-		return errors.New("agent: FixURL and Token are required to reach the gateway")
+	if cfg.Host == "" || cfg.Token == "" {
+		return errors.New("agent: Host and Token are required to reach Mycroft")
 	}
 	tools, err := buildFixTools(req.RepoRoot, req.Path, edits)
 	if err != nil {
 		return err
 	}
-	client := anthropic.NewClient(
-		option.WithBaseURL(strings.TrimRight(cfg.FixURL, "/")+"/anthropic"),
+	client := sdk.NewClient(
+		option.WithBaseURL(autofixBaseURL(cfg.Host)),
 		option.WithAPIKey(cfg.Token),
 	)
 	runner := client.Beta.Messages.NewToolRunner(tools, runnerParams(cfg, fixSystemPrompt, fixUserPrompt(req)))
@@ -94,7 +94,7 @@ func sdkFix(ctx context.Context, cfg Config, req FixRequest, edits *[]editRecord
 }
 
 // buildFixTools = read-only Read/Grep/Glob + the edit tool (restricted to allowedPath).
-func buildFixTools(root, allowedPath string, edits *[]editRecord) ([]anthropic.BetaTool, error) {
+func buildFixTools(root, allowedPath string, edits *[]editRecord) ([]sdk.BetaTool, error) {
 	tools, err := buildLocateTools(root)
 	if err != nil {
 		return nil, err

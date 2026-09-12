@@ -6,13 +6,13 @@ import (
 	"regexp"
 	"strings"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
+	sdk "github.com/anthropics/anthropic-sdk-go"
 )
 
 var pathToken = regexp.MustCompile(`[\w./\\-]+`)
 
 // extractText concatenates the text blocks of a model message.
-func extractText(msg *anthropic.BetaMessage) string {
+func extractText(msg *sdk.BetaMessage) string {
 	if msg == nil {
 		return ""
 	}
