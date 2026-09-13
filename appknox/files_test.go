@@ -232,30 +232,25 @@ func TestFilesService_GetScansStatusSummary(t *testing.T) {
 }
 
 func TestAutofixPR_marshall(t *testing.T) {
-	testJSONMarshal(t, &AutofixPR{}, `{"analysis":0,"repo":"","base_branch":"","branch":"","pr_url":""}`)
-	sourcePR := 15
+	testJSONMarshal(t, &AutofixPR{}, `{"repo":"","base_branch":"","branch":"","pr_url":""}`)
 	u := &AutofixPR{
 		ID:           1,
 		File:         118,
-		Analysis:     11754,
 		Repo:         "appknox/mfva",
 		BaseBranch:   "master",
-		Branch:       "appknox-autofix/analysis-11754",
+		Branch:       "appknox-autofix/analysis-118",
 		PRURL:        "https://github.com/appknox/mfva/compare/master...b",
 		CommitSHA:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		SourcePR:     &sourcePR,
 		PatchedFiles: []string{"app/src/Main.java"},
 	}
 	want := `{
 		"id": 1,
 		"file": 118,
-		"analysis": 11754,
 		"repo": "appknox/mfva",
 		"base_branch": "master",
-		"branch": "appknox-autofix/analysis-11754",
+		"branch": "appknox-autofix/analysis-118",
 		"pr_url": "https://github.com/appknox/mfva/compare/master...b",
 		"commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		"source_pr": 15,
 		"patched_files": ["app/src/Main.java"]
 	}`
 	testJSONMarshal(t, u, want)
@@ -271,20 +266,19 @@ func TestFilesService_CreateAutofixPR(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		if got.Analysis != 11754 {
-			t.Errorf("analysis = %d, want 11754", got.Analysis)
-		}
 		if got.CommitSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 			t.Errorf("commit_sha = %q", got.CommitSHA)
 		}
-		fmt.Fprint(w, `{"id":9,"file":118,"analysis":11754,"repo":"appknox/mfva","base_branch":"master","branch":"appknox-autofix/analysis-11754","pr_url":"https://github.com/appknox/mfva/compare/master...b","commit_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","patched_files":["app/src/Main.java"]}`)
+		if got.Branch != "appknox-autofix/analysis-118" {
+			t.Errorf("branch = %q", got.Branch)
+		}
+		fmt.Fprint(w, `{"id":9,"file":118,"repo":"appknox/mfva","base_branch":"master","branch":"appknox-autofix/analysis-118","pr_url":"https://github.com/appknox/mfva/compare/master...b","commit_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","patched_files":["app/src/Main.java"]}`)
 	})
 
 	in := &AutofixPR{
-		Analysis:     11754,
 		Repo:         "appknox/mfva",
 		BaseBranch:   "master",
-		Branch:       "appknox-autofix/analysis-11754",
+		Branch:       "appknox-autofix/analysis-118",
 		PRURL:        "https://github.com/appknox/mfva/compare/master...b",
 		CommitSHA:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		PatchedFiles: []string{"app/src/Main.java"},
@@ -293,7 +287,7 @@ func TestFilesService_CreateAutofixPR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Files.CreateAutofixPR returned error: %v", err)
 	}
-	if got.ID != 9 || got.File != 118 || got.Analysis != 11754 {
+	if got.ID != 9 || got.File != 118 {
 		t.Errorf("CreateAutofixPR returned %+v", got)
 	}
 }

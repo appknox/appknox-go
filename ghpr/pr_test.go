@@ -11,54 +11,82 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeGitHub serves the endpoints PushBranch calls; fileExists toggles the
-// contents GET between 200 (update) and 404 (new file).
-func fakeGitHub(t *testing.T, fileExists bool) (*httptest.Server, *[]string) {
+const (
+	testCommitSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testTreeSHA   = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testBlobSHA   = "cccccccccccccccccccccccccccccccccccccccc"
+)
+
+// fakeGitHub serves the Git Database endpoints PushFiles calls.
+func fakeGitHub(t *testing.T, branchSHA string, createRefStatus int) (*httptest.Server, *[]string) {
 	t.Helper()
+	if branchSHA == "" {
+		branchSHA = "BASESHA"
+	}
+	if createRefStatus == 0 {
+		createRefStatus = http.StatusCreated
+	}
 	seen := &[]string{}
+	blobs := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		*seen = append(*seen, r.Method+" "+r.URL.Path)
 		require.Equal(t, "Bearer ghtok", r.Header.Get("Authorization"))
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/git/ref/heads/master"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "BASESHA"}})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/git/ref/heads/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": branchSHA}})
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/refs"):
 			var b map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&b)
-			require.Equal(t, "refs/heads/appknox-autofix/analysis-42", b["ref"])
+			require.True(t, strings.HasPrefix(b["ref"], "refs/heads/"))
 			require.Equal(t, "BASESHA", b["sha"])
-			w.WriteHeader(http.StatusCreated)
-		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/contents/"):
-			if !fileExists {
-				w.WriteHeader(http.StatusNotFound)
-				_ = json.NewEncoder(w).Encode(map[string]string{"message": "Not Found"})
+			if createRefStatus >= 400 {
+				w.WriteHeader(createRefStatus)
+				_ = json.NewEncoder(w).Encode(map[string]string{"message": "Reference already exists"})
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]string{"sha": "OLDBLOB"})
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/contents/"):
+			w.WriteHeader(createRefStatus)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/git/commits/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"tree": map[string]string{"sha": testTreeSHA}})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/blobs"):
+			blobs++
 			var b map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&b)
-			require.Equal(t, "appknox-autofix/analysis-42", b["branch"])
-			require.NotEmpty(t, b["content"]) // base64 patched content
-			if fileExists {
-				require.Equal(t, "OLDBLOB", b["sha"])
-			} else {
-				_, hasSHA := b["sha"]
-				require.False(t, hasSHA) // new file: no sha
+			require.Equal(t, "utf-8", b["encoding"])
+			require.NotEmpty(t, b["content"])
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": testBlobSHA})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/trees"):
+			var b struct {
+				BaseTree string      `json:"base_tree"`
+				Tree     []treeEntry `json:"tree"`
 			}
-			writeContentsPut(w, testCommitSHA)
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			require.Equal(t, testTreeSHA, b.BaseTree)
+			require.NotEmpty(t, b.Tree)
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": "NEWTREE"})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/commits"):
+			var b struct {
+				Message string   `json:"message"`
+				Tree    string   `json:"tree"`
+				Parents []string `json:"parents"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			require.NotEmpty(t, b.Message)
+			require.Equal(t, "NEWTREE", b.Tree)
+			require.Equal(t, []string{branchSHA}, b.Parents)
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": testCommitSHA})
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/git/refs/heads/"):
+			var b map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			require.Equal(t, testCommitSHA, b["sha"])
+			w.WriteHeader(http.StatusOK)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
+	t.Cleanup(srv.Close)
 	return srv, seen
-}
-
-const testCommitSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-
-func writeContentsPut(w http.ResponseWriter, sha string) {
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{"commit": map[string]string{"sha": sha}})
 }
 
 func change() Change {
@@ -68,9 +96,8 @@ func change() Change {
 	}
 }
 
-func TestPushBranch_ExistingFile(t *testing.T) {
-	srv, seen := fakeGitHub(t, true)
-	defer srv.Close()
+func TestPushBranch_CreatesOneCommit(t *testing.T) {
+	srv, seen := fakeGitHub(t, "BASESHA", http.StatusCreated)
 	res, err := PushBranch(context.Background(),
 		Config{Owner: "appknox", Repo: "mfva", BaseRef: "master", Token: "ghtok", APIBase: srv.URL}, change())
 	require.NoError(t, err)
@@ -79,14 +106,10 @@ func TestPushBranch_ExistingFile(t *testing.T) {
 	require.Equal(t, "master", res.Base)
 	require.Equal(t, testCommitSHA, res.CommitSHA)
 	require.Contains(t, *seen, "POST /repos/appknox/mfva/git/refs")
-}
-
-func TestPushBranch_NewFile(t *testing.T) {
-	srv, _ := fakeGitHub(t, false)
-	defer srv.Close()
-	_, err := PushBranch(context.Background(),
-		Config{Owner: "appknox", Repo: "mfva", BaseRef: "master", Token: "ghtok", APIBase: srv.URL}, change())
-	require.NoError(t, err) // 404 on contents -> new file, no sha, still commits
+	require.Contains(t, *seen, "POST /repos/appknox/mfva/git/blobs")
+	require.Contains(t, *seen, "POST /repos/appknox/mfva/git/trees")
+	require.Contains(t, *seen, "POST /repos/appknox/mfva/git/commits")
+	require.Contains(t, *seen, "PATCH /repos/appknox/mfva/git/refs/heads/appknox-autofix/analysis-42")
 }
 
 func TestPushBranch_RequiresConfig(t *testing.T) {
@@ -95,32 +118,13 @@ func TestPushBranch_RequiresConfig(t *testing.T) {
 }
 
 func TestPushBranch_ReusesExistingBranch(t *testing.T) {
-	// 422 "already exists" on the ref create must be treated as reuse (idempotent
-	// re-run): commit the new patch onto the existing branch using ITS file sha.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/git/ref/heads/master"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "S"}})
-		case strings.HasSuffix(r.URL.Path, "/git/refs"):
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			_ = json.NewEncoder(w).Encode(map[string]string{"message": "Reference already exists"})
-		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/contents/"):
-			_ = json.NewEncoder(w).Encode(map[string]string{"sha": "BRANCHBLOB"})
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/contents/"):
-			var b map[string]string
-			_ = json.NewDecoder(r.Body).Decode(&b)
-			require.Equal(t, "BRANCHBLOB", b["sha"]) // the branch's file sha, not base
-			writeContentsPut(w, testCommitSHA)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
+	srv, seen := fakeGitHub(t, "BRANCHSHA", http.StatusUnprocessableEntity)
 	res, err := PushBranch(context.Background(),
 		Config{Owner: "o", Repo: "r", BaseRef: "master", Token: "ghtok", APIBase: srv.URL}, change())
 	require.NoError(t, err)
 	require.Contains(t, res.URL, "/compare/")
 	require.Equal(t, testCommitSHA, res.CommitSHA)
+	require.Contains(t, *seen, "GET /repos/o/r/git/commits/BRANCHSHA") // parent is the existing tip
 }
 
 func TestPushBranch_ResolvesDefaultBranch(t *testing.T) {
@@ -129,15 +133,21 @@ func TestPushBranch_ResolvesDefaultBranch(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r":
 			_ = json.NewEncoder(w).Encode(map[string]string{"default_branch": "main"})
 		case strings.HasSuffix(r.URL.Path, "/git/ref/heads/main"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "S"}})
-		case strings.HasSuffix(r.URL.Path, "/git/refs"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "BASESHA"}})
+		case strings.Contains(r.URL.Path, "/git/ref/heads/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "BASESHA"}})
+		case strings.HasSuffix(r.URL.Path, "/git/refs") && r.Method == http.MethodPost:
 			w.WriteHeader(http.StatusCreated)
-		case strings.Contains(r.URL.Path, "/contents/"):
-			if r.Method == http.MethodGet {
-				w.WriteHeader(http.StatusNotFound)
-				return
-			}
-			writeContentsPut(w, testCommitSHA)
+		case strings.Contains(r.URL.Path, "/git/commits/") && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{"tree": map[string]string{"sha": testTreeSHA}})
+		case strings.HasSuffix(r.URL.Path, "/git/blobs"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": testBlobSHA})
+		case strings.HasSuffix(r.URL.Path, "/git/trees"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": "NEWTREE"})
+		case strings.HasSuffix(r.URL.Path, "/git/commits") && r.Method == http.MethodPost:
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": testCommitSHA})
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/git/refs/heads/"):
+			w.WriteHeader(http.StatusOK)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -151,22 +161,33 @@ func TestPushBranch_ResolvesDefaultBranch(t *testing.T) {
 	require.Equal(t, testCommitSHA, res.CommitSHA)
 }
 
-func TestPushFiles_MultipleFiles(t *testing.T) {
-	puts := 0
+func TestPushFiles_MultipleFilesOneCommit(t *testing.T) {
+	blobs, commits := 0, 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/git/ref/heads/master"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "S"}})
-		case strings.HasSuffix(r.URL.Path, "/git/refs"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "BASESHA"}})
+		case strings.Contains(r.URL.Path, "/git/ref/heads/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "BASESHA"}})
+		case strings.HasSuffix(r.URL.Path, "/git/refs") && r.Method == http.MethodPost:
 			w.WriteHeader(http.StatusCreated)
-		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/contents/"):
-			w.WriteHeader(http.StatusNotFound) // new files
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/contents/"):
-			puts++
-			writeContentsPut(w, []string{
-				"1111111111111111111111111111111111111111",
-				"2222222222222222222222222222222222222222",
-			}[puts-1])
+		case strings.Contains(r.URL.Path, "/git/commits/") && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{"tree": map[string]string{"sha": testTreeSHA}})
+		case strings.HasSuffix(r.URL.Path, "/git/blobs"):
+			blobs++
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": testBlobSHA})
+		case strings.HasSuffix(r.URL.Path, "/git/trees"):
+			var b struct {
+				Tree []treeEntry `json:"tree"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			require.Len(t, b.Tree, 2)
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": "NEWTREE"})
+		case strings.HasSuffix(r.URL.Path, "/git/commits") && r.Method == http.MethodPost:
+			commits++
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": testCommitSHA})
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/git/refs/heads/"):
+			w.WriteHeader(http.StatusOK)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -176,17 +197,19 @@ func TestPushFiles_MultipleFiles(t *testing.T) {
 		Config{Owner: "o", Repo: "r", BaseRef: "master", Token: "ghtok", APIBase: srv.URL},
 		"appknox-autofix/analysis-42",
 		[]FileChange{
-			{Path: "app/A.java", Content: "a", Message: "fix A"},
-			{Path: "app/B.java", Content: "b", Message: "fix B"},
-		})
+			{Path: "app/A.java", Content: "a"},
+			{Path: "app/B.java", Content: "b"},
+		},
+		"fix(autofix): Appknox scan (file 42)")
 	require.NoError(t, err)
-	require.Equal(t, 2, puts) // one commit per file
+	require.Equal(t, 2, blobs)   // one blob per file
+	require.Equal(t, 1, commits) // one commit for all files
 	require.Contains(t, res.URL, "/compare/master...appknox-autofix/analysis-42")
-	require.Equal(t, "2222222222222222222222222222222222222222", res.CommitSHA) // last file's commit
+	require.Equal(t, testCommitSHA, res.CommitSHA)
 }
 
 func TestPushFiles_NoFiles(t *testing.T) {
-	_, err := PushFiles(context.Background(), Config{Owner: "o", Repo: "r", Token: "t"}, "b", nil)
+	_, err := PushFiles(context.Background(), Config{Owner: "o", Repo: "r", Token: "t"}, "b", nil, "")
 	require.Error(t, err)
 }
 

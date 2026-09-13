@@ -47,24 +47,23 @@ func TestResolveRepoRoot_RequiresRepoOrPath(t *testing.T) {
 
 func TestResolveInputs_FromFlags(t *testing.T) {
 	called := false
-	fetch := func(context.Context, int, int) (FindingInputs, error) { called = true; return FindingInputs{}, nil }
+	fetch := func(context.Context, int) ([]FindingInputs, error) { called = true; return nil, nil }
 	in, err := resolveInputs(context.Background(),
 		AutofixOptions{Finding: "weak PRNG", ClassHint: "Main"}, fetch)
 	require.NoError(t, err)
-	require.Equal(t, "weak PRNG", in.Finding)
-	require.Equal(t, []string{"Main"}, in.ClassHints)
+	require.Equal(t, "weak PRNG", in[0].Finding)
+	require.Equal(t, []string{"Main"}, in[0].ClassHints)
 	require.False(t, called) // flags path must not hit Appknox
 }
 
 func TestResolveInputs_FromAppknoxIDs(t *testing.T) {
-	fetch := func(_ context.Context, f, a int) (FindingInputs, error) {
+	fetch := func(_ context.Context, f int) ([]FindingInputs, error) {
 		require.Equal(t, 118, f)
-		require.Equal(t, 11754, a)
-		return FindingInputs{Finding: "Derived Crypto Keys", Remediation: "derive securely"}, nil
+		return []FindingInputs{{Finding: "Derived Crypto Keys", Remediation: "derive securely"}}, nil
 	}
-	in, err := resolveInputs(context.Background(), AutofixOptions{FileID: 118, AnalysisID: 11754}, fetch)
+	in, err := resolveInputs(context.Background(), AutofixOptions{FileID: 118}, fetch)
 	require.NoError(t, err)
-	require.Equal(t, "derive securely", in.Remediation)
+	require.Equal(t, "derive securely", in[0].Remediation)
 }
 
 func TestResolveInputs_RequiresSomething(t *testing.T) {
@@ -90,14 +89,14 @@ func repoWithFile(t *testing.T, body string) (string, string) {
 func deps(path string, res fixservice.Result, in FindingInputs) autofixDeps {
 	return autofixDeps{
 		locate: func(context.Context, agent.Config, agent.Request) (string, error) { return path, nil },
-		fetch:  func(context.Context, int, int) (FindingInputs, error) { return in, nil },
+		fetch:  func(context.Context, int) ([]FindingInputs, error) { return []FindingInputs{in}, nil },
 		submit: func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
 			return res, nil
 		},
 		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
 			return agent.FixResult{Changed: true, PatchedContent: "agent-fixed\n", Diff: "-old\n+new"}, nil
 		},
-		deliver: func(context.Context, AutofixOptions, []filePatch, FindingInputs) (Delivery, error) {
+		deliver: func(context.Context, AutofixOptions, []filePatch) (Delivery, error) {
 			return Delivery{URL: "https://github.com/appknox/mfva/pull/1"}, nil
 		},
 	}
@@ -113,7 +112,7 @@ func withAccessToken(t *testing.T) {
 func appknoxOpts(t *testing.T, root string) AutofixOptions {
 	t.Helper()
 	withAccessToken(t)
-	return AutofixOptions{RepoPath: root, FileID: 1, AnalysisID: 1}
+	return AutofixOptions{RepoPath: root, FileID: 1}
 }
 
 func oneClass(finding, remediation string) FindingInputs {
@@ -126,9 +125,9 @@ func TestRunAutofix_KnoxIQNotCompleted_StopsBeforeFetch(t *testing.T) {
 	d.knoxiqReady = func(context.Context, int) error {
 		return errors.New("knoxiq is not completed for file 1 (sast=Pending, dast=Disabled)")
 	}
-	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
+	d.fetch = func(context.Context, int) ([]FindingInputs, error) {
 		fetched = true
-		return FindingInputs{}, nil
+		return nil, nil
 	}
 	_, err := runAutofix(context.Background(), appknoxOpts(t, t.TempDir()), d)
 	require.Error(t, err)
@@ -236,9 +235,9 @@ func TestRunAutofix_MultiClass_FixesEachLocatedFile(t *testing.T) {
 	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
 		return pathFor[req.ClassHint], nil // each class → its own file
 	}
-	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
-		return FindingInputs{Finding: "Derived Crypto Keys",
-			ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}, nil
+	d.fetch = func(context.Context, int) ([]FindingInputs, error) {
+		return []FindingInputs{{Finding: "Derived Crypto Keys",
+			ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}}, nil
 	}
 	out, err := runAutofix(context.Background(), appknoxOpts(t, root), d)
 	require.NoError(t, err)
@@ -262,10 +261,10 @@ func TestRunAutofix_MultiClass_PushBranch_OneBranch(t *testing.T) {
 	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
 		return map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java"}[req.ClassHint], nil
 	}
-	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
-		return FindingInputs{Finding: "Multi", ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}, nil
+	d.fetch = func(context.Context, int) ([]FindingInputs, error) {
+		return []FindingInputs{{Finding: "Multi", ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}}, nil
 	}
-	d.deliver = func(_ context.Context, _ AutofixOptions, patches []filePatch, _ FindingInputs) (Delivery, error) {
+	d.deliver = func(_ context.Context, _ AutofixOptions, patches []filePatch) (Delivery, error) {
 		delivered = patches // all files pushed together in one call
 		return Delivery{URL: "https://github.com/o/r/pull/1"}, nil
 	}
@@ -314,7 +313,7 @@ func TestRunAutofix_PushBranch_ReportsToAppknox(t *testing.T) {
 	var gotDel Delivery
 	var gotPatches []filePatch
 	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
-	d.deliver = func(_ context.Context, _ AutofixOptions, _ []filePatch, _ FindingInputs) (Delivery, error) {
+	d.deliver = func(_ context.Context, _ AutofixOptions, _ []filePatch) (Delivery, error) {
 		return del, nil
 	}
 	d.report = func(_ context.Context, opts AutofixOptions, reported Delivery, patches []filePatch) error {
@@ -329,7 +328,6 @@ func TestRunAutofix_PushBranch_ReportsToAppknox(t *testing.T) {
 	require.Equal(t, del.CommitSHA, out.CommitSHA)
 	require.Equal(t, del.Branch, out.Branch)
 	require.Equal(t, 1, gotOpts.FileID)
-	require.Equal(t, 1, gotOpts.AnalysisID)
 	require.Equal(t, del, gotDel)
 	require.Equal(t, rel, gotPatches[0].Path)
 }
@@ -384,12 +382,30 @@ func TestRunAutofix_NoChange_LeavesFile(t *testing.T) {
 	require.Equal(t, []string{rel}, out.Located)
 }
 
-func TestRunAutofix_PropagatesSubmitError(t *testing.T) {
-	root, rel := repoWithFile(t, "orig")
-	d := deps(rel, fixservice.Result{}, oneClass("f", "r"))
-	d.submit = func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
-		return fixservice.Result{}, errors.New("boom")
+func TestRunAutofix_FileID_SkipsFailedFinding(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "app"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "app/A.java"), []byte("orig\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "app/B.java"), []byte("orig\n"), 0o644))
+	d := deps("", fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, FindingInputs{})
+	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
+		return map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java"}[req.ClassHint], nil
 	}
-	_, err := runAutofix(context.Background(), appknoxOpts(t, root), d)
-	require.Error(t, err)
+	d.fetch = func(context.Context, int) ([]FindingInputs, error) {
+		return []FindingInputs{
+			{Finding: "Bad", ClassHints: []string{"com/x/A"}, Remediation: "fix"},
+			{Finding: "Good", ClassHints: []string{"com/x/B"}, Remediation: "fix"},
+		}, nil
+	}
+	d.submit = func(_ context.Context, _ fixservice.Config, req fixservice.Request) (fixservice.Result, error) {
+		if req.Finding == "Bad" {
+			return fixservice.Result{}, errors.New("model failed")
+		}
+		return fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, nil
+	}
+	out, err := runAutofix(context.Background(), appknoxOpts(t, root), d)
+	require.NoError(t, err)
+	require.Len(t, out.Patches, 1)
+	require.Equal(t, "app/B.java", out.Patches[0].Path)
+	require.Contains(t, out.BranchURL, "/pull/")
 }

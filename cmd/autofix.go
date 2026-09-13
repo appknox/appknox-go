@@ -9,10 +9,11 @@ import (
 var autofixCmd = &cobra.Command{
 	Use:   "autofix",
 	Short: "Locate the source file to fix for a finding (client-side).",
-	Long: `Locate the source file for a scan finding, generate a fix, open a GitHub
-pull request, and record it on Appknox. Repo, checkout, token, and source PR
-come from CI (GITHUB_REPOSITORY, GITHUB_WORKSPACE, GITHUB_TOKEN, GITHUB_REF).
-When --file-id and --analysis-id are set, the PR is saved as an AutofixPR.
+	Long: `Locate source files for a scan, generate fixes, open a GitHub pull
+request, and record it on Appknox. Repo, checkout, and token come from CI
+(GITHUB_REPOSITORY, GITHUB_WORKSPACE, GITHUB_TOKEN, GITHUB_REF).
+When --file-id is set, every fixable analysis on that file is processed and
+the PR is saved as an AutofixPR.
 
 The repository stays on this machine; only model turns route through Mycroft
 ({APPKNOX_API_HOST}/api/autofix) using APPKNOX_ACCESS_TOKEN. No provider key is needed here.`,
@@ -22,7 +23,6 @@ The repository stays on this machine; only model turns route through Mycroft
 		opts.Ref, _ = f.GetString("ref")
 		opts.RepoPath, _ = f.GetString("repo-path")
 		opts.FileID, _ = f.GetInt("file-id")
-		opts.AnalysisID, _ = f.GetInt("analysis-id")
 		opts.Finding, _ = f.GetString("finding")
 		opts.ClassHint, _ = f.GetString("class-hint")
 		opts.GithubToken, _ = f.GetString("github-token")
@@ -38,9 +38,8 @@ func init() {
 	f := autofixCmd.Flags()
 	f.String("ref", "", "Git ref (branch, tag, or SHA); CI uses GITHUB_BASE_REF if empty")
 	f.String("repo-path", "", "Path to an already-checked-out repo (CI uses GITHUB_WORKSPACE if empty)")
-	f.Int("file-id", 0, "Appknox file id (with --analysis-id → finding + KnoxIQ remediation)")
-	f.Int("analysis-id", 0, "Appknox analysis id")
-	f.String("finding", "", "Manual finding detail (when not using --file-id/--analysis-id)")
+	f.Int("file-id", 0, "Appknox file id (fixes every analysis with class hints + remediation)")
+	f.String("finding", "", "Manual finding detail (when not using --file-id)")
 	f.String("class-hint", "", "Manual class/symbol hint from the finding (optional)")
 	f.String("github-token", "", "GitHub token for fetch + push (or env GITHUB_TOKEN)")
 	f.Bool("dry-run", false, "Locate + generate the fix but do not push a branch")

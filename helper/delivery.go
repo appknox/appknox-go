@@ -24,7 +24,7 @@ type Delivery struct {
 
 // deliverBranch pushes patched files to a new branch, opens a GitHub PR, and
 // returns the PR URL for Mycroft's AutofixPR row.
-func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch, inputs FindingInputs) (Delivery, error) {
+func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch) (Delivery, error) {
 	opts = applyCIDefaults(opts)
 	owner, name, err := splitRepo(opts.Repo)
 	if err != nil {
@@ -36,42 +36,43 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 	}
 	files := make([]ghpr.FileChange, len(patches))
 	for i, p := range patches {
-		files[i] = ghpr.FileChange{Path: p.Path, Content: p.Content, Message: commitMessage(inputs, p.Path)}
+		files[i] = ghpr.FileChange{Path: p.Path, Content: p.Content}
 	}
 	cfg := ghpr.Config{Owner: owner, Repo: name, BaseRef: opts.Ref, Token: token, APIBase: os.Getenv("GITHUB_API_URL")}
-	res, err := ghpr.PushFiles(ctx, cfg, prBranch(opts.AnalysisID, patches[0].Path), files)
+	fallback := ""
+	if len(patches) > 0 {
+		fallback = patches[0].Path
+	}
+	res, err := ghpr.PushFiles(ctx, cfg, prBranch(opts.FileID, fallback), files, prTitle(opts))
 	if err != nil {
 		return Delivery{}, err
 	}
-	prURL, err := ghpr.OpenPullRequest(ctx, cfg, res.Base, res.Branch, prTitle(inputs, opts.AnalysisID), prBody(opts, inputs, patches))
+	prURL, err := ghpr.OpenPullRequest(ctx, cfg, res.Base, res.Branch, prTitle(opts), prBody(opts, patches))
 	if err != nil {
 		return Delivery{}, fmt.Errorf("pushed branch %s but failed to open a pull request: %w\nGITHUB_TOKEN cannot open PRs unless the workflow has pull-requests: write and the repo allows Actions to create PRs (Settings → Actions → General). Or set APPKNOX_GITHUB_TOKEN to a PAT with repo scope", res.Branch, err)
 	}
 	return Delivery{URL: prURL, Branch: res.Branch, Base: res.Base, CommitSHA: res.CommitSHA}, nil
 }
 
-func prTitle(inputs FindingInputs, analysisID int) string {
-	name := inputs.Finding
-	if name == "" {
-		name = "security finding"
+func prTitle(opts AutofixOptions) string {
+	if opts.FileID > 0 {
+		return fmt.Sprintf("fix(autofix): Appknox scan (file %d)", opts.FileID)
 	}
-	if analysisID > 0 {
-		return fmt.Sprintf("fix(autofix): %s (analysis %d)", name, analysisID)
-	}
-	return fmt.Sprintf("fix(autofix): %s", name)
+	return "fix(autofix): security findings"
 }
 
-func prBody(opts AutofixOptions, inputs FindingInputs, patches []filePatch) string {
+func prBody(opts AutofixOptions, patches []filePatch) string {
 	var b strings.Builder
-	b.WriteString("Appknox autofix generated this change from a scan finding.\n\n")
-	if opts.AnalysisID > 0 {
-		fmt.Fprintf(&b, "- Analysis: `%d`\n", opts.AnalysisID)
-	}
+	b.WriteString("Appknox autofix generated this change from a scan.\n\n")
 	if opts.FileID > 0 {
 		fmt.Fprintf(&b, "- File id: `%d`\n", opts.FileID)
 	}
-	if inputs.Finding != "" {
-		fmt.Fprintf(&b, "- Finding: %s\n", inputs.Finding)
+	findings := uniqueFindings(patches)
+	if len(findings) > 0 {
+		b.WriteString("- Findings:\n")
+		for _, name := range findings {
+			fmt.Fprintf(&b, "  - %s\n", name)
+		}
 	}
 	if len(patches) > 0 {
 		b.WriteString("- Patched files:\n")
@@ -82,14 +83,27 @@ func prBody(opts AutofixOptions, inputs FindingInputs, patches []filePatch) stri
 	return b.String()
 }
 
+func uniqueFindings(patches []filePatch) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range patches {
+		if p.Finding == "" || seen[p.Finding] {
+			continue
+		}
+		seen[p.Finding] = true
+		out = append(out, p.Finding)
+	}
+	return out
+}
+
 // reportAutofixPR POSTs the pushed branch to Mycroft so the dashboard can list it.
-// Skipped when --file-id/--analysis-id are not set (manual --finding has nothing to attach to).
+// Skipped when --file-id is not set (manual --finding has nothing to attach to).
 func reportAutofixPR(ctx context.Context, opts AutofixOptions, d Delivery, patches []filePatch) error {
 	return reportAutofixPRWith(ctx, getClient(), opts, d, patches)
 }
 
 func reportAutofixPRWith(ctx context.Context, client *appknox.Client, opts AutofixOptions, d Delivery, patches []filePatch) error {
-	if opts.FileID <= 0 || opts.AnalysisID <= 0 {
+	if opts.FileID <= 0 {
 		return nil
 	}
 	_, _, err := client.Files.CreateAutofixPR(ctx, opts.FileID, buildAutofixPR(opts, d, patches))
@@ -106,31 +120,29 @@ func buildAutofixPR(opts AutofixOptions, d Delivery, patches []filePatch) *appkn
 		base = opts.Ref
 	}
 	return &appknox.AutofixPR{
-		Analysis:     opts.AnalysisID,
 		Repo:         opts.Repo,
 		BaseBranch:   base,
 		Branch:       d.Branch,
 		PRURL:        d.URL,
 		CommitSHA:    d.CommitSHA,
-		SourcePR:     sourcePRFromCI(),
 		PatchedFiles: paths,
 	}
 }
 
-// prBranch is a stable branch name for the fix.
-func prBranch(analysisID int, path string) string {
-	if analysisID > 0 {
-		return fmt.Sprintf("appknox-autofix/analysis-%d", analysisID)
+// prBranch is a stable branch name for the file's fix PR.
+func prBranch(fileID int, path string) string {
+	if fileID > 0 {
+		return fmt.Sprintf("appknox-autofix/analysis-%d", fileID)
 	}
 	sum := sha256.Sum256([]byte(path))
 	return "appknox-autofix/fix-" + hex.EncodeToString(sum[:])[:10]
 }
 
 // commitMessage is a conventional-commit subject for the fix.
-func commitMessage(inputs FindingInputs, path string) string {
-	name := inputs.Finding
+func commitMessage(p filePatch) string {
+	name := p.Finding
 	if name == "" {
 		name = "security finding"
 	}
-	return fmt.Sprintf("fix(autofix): %s in %s", name, filepath.Base(path))
+	return fmt.Sprintf("fix(autofix): %s in %s", name, filepath.Base(p.Path))
 }

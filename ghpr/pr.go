@@ -1,11 +1,8 @@
-// Package ghpr pushes patched files to a new GitHub branch and opens a pull
-// request. Client-side only: uses the caller's GitHub token (CI GITHUB_TOKEN).
 package ghpr
 
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +17,7 @@ const (
 	defaultAPIBase = "https://api.github.com"
 	httpTimeout    = 60 * time.Second
 	maxRespBytes   = 8 << 20 // cap any GitHub response (OOM guard)
+	fileMode       = "100644"
 )
 
 // Config identifies the repo + base ref and carries the GitHub token.
@@ -38,6 +36,15 @@ func (c Config) apiBase() string {
 	return defaultAPIBase
 }
 
+func (c Config) repoURL(path string) string {
+	base := fmt.Sprintf("%s/repos/%s/%s", c.apiBase(), c.Owner, c.Repo)
+	path = strings.TrimPrefix(path, "/")
+	if path == "" {
+		return base
+	}
+	return base + "/" + path
+}
+
 // Change is the branch + single patched file + commit message to push.
 type Change struct {
 	Branch  string
@@ -46,30 +53,29 @@ type Change struct {
 	Message string
 }
 
-// FileChange is one patched file (path + content + commit message).
+// FileChange is one patched file (path + content).
 type FileChange struct {
 	Path    string
 	Content string
-	Message string
 }
 
-// Result is the outcome of pushing a branch (compare URL + last commit SHA).
+// Result is the outcome of pushing a branch (compare URL + commit SHA).
 type Result struct {
 	URL       string // compare URL that pre-fills a PR
 	Branch    string
 	Base      string
-	CommitSHA string // SHA of the last commit written to the branch
+	CommitSHA string // SHA of the single commit that contains every patched file
 }
 
 // PushBranch pushes a single patched file to a new branch (thin wrapper).
 func PushBranch(ctx context.Context, cfg Config, ch Change) (Result, error) {
-	return PushFiles(ctx, cfg, ch.Branch, []FileChange{{Path: ch.Path, Content: ch.Content, Message: ch.Message}})
+	return PushFiles(ctx, cfg, ch.Branch, []FileChange{{Path: ch.Path, Content: ch.Content}}, ch.Message)
 }
 
-// PushFiles creates a branch off the base ref and commits each patched file
-// (one commit per file). Idempotent: an existing branch is reused. The Result
-// URL is a compare link; OpenPullRequest replaces it with the opened PR.
-func PushFiles(ctx context.Context, cfg Config, branch string, files []FileChange) (Result, error) {
+// PushFiles creates a branch off the base ref and writes every patched file in
+// one git commit (Git Database API). Idempotent: an existing branch is reused.
+// The Result URL is a compare link; OpenPullRequest replaces it with the opened PR.
+func PushFiles(ctx context.Context, cfg Config, branch string, files []FileChange, message string) (Result, error) {
 	if cfg.Owner == "" || cfg.Repo == "" || cfg.Token == "" {
 		return Result{}, errors.New("ghpr: owner, repo, and token are required")
 	}
@@ -87,7 +93,10 @@ func PushFiles(ctx context.Context, cfg Config, branch string, files []FileChang
 	if err := createBranch(ctx, cfg, branch, baseSHA); err != nil {
 		return Result{}, err
 	}
-	sha, err := commitFiles(ctx, cfg, branch, files)
+	if message == "" {
+		message = "fix(autofix): apply scan fixes"
+	}
+	sha, err := commitFiles(ctx, cfg, branch, files, message)
 	if err != nil {
 		return Result{}, err
 	}
@@ -107,34 +116,45 @@ func resolveBase(ctx context.Context, cfg Config) (string, error) {
 	return defaultBranch(ctx, cfg)
 }
 
-// commitFiles commits each file to the branch, one commit per file. On a re-run
-// the file's current blob sha on the branch is used so the update is accepted.
-// The SHA of the last commit is returned.
-func commitFiles(ctx context.Context, cfg Config, branch string, files []FileChange) (string, error) {
-	var lastSHA string
-	for _, f := range files {
-		fileSHA, err := currentFileSHA(ctx, cfg, f.Path, branch)
-		if err != nil {
-			return "", err
-		}
-		ch := Change{Branch: branch, Path: f.Path, Content: f.Content, Message: f.Message}
-		sha, err := putFile(ctx, cfg, ch, fileSHA)
-		if err != nil {
-			return "", err
-		}
-		if sha != "" {
-			lastSHA = sha
-		}
+// commitFiles writes every file into one commit on branch and points the ref at it.
+func commitFiles(ctx context.Context, cfg Config, branch string, files []FileChange, message string) (string, error) {
+	parent, err := branchSHA(ctx, cfg, branch)
+	if err != nil {
+		return "", err
 	}
-	return lastSHA, nil
+	baseTree, err := commitTreeSHA(ctx, cfg, parent)
+	if err != nil {
+		return "", err
+	}
+	entries := make([]treeEntry, 0, len(files))
+	for _, f := range files {
+		blob, err := createBlob(ctx, cfg, f.Content)
+		if err != nil {
+			return "", err
+		}
+		entries = append(entries, treeEntry{
+			Path: f.Path, Mode: fileMode, Type: "blob", SHA: blob,
+		})
+	}
+	tree, err := createTree(ctx, cfg, baseTree, entries)
+	if err != nil {
+		return "", err
+	}
+	sha, err := createCommit(ctx, cfg, message, tree, parent)
+	if err != nil {
+		return "", err
+	}
+	if err := updateRef(ctx, cfg, branch, sha); err != nil {
+		return "", err
+	}
+	return sha, nil
 }
 
 func defaultBranch(ctx context.Context, cfg Config) (string, error) {
 	var out struct {
 		DefaultBranch string `json:"default_branch"`
 	}
-	u := fmt.Sprintf("%s/repos/%s/%s", cfg.apiBase(), cfg.Owner, cfg.Repo)
-	if err := cfg.do(ctx, http.MethodGet, u, nil, &out); err != nil {
+	if err := cfg.do(ctx, http.MethodGet, cfg.repoURL(""), nil, &out); err != nil {
 		return "", err
 	}
 	if out.DefaultBranch == "" {
@@ -149,8 +169,7 @@ func branchSHA(ctx context.Context, cfg Config, ref string) (string, error) {
 			SHA string `json:"sha"`
 		} `json:"object"`
 	}
-	u := fmt.Sprintf("%s/repos/%s/%s/git/ref/heads/%s", cfg.apiBase(), cfg.Owner, cfg.Repo, url.PathEscape(ref))
-	if err := cfg.do(ctx, http.MethodGet, u, nil, &out); err != nil {
+	if err := cfg.do(ctx, http.MethodGet, cfg.repoURL("git/ref/heads/"+refPath(ref)), nil, &out); err != nil {
 		return "", err
 	}
 	if out.Object.SHA == "" {
@@ -159,61 +178,93 @@ func branchSHA(ctx context.Context, cfg Config, ref string) (string, error) {
 	return out.Object.SHA, nil
 }
 
-// createBranch creates the branch, treating an already-existing branch as success
-// so re-runs are idempotent (the file is then committed on top of it).
-func createBranch(ctx context.Context, cfg Config, branch, sha string) error {
-	body := map[string]string{"ref": "refs/heads/" + branch, "sha": sha}
-	u := fmt.Sprintf("%s/repos/%s/%s/git/refs", cfg.apiBase(), cfg.Owner, cfg.Repo)
-	err := cfg.do(ctx, http.MethodPost, u, body, nil)
-	if err != nil && strings.Contains(err.Error(), "already exists") {
-		return nil // reuse the existing branch
+func commitTreeSHA(ctx context.Context, cfg Config, commitSHA string) (string, error) {
+	var out struct {
+		Tree struct {
+			SHA string `json:"sha"`
+		} `json:"tree"`
 	}
-	return err
+	if err := cfg.do(ctx, http.MethodGet, cfg.repoURL("git/commits/"+commitSHA), nil, &out); err != nil {
+		return "", err
+	}
+	if out.Tree.SHA == "" {
+		return "", fmt.Errorf("ghpr: no tree for commit %s", commitSHA)
+	}
+	return out.Tree.SHA, nil
 }
 
-// currentFileSHA returns the file's blob sha on ref (needed to update it), or ""
-// when the file does not exist yet (a new file).
-func currentFileSHA(ctx context.Context, cfg Config, path, ref string) (string, error) {
+func createBlob(ctx context.Context, cfg Config, content string) (string, error) {
 	var out struct {
 		SHA string `json:"sha"`
 	}
-	u := contentsURL(cfg, path) + "?ref=" + url.QueryEscape(ref)
-	if err := cfg.do(ctx, http.MethodGet, u, nil, &out); err != nil {
-		if strings.Contains(err.Error(), "HTTP 404") {
-			return "", nil
-		}
+	body := map[string]string{"content": content, "encoding": "utf-8"}
+	if err := cfg.do(ctx, http.MethodPost, cfg.repoURL("git/blobs"), body, &out); err != nil {
 		return "", err
+	}
+	if out.SHA == "" {
+		return "", errors.New("ghpr: blob created but sha was empty")
 	}
 	return out.SHA, nil
 }
 
-func putFile(ctx context.Context, cfg Config, ch Change, fileSHA string) (string, error) {
-	body := map[string]string{
-		"message": ch.Message,
-		"content": base64.StdEncoding.EncodeToString([]byte(ch.Content)),
-		"branch":  ch.Branch,
-	}
-	if fileSHA != "" {
-		body["sha"] = fileSHA
-	}
-	var out struct {
-		Commit struct {
-			SHA string `json:"sha"`
-		} `json:"commit"`
-	}
-	if err := cfg.do(ctx, http.MethodPut, contentsURL(cfg, ch.Path), body, &out); err != nil {
-		return "", err
-	}
-	return out.Commit.SHA, nil
+type treeEntry struct {
+	Path string `json:"path"`
+	Mode string `json:"mode"`
+	Type string `json:"type"`
+	SHA  string `json:"sha"`
 }
 
-// contentsURL builds the Contents API URL with each path segment escaped.
-func contentsURL(cfg Config, path string) string {
-	segs := strings.Split(path, "/")
-	for i, s := range segs {
-		segs[i] = url.PathEscape(s)
+func createTree(ctx context.Context, cfg Config, baseTree string, entries []treeEntry) (string, error) {
+	var out struct {
+		SHA string `json:"sha"`
 	}
-	return fmt.Sprintf("%s/repos/%s/%s/contents/%s", cfg.apiBase(), cfg.Owner, cfg.Repo, strings.Join(segs, "/"))
+	body := map[string]any{"base_tree": baseTree, "tree": entries}
+	if err := cfg.do(ctx, http.MethodPost, cfg.repoURL("git/trees"), body, &out); err != nil {
+		return "", err
+	}
+	if out.SHA == "" {
+		return "", errors.New("ghpr: tree created but sha was empty")
+	}
+	return out.SHA, nil
+}
+
+func createCommit(ctx context.Context, cfg Config, message, tree, parent string) (string, error) {
+	var out struct {
+		SHA string `json:"sha"`
+	}
+	body := map[string]any{
+		"message": message,
+		"tree":    tree,
+		"parents": []string{parent},
+	}
+	if err := cfg.do(ctx, http.MethodPost, cfg.repoURL("git/commits"), body, &out); err != nil {
+		return "", err
+	}
+	if out.SHA == "" {
+		return "", errors.New("ghpr: commit created but sha was empty")
+	}
+	return out.SHA, nil
+}
+
+func updateRef(ctx context.Context, cfg Config, branch, sha string) error {
+	body := map[string]any{"sha": sha, "force": false}
+	return cfg.do(ctx, http.MethodPatch, cfg.repoURL("git/refs/heads/"+refPath(branch)), body, nil)
+}
+
+// createBranch creates the branch, treating an already-existing branch as success
+// so re-runs are idempotent (the new commit is then parented on the branch tip).
+func createBranch(ctx context.Context, cfg Config, branch, sha string) error {
+	body := map[string]string{"ref": "refs/heads/" + branch, "sha": sha}
+	err := cfg.do(ctx, http.MethodPost, cfg.repoURL("git/refs"), body, nil)
+	if err != nil && strings.Contains(err.Error(), "already exists") {
+		return nil
+	}
+	return err
+}
+
+// refPath keeps slashes in branch names (appknox-autofix/analysis-118).
+func refPath(ref string) string {
+	return strings.ReplaceAll(url.PathEscape(ref), "%2F", "/")
 }
 
 // OpenPullRequest opens a PR from branch into base and returns its html_url.
@@ -231,8 +282,7 @@ func OpenPullRequest(ctx context.Context, cfg Config, base, branch, title, body 
 	var out struct {
 		HTMLURL string `json:"html_url"`
 	}
-	u := fmt.Sprintf("%s/repos/%s/%s/pulls", cfg.apiBase(), cfg.Owner, cfg.Repo)
-	err := cfg.do(ctx, http.MethodPost, u, map[string]string{
+	err := cfg.do(ctx, http.MethodPost, cfg.repoURL("pulls"), map[string]string{
 		"title": title,
 		"head":  branch,
 		"base":  base,
@@ -259,8 +309,7 @@ func findExistingPR(ctx context.Context, cfg Config, base, branch string) (strin
 		"base":  {base},
 		"state": {"open"},
 	}
-	u := fmt.Sprintf("%s/repos/%s/%s/pulls?%s", cfg.apiBase(), cfg.Owner, cfg.Repo, q.Encode())
-	if err := cfg.do(ctx, http.MethodGet, u, nil, &out); err != nil {
+	if err := cfg.do(ctx, http.MethodGet, cfg.repoURL("pulls")+"?"+q.Encode(), nil, &out); err != nil {
 		return "", err
 	}
 	if len(out) == 0 || out[0].HTMLURL == "" {
