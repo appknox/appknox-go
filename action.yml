@@ -1,0 +1,169 @@
+# Appknox Autofix, packaged so a caller never names a GitHub credential.
+#
+# The point of this file is the `github-token` input below. A pull request is an
+# API object, so opening one needs an authenticated call, and that credential has
+# to be named exactly once by whoever makes the call. Packaging does not remove
+# the mention -- it moves it out of the customer's workflow and into here, where
+# we own it and they cannot drop it by trimming a pasted YAML.
+#
+# What the customer writes is only this:
+#
+#   jobs:
+#     appknox-autofix:
+#       runs-on: ubuntu-latest
+#       permissions:
+#         contents: write        # push the fix branch
+#         pull-requests: write   # open the draft PR
+#         id-token: write        # mint the gateway session
+#       steps:
+#         - uses: actions/checkout@v4
+#         - uses: appknox/appknox-go@v1
+#           with:
+#             appknox-token: ${{ secrets.APPKNOX_ACCESS_TOKEN }}
+#
+# The `permissions:` block stays theirs by necessity: permissions are job-level
+# and an action cannot grant its own. That is the only GitHub-side thing they
+# author, and its being declarative is a feature -- a reviewer sees exactly what
+# the job may do.
+#
+# They must also enable "Allow GitHub Actions to create and approve pull
+# requests" (can_approve_pull_request_reviews). No packaging removes that; it is
+# the same repository setting Dependabot needs.
+name: Appknox Autofix
+description: Fix Appknox findings in place and open a draft pull request with the patches.
+
+inputs:
+  appknox-token:
+    description: "Appknox API token. The ONLY credential the caller supplies."
+    required: true
+
+  github-token:
+    # Defaulted here so the caller never writes it. `github.token` rather than
+    # `secrets.GITHUB_TOKEN`: the `secrets` context is not available inside a
+    # composite action, while `github.token` is. It resolves to the installation
+    # token GitHub mints for this run -- repository-scoped, expiring with the
+    # job, and never a stored secret anyone had to create.
+    description: "Overrides the run's own token. Leave unset."
+    required: false
+    default: ${{ github.token }}
+
+  file-id:
+    description: "Appknox file id to fix. Must already be scanned and KnoxIQ-analysed."
+    required: true
+  analysis-id:
+    description: "Fix one analysis only (blank = every finding on the file)."
+    required: false
+    default: ""
+  risk-threshold:
+    description: "Lowest severity to attempt: critical|high|medium|low."
+    required: false
+    default: "low"
+
+  model:
+    description: "Model that writes the patch (blank = the CLI default)."
+    required: false
+    default: ""
+  locate-model:
+    description: "Cheaper model for the locate turn only; does not affect the patch."
+    required: false
+    default: ""
+
+  dry-run:
+    # Defaults to producing no PR. Opening one in a customer's repository is a
+    # side effect they should opt into, not discover.
+    description: "Produce the patches but open no pull request."
+    required: false
+    default: "true"
+  allow-unverified:
+    description: "Deliver fixes KnoxIQ gave no criteria for. The PR is stamped NOT VERIFIED."
+    required: false
+    default: "false"
+
+  api-host:
+    description: "Appknox API host for your region."
+    required: false
+    default: "https://api.appknox.com/"
+  fix-url:
+    description: "Gateway that holds the provider key. Must be HTTPS."
+    required: false
+    default: "https://sherrinford.appknox.com"
+  cli-ref:
+    description: "Tag of appknox-go to run. Pin a release; a branch is not reproducible."
+    required: false
+    default: "v1"
+
+outputs:
+  pr-url:
+    description: "URL of the draft pull request, empty on a dry run."
+    value: ${{ steps.autofix.outputs.pr_url }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: "1.24"
+
+    - name: Build the appknox CLI
+      shell: bash
+      env:
+        CLI_REF: ${{ inputs.cli-ref }}
+      run: |
+        set -euo pipefail
+        git clone --depth 1 --branch "$CLI_REF" \
+          https://github.com/appknox/appknox-go.git "$RUNNER_TEMP/appknox-go"
+        cd "$RUNNER_TEMP/appknox-go" && go build -o "$RUNNER_TEMP/appknox" .
+        echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+    - name: Autofix the findings
+      id: autofix
+      shell: bash
+      env:
+        # Both credentials are set HERE, by us. The caller named neither.
+        APPKNOX_ACCESS_TOKEN: ${{ inputs.appknox-token }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        FILE_ID: ${{ inputs.file-id }}
+        ANALYSIS_ID: ${{ inputs.analysis-id }}
+        RISK: ${{ inputs.risk-threshold }}
+        MODEL: ${{ inputs.model }}
+        LOCATE_MODEL: ${{ inputs.locate-model }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        ALLOW_UNVERIFIED: ${{ inputs.allow-unverified }}
+        API_HOST: ${{ inputs.api-host }}
+        FIX_URL: ${{ inputs.fix-url }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+
+        # Fail HERE, not after a full run. Without a usable token the fixer still
+        # spends every model turn and only then discovers it cannot deliver,
+        # which is an expensive way to learn a permission is missing.
+        if [ "$DRY_RUN" != "true" ] && [ -z "${GITHUB_TOKEN:-}" ]; then
+          echo "::error::No GitHub token. Add 'permissions: contents: write, pull-requests: write' to this job, and enable Settings > Actions > 'Allow GitHub Actions to create and approve pull requests'."
+          exit 1
+        fi
+
+        # An array, not string interpolation: an empty optional must vanish
+        # rather than become an empty argument. Unquoted-variable splitting has
+        # already cost this project two silently broken dispatches.
+        args=(autofix
+          --repo-path .
+          --repo "$REPO"
+          --file-id "$FILE_ID"
+          --risk-threshold "$RISK"
+          --host "$API_HOST"
+          --fix-url "$FIX_URL")
+        [ -n "$ANALYSIS_ID" ] && args+=(--analysis-id "$ANALYSIS_ID")
+        [ -n "$MODEL" ] && args+=(--model "$MODEL")
+        [ -n "$LOCATE_MODEL" ] && args+=(--locate-model "$LOCATE_MODEL")
+        [ "$ALLOW_UNVERIFIED" = "true" ] && args+=(--allow-unverified)
+        if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); else args+=(--push-branch); fi
+
+        appknox "${args[@]}" | tee "$RUNNER_TEMP/autofix.out"
+
+        url=$(grep -oE 'https://github\.com/[^ ]*/pull/[0-9]+' "$RUNNER_TEMP/autofix.out" | head -1 || true)
+        echo "pr_url=${url}" >> "$GITHUB_OUTPUT"
+
+branding:
+  icon: shield
+  color: blue
