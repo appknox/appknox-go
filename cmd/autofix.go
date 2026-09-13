@@ -15,7 +15,7 @@ come from CI (GITHUB_REPOSITORY, GITHUB_WORKSPACE, GITHUB_TOKEN, GITHUB_REF).
 When --file-id and --analysis-id are set, the PR is saved as an AutofixPR.
 
 The repository stays on this machine; only model turns route through Mycroft
-({APPKNOX_API_HOST}/api/autofix). No provider key is needed here.`,
+({APPKNOX_API_HOST}/api/autofix) using APPKNOX_ACCESS_TOKEN. No provider key is needed here.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		f := cmd.Flags()
 		opts := helper.AutofixOptions{}
@@ -25,7 +25,6 @@ The repository stays on this machine; only model turns route through Mycroft
 		opts.AnalysisID, _ = f.GetInt("analysis-id")
 		opts.Finding, _ = f.GetString("finding")
 		opts.ClassHint, _ = f.GetString("class-hint")
-		opts.FixToken, _ = f.GetString("fix-token")
 		opts.GithubToken, _ = f.GetString("github-token")
 		opts.DryRun, _ = f.GetBool("dry-run")
 		opts.FixMode, _ = f.GetString("fix-mode")
@@ -43,7 +42,6 @@ func init() {
 	f.Int("analysis-id", 0, "Appknox analysis id")
 	f.String("finding", "", "Manual finding detail (when not using --file-id/--analysis-id)")
 	f.String("class-hint", "", "Manual class/symbol hint from the finding (optional)")
-	f.String("fix-token", "", "Scoped fix-service token (or env APPKNOX_AUTOFIX_FIX_TOKEN)")
 	f.String("github-token", "", "GitHub token for fetch + push (or env GITHUB_TOKEN)")
 	f.Bool("dry-run", false, "Locate + generate the fix but do not push a branch")
 	f.String("fix-mode", "agent", "How to generate the fix: 'agent' (default — LLM Edit tool via the agent SDK, no file upload) or 'server' (/v1/fix single-shot, uploads the file)")

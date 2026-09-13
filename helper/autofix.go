@@ -12,6 +12,7 @@ import (
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/appknox/appknox-go/fixservice"
 	"github.com/appknox/appknox-go/ghfetch"
+	"github.com/spf13/viper"
 )
 
 // AutofixOptions carries the flags for the client-side autofix flow.
@@ -23,7 +24,6 @@ type AutofixOptions struct {
 	AnalysisID   int    // Appknox analysis id
 	Finding      string // manual finding detail (when not using file/analysis id)
 	ClassHint    string // manual class/symbol hint
-	FixToken     string // scoped fix-service token
 	GithubToken  string // GitHub token for the --repo fetch and branch push
 	DryRun       bool   // locate + fix but do not push a branch
 	FixMode      string // "server" (default, /v1/fix) or "agent" (client-side Edit, no upload)
@@ -100,9 +100,9 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 		}
 	}
 	opts = applyCIDefaults(opts)
-	token := firstNonEmpty(opts.FixToken, os.Getenv("APPKNOX_AUTOFIX_FIX_TOKEN"))
+	token := viper.GetString("access-token")
 	if token == "" {
-		return Outcome{}, errors.New("fix-service token required (--fix-token or APPKNOX_AUTOFIX_FIX_TOKEN)")
+		return Outcome{}, errors.New("autofix needs an Appknox access token (--access-token or APPKNOX_ACCESS_TOKEN)")
 	}
 	inputs, err := resolveInputs(ctx, opts, d.fetch)
 	if err != nil {

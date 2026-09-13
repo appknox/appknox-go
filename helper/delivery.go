@@ -45,7 +45,7 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 	}
 	prURL, err := ghpr.OpenPullRequest(ctx, cfg, res.Base, res.Branch, prTitle(inputs, opts.AnalysisID), prBody(opts, inputs, patches))
 	if err != nil {
-		return Delivery{}, fmt.Errorf("pushed branch %s but failed to open a pull request (needs pull-requests: write): %w", res.Branch, err)
+		return Delivery{}, fmt.Errorf("pushed branch %s but failed to open a pull request: %w\nGITHUB_TOKEN cannot open PRs unless the workflow has pull-requests: write and the repo allows Actions to create PRs (Settings → Actions → General). Or set APPKNOX_GITHUB_TOKEN to a PAT with repo scope", res.Branch, err)
 	}
 	return Delivery{URL: prURL, Branch: res.Branch, Base: res.Base, CommitSHA: res.CommitSHA}, nil
 }

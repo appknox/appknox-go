@@ -103,8 +103,17 @@ func deps(path string, res fixservice.Result, in FindingInputs) autofixDeps {
 	}
 }
 
-func appknoxOpts(root string) AutofixOptions {
-	return AutofixOptions{RepoPath: root, FileID: 1, AnalysisID: 1, FixToken: "tok"}
+func withAccessToken(t *testing.T) {
+	t.Helper()
+	prev := viper.GetString("access-token")
+	viper.Set("access-token", "tok")
+	t.Cleanup(func() { viper.Set("access-token", prev) })
+}
+
+func appknoxOpts(t *testing.T, root string) AutofixOptions {
+	t.Helper()
+	withAccessToken(t)
+	return AutofixOptions{RepoPath: root, FileID: 1, AnalysisID: 1}
 }
 
 func oneClass(finding, remediation string) FindingInputs {
@@ -121,7 +130,7 @@ func TestRunAutofix_KnoxIQNotCompleted_StopsBeforeFetch(t *testing.T) {
 		fetched = true
 		return FindingInputs{}, nil
 	}
-	_, err := runAutofix(context.Background(), appknoxOpts(t.TempDir()), d)
+	_, err := runAutofix(context.Background(), appknoxOpts(t, t.TempDir()), d)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "knoxiq is not completed")
 	require.False(t, fetched)
@@ -136,59 +145,67 @@ func TestRunAutofix_KnoxIQCompleted_Continues(t *testing.T) {
 		require.Equal(t, 1, fileID)
 		return nil
 	}
-	out, err := runAutofix(context.Background(), appknoxOpts(root), d)
+	out, err := runAutofix(context.Background(), appknoxOpts(t, root), d)
 	require.NoError(t, err)
 	require.Equal(t, 1, checked)
 	require.Len(t, out.Patches, 1)
 }
 
 func TestRunAutofix_RequiresToken(t *testing.T) {
-	t.Setenv("APPKNOX_AUTOFIX_FIX_TOKEN", "")
+	prev := viper.GetString("access-token")
+	t.Cleanup(func() { viper.Set("access-token", prev) })
+	viper.Set("access-token", "")
 	_, err := runAutofix(context.Background(),
 		AutofixOptions{RepoPath: t.TempDir(), Finding: "x"}, defaultDeps())
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "APPKNOX_ACCESS_TOKEN")
 }
 
 func TestRunAutofix_UsesResolvedAPIHost(t *testing.T) {
+	withAccessToken(t)
 	prev := viper.GetString("host")
 	t.Cleanup(func() { viper.Set("host", prev) })
 	viper.Set("host", "https://autofix.staging.appknox.io/")
 
-	var got string
+	var gotHost, gotToken string
 	d := deps("", fixservice.Result{}, FindingInputs{})
 	d.locate = func(_ context.Context, cfg agent.Config, _ agent.Request) (string, error) {
-		got = cfg.Host
+		gotHost, gotToken = cfg.Host, cfg.Token
 		return "", nil
 	}
 	_, err := runAutofix(context.Background(),
-		AutofixOptions{RepoPath: t.TempDir(), Finding: "x", FixToken: "tok"}, d)
+		AutofixOptions{RepoPath: t.TempDir(), Finding: "x"}, d)
 	require.NoError(t, err)
-	require.Equal(t, "https://autofix.staging.appknox.io/", got)
+	require.Equal(t, "https://autofix.staging.appknox.io/", gotHost)
+	require.Equal(t, "tok", gotToken)
 }
 
 func TestRunAutofix_RejectsPlaintextRemoteAPIHost(t *testing.T) {
+	withAccessToken(t)
 	prev := viper.GetString("host")
 	t.Cleanup(func() { viper.Set("host", prev) })
 	viper.Set("host", "http://remote.example.com")
 
 	_, err := runAutofix(context.Background(),
-		AutofixOptions{RepoPath: t.TempDir(), Finding: "x", FixToken: "tok"},
+		AutofixOptions{RepoPath: t.TempDir(), Finding: "x"},
 		deps("app/A.java", fixservice.Result{}, FindingInputs{}))
 	require.Error(t, err)
 }
 
 func TestRunAutofix_Advisory_WhenLocateAbstains(t *testing.T) {
+	withAccessToken(t)
 	out, err := runAutofix(context.Background(),
-		AutofixOptions{RepoPath: t.TempDir(), Finding: "x", FixToken: "tok"},
+		AutofixOptions{RepoPath: t.TempDir(), Finding: "x"},
 		deps("", fixservice.Result{}, FindingInputs{}))
 	require.NoError(t, err)
 	require.Empty(t, out.Located)
 }
 
 func TestRunAutofix_LocateOnly_WhenNoRemediation(t *testing.T) {
+	withAccessToken(t)
 	root, rel := repoWithFile(t, "orig")
 	out, err := runAutofix(context.Background(),
-		AutofixOptions{RepoPath: root, Finding: "x", FixToken: "tok"},
+		AutofixOptions{RepoPath: root, Finding: "x"},
 		deps(rel, fixservice.Result{}, FindingInputs{}))
 	require.NoError(t, err)
 	require.Equal(t, []string{rel}, out.Located)
@@ -198,7 +215,7 @@ func TestRunAutofix_LocateOnly_WhenNoRemediation(t *testing.T) {
 func TestRunAutofix_FullFlow_PushesBranch(t *testing.T) {
 	root, rel := repoWithFile(t, "int r = new Random().nextInt();\n")
 	res := fixservice.Result{Changed: true, PatchedContent: "int r = new SecureRandom().nextInt();\n", Confidence: 0.95}
-	out, err := runAutofix(context.Background(), appknoxOpts(root),
+	out, err := runAutofix(context.Background(), appknoxOpts(t, root),
 		deps(rel, res, oneClass("Insecure Random", "use SecureRandom")))
 	require.NoError(t, err)
 	require.Len(t, out.Patches, 1)
@@ -223,7 +240,7 @@ func TestRunAutofix_MultiClass_FixesEachLocatedFile(t *testing.T) {
 		return FindingInputs{Finding: "Derived Crypto Keys",
 			ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}, nil
 	}
-	out, err := runAutofix(context.Background(), appknoxOpts(root), d)
+	out, err := runAutofix(context.Background(), appknoxOpts(t, root), d)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"app/A.java", "app/B.java"}, out.Located)
 	require.Len(t, out.Patches, 2)
@@ -252,7 +269,7 @@ func TestRunAutofix_MultiClass_PushBranch_OneBranch(t *testing.T) {
 		delivered = patches // all files pushed together in one call
 		return Delivery{URL: "https://github.com/o/r/pull/1"}, nil
 	}
-	opts := appknoxOpts(root)
+	opts := appknoxOpts(t, root)
 	opts.Repo = "appknox/mfva"
 	out, err := runAutofix(context.Background(), opts, d)
 	require.NoError(t, err)
@@ -262,7 +279,7 @@ func TestRunAutofix_MultiClass_PushBranch_OneBranch(t *testing.T) {
 
 func TestRunAutofix_DryRun_DoesNotWrite(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
-	opts := appknoxOpts(root)
+	opts := appknoxOpts(t, root)
 	opts.DryRun = true
 	out, err := runAutofix(context.Background(), opts,
 		deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r")))
@@ -275,7 +292,7 @@ func TestRunAutofix_DryRun_DoesNotWrite(t *testing.T) {
 
 func TestRunAutofix_PushBranch(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
-	opts := appknoxOpts(root)
+	opts := appknoxOpts(t, root)
 	opts.Repo = "appknox/mfva"
 	out, err := runAutofix(context.Background(), opts,
 		deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r")))
@@ -304,7 +321,7 @@ func TestRunAutofix_PushBranch_ReportsToAppknox(t *testing.T) {
 		gotOpts, gotDel, gotPatches = opts, reported, patches
 		return nil
 	}
-	opts := appknoxOpts(root)
+	opts := appknoxOpts(t, root)
 	opts.Repo = "appknox/mfva"
 	out, err := runAutofix(context.Background(), opts, d)
 	require.NoError(t, err)
@@ -323,7 +340,7 @@ func TestRunAutofix_PushBranch_ReportError(t *testing.T) {
 	d.report = func(context.Context, AutofixOptions, Delivery, []filePatch) error {
 		return errors.New("mycroft down")
 	}
-	opts := appknoxOpts(root)
+	opts := appknoxOpts(t, root)
 	opts.Repo = "appknox/mfva"
 	_, err := runAutofix(context.Background(), opts, d)
 	require.Error(t, err)
@@ -337,7 +354,7 @@ func TestRunAutofix_AgentFixMode(t *testing.T) {
 	d.submit = func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
 		return fixservice.Result{}, errors.New("server /v1/fix must NOT be called in agent mode")
 	}
-	opts := appknoxOpts(root)
+	opts := appknoxOpts(t, root)
 	opts.FixMode = "agent"
 	out, err := runAutofix(context.Background(), opts, d)
 	require.NoError(t, err)
@@ -350,7 +367,7 @@ func TestRunAutofix_AgentFixMode(t *testing.T) {
 
 func TestRunAutofix_EmptyPatchNotApplied(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
-	out, err := runAutofix(context.Background(), appknoxOpts(root),
+	out, err := runAutofix(context.Background(), appknoxOpts(t, root),
 		deps(rel, fixservice.Result{Changed: true, PatchedContent: ""}, oneClass("f", "r")))
 	require.NoError(t, err)
 	require.Empty(t, out.Patches) // empty content is not a patch
@@ -360,7 +377,7 @@ func TestRunAutofix_EmptyPatchNotApplied(t *testing.T) {
 
 func TestRunAutofix_NoChange_LeavesFile(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
-	out, err := runAutofix(context.Background(), appknoxOpts(root),
+	out, err := runAutofix(context.Background(), appknoxOpts(t, root),
 		deps(rel, fixservice.Result{Changed: false}, oneClass("f", "r")))
 	require.NoError(t, err)
 	require.Empty(t, out.Patches)
@@ -373,6 +390,6 @@ func TestRunAutofix_PropagatesSubmitError(t *testing.T) {
 	d.submit = func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
 		return fixservice.Result{}, errors.New("boom")
 	}
-	_, err := runAutofix(context.Background(), appknoxOpts(root), d)
+	_, err := runAutofix(context.Background(), appknoxOpts(t, root), d)
 	require.Error(t, err)
 }
