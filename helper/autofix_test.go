@@ -98,7 +98,7 @@ func deps(path string, res fixservice.Result, in FindingInputs) autofixDeps {
 			return agent.FixResult{Changed: true, PatchedContent: "agent-fixed\n", Diff: "-old\n+new"}, nil
 		},
 		deliver: func(context.Context, AutofixOptions, []filePatch, FindingInputs) (Delivery, error) {
-			return Delivery{URL: "https://github.com/appknox/mfva/compare/master...appknox-autofix/analysis-1?expand=1"}, nil
+			return Delivery{URL: "https://github.com/appknox/mfva/pull/1"}, nil
 		},
 	}
 }
@@ -202,7 +202,7 @@ func TestRunAutofix_FullFlow_PushesBranch(t *testing.T) {
 		deps(rel, res, oneClass("Insecure Random", "use SecureRandom")))
 	require.NoError(t, err)
 	require.Len(t, out.Patches, 1)
-	require.Contains(t, out.BranchURL, "compare")
+	require.Contains(t, out.BranchURL, "/pull/")
 	require.False(t, out.Patches[0].Applied)
 	got, _ := os.ReadFile(filepath.Join(root, rel))
 	require.Contains(t, string(got), "Random().nextInt") // local checkout is not rewritten
@@ -227,7 +227,7 @@ func TestRunAutofix_MultiClass_FixesEachLocatedFile(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"app/A.java", "app/B.java"}, out.Located)
 	require.Len(t, out.Patches, 2)
-	require.Contains(t, out.BranchURL, "compare")
+	require.Contains(t, out.BranchURL, "/pull/")
 	for _, rel := range []string{"app/A.java", "app/B.java"} {
 		got, _ := os.ReadFile(filepath.Join(root, rel))
 		require.Equal(t, "orig\n", string(got)) // pushed, not written locally
@@ -250,14 +250,14 @@ func TestRunAutofix_MultiClass_PushBranch_OneBranch(t *testing.T) {
 	}
 	d.deliver = func(_ context.Context, _ AutofixOptions, patches []filePatch, _ FindingInputs) (Delivery, error) {
 		delivered = patches // all files pushed together in one call
-		return Delivery{URL: "https://github.com/o/r/compare/master...b?expand=1"}, nil
+		return Delivery{URL: "https://github.com/o/r/pull/1"}, nil
 	}
 	opts := appknoxOpts(root)
 	opts.Repo = "appknox/mfva"
 	out, err := runAutofix(context.Background(), opts, d)
 	require.NoError(t, err)
 	require.Len(t, delivered, 2) // both files in ONE deliver call → one branch
-	require.Contains(t, out.BranchURL, "compare")
+	require.Contains(t, out.BranchURL, "/pull/")
 }
 
 func TestRunAutofix_DryRun_DoesNotWrite(t *testing.T) {
@@ -280,7 +280,7 @@ func TestRunAutofix_PushBranch(t *testing.T) {
 	out, err := runAutofix(context.Background(), opts,
 		deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r")))
 	require.NoError(t, err)
-	require.Contains(t, out.BranchURL, "compare")
+	require.Contains(t, out.BranchURL, "/pull/")
 	require.False(t, out.Patches[0].Applied)
 	got, _ := os.ReadFile(filepath.Join(root, rel))
 	require.Equal(t, "orig\n", string(got))
@@ -289,7 +289,7 @@ func TestRunAutofix_PushBranch(t *testing.T) {
 func TestRunAutofix_PushBranch_ReportsToAppknox(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
 	del := Delivery{
-		URL:    "https://github.com/appknox/mfva/compare/master...appknox-autofix/analysis-1?expand=1",
+		URL:    "https://github.com/appknox/mfva/pull/1",
 		Branch: "appknox-autofix/analysis-1", Base: "master",
 		CommitSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
@@ -343,7 +343,7 @@ func TestRunAutofix_AgentFixMode(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Patches, 1)
 	require.Equal(t, "agent-fixed\n", out.Patches[0].Content)
-	require.Contains(t, out.BranchURL, "compare")
+	require.Contains(t, out.BranchURL, "/pull/")
 	got, _ := os.ReadFile(filepath.Join(root, rel))
 	require.Equal(t, "orig\n", string(got))
 }

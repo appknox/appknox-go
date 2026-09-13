@@ -1,8 +1,5 @@
-// Package ghpr pushes a single-file fix to a new branch on GitHub via the REST
-// API: create a branch off the base ref and commit the patched file. It does NOT
-// open a PR — it returns a compare URL you (or CI) can open the PR from. Client-
-// side only: uses the caller's GitHub token (the CI's ambient GITHUB_TOKEN);
-// nothing is sent to Appknox. Pure stdlib, no new dependency.
+// Package ghpr pushes patched files to a new GitHub branch and opens a pull
+// request. Client-side only: uses the caller's GitHub token (CI GITHUB_TOKEN).
 package ghpr
 
 import (
@@ -69,9 +66,9 @@ func PushBranch(ctx context.Context, cfg Config, ch Change) (Result, error) {
 	return PushFiles(ctx, cfg, ch.Branch, []FileChange{{Path: ch.Path, Content: ch.Content, Message: ch.Message}})
 }
 
-// PushFiles creates branch off the base ref and commits each patched file to it
-// (one commit per file), returning a compare URL that pre-fills a PR. Idempotent:
-// an existing branch is reused. It does not open the PR itself.
+// PushFiles creates a branch off the base ref and commits each patched file
+// (one commit per file). Idempotent: an existing branch is reused. The Result
+// URL is a compare link; OpenPullRequest replaces it with the opened PR.
 func PushFiles(ctx context.Context, cfg Config, branch string, files []FileChange) (Result, error) {
 	if cfg.Owner == "" || cfg.Repo == "" || cfg.Token == "" {
 		return Result{}, errors.New("ghpr: owner, repo, and token are required")
@@ -217,6 +214,59 @@ func contentsURL(cfg Config, path string) string {
 		segs[i] = url.PathEscape(s)
 	}
 	return fmt.Sprintf("%s/repos/%s/%s/contents/%s", cfg.apiBase(), cfg.Owner, cfg.Repo, strings.Join(segs, "/"))
+}
+
+// OpenPullRequest opens a PR from branch into base and returns its html_url.
+// If that PR already exists, the existing URL is returned.
+func OpenPullRequest(ctx context.Context, cfg Config, base, branch, title, body string) (string, error) {
+	if cfg.Owner == "" || cfg.Repo == "" || cfg.Token == "" {
+		return "", errors.New("ghpr: owner, repo, and token are required")
+	}
+	if base == "" || branch == "" {
+		return "", errors.New("ghpr: base and branch are required")
+	}
+	if title == "" {
+		title = "Appknox autofix"
+	}
+	var out struct {
+		HTMLURL string `json:"html_url"`
+	}
+	u := fmt.Sprintf("%s/repos/%s/%s/pulls", cfg.apiBase(), cfg.Owner, cfg.Repo)
+	err := cfg.do(ctx, http.MethodPost, u, map[string]string{
+		"title": title,
+		"head":  branch,
+		"base":  base,
+		"body":  body,
+	}, &out)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			return findExistingPR(ctx, cfg, base, branch)
+		}
+		return "", err
+	}
+	if out.HTMLURL == "" {
+		return "", errors.New("ghpr: pull request created but html_url was empty")
+	}
+	return out.HTMLURL, nil
+}
+
+func findExistingPR(ctx context.Context, cfg Config, base, branch string) (string, error) {
+	var out []struct {
+		HTMLURL string `json:"html_url"`
+	}
+	q := url.Values{
+		"head":  {cfg.Owner + ":" + branch},
+		"base":  {base},
+		"state": {"open"},
+	}
+	u := fmt.Sprintf("%s/repos/%s/%s/pulls?%s", cfg.apiBase(), cfg.Owner, cfg.Repo, q.Encode())
+	if err := cfg.do(ctx, http.MethodGet, u, nil, &out); err != nil {
+		return "", err
+	}
+	if len(out) == 0 || out[0].HTMLURL == "" {
+		return "", fmt.Errorf("ghpr: pull request already exists but could not be found for %s", branch)
+	}
+	return out[0].HTMLURL, nil
 }
 
 // compareURL is the "open a PR" page for base...branch.

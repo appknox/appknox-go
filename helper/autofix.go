@@ -345,13 +345,13 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 	printDelivery(opts, out)
 }
 
-// printDelivery renders the delivery outcome (dry-run or pushed branch).
+// printDelivery renders the delivery outcome (dry-run or opened PR).
 func printDelivery(opts AutofixOptions, out Outcome) {
 	switch {
 	case opts.DryRun:
 		fmt.Printf("\n[dry-run] not pushing %d patched file(s).\n", len(out.Patches))
 	case out.BranchURL != "":
-		fmt.Printf("\nPushed %d file(s) to a branch — open a PR: %s\n", len(out.Patches), out.BranchURL)
+		fmt.Printf("\nOpened PR for %d file(s): %s\n", len(out.Patches), out.BranchURL)
 		if out.CommitSHA != "" {
 			fmt.Printf("commit: %s\n", out.CommitSHA)
 		}

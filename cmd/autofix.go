@@ -9,10 +9,10 @@ import (
 var autofixCmd = &cobra.Command{
 	Use:   "autofix",
 	Short: "Locate the source file to fix for a finding (client-side).",
-	Long: `Locate the source file for a scan finding, generate a fix, and push it to a
-new GitHub branch. Repo, checkout, token, and source PR come from CI
-(GITHUB_REPOSITORY, GITHUB_WORKSPACE, GITHUB_TOKEN, GITHUB_REF / event payload).
-When --file-id and --analysis-id are set, the delivery is recorded on Appknox.
+	Long: `Locate the source file for a scan finding, generate a fix, open a GitHub
+pull request, and record it on Appknox. Repo, checkout, token, and source PR
+come from CI (GITHUB_REPOSITORY, GITHUB_WORKSPACE, GITHUB_TOKEN, GITHUB_REF).
+When --file-id and --analysis-id are set, the PR is saved as an AutofixPR.
 
 The repository stays on this machine; only model turns route through Mycroft
 ({APPKNOX_API_HOST}/api/autofix). No provider key is needed here.`,

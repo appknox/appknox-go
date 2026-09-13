@@ -12,6 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPrTitle(t *testing.T) {
+	require.Equal(t, "fix(autofix): Weak PRNG (analysis 42)",
+		prTitle(FindingInputs{Finding: "Weak PRNG"}, 42))
+	require.Equal(t, "fix(autofix): security finding",
+		prTitle(FindingInputs{}, 0))
+}
+
 func TestPrBranch(t *testing.T) {
 	require.Equal(t, "appknox-autofix/analysis-42", prBranch(42, "a.java"))
 	require.Contains(t, prBranch(0, "app/Main.java"), "appknox-autofix/fix-") // no id → hashed
@@ -49,7 +56,7 @@ func TestBuildAutofixPR(t *testing.T) {
 	pr := buildAutofixPR(
 		AutofixOptions{FileID: 118, AnalysisID: 11754, Repo: "appknox/mfva", Ref: "master"},
 		Delivery{
-			URL:    "https://github.com/appknox/mfva/compare/master...appknox-autofix/analysis-11754?expand=1",
+			URL:    "https://github.com/appknox/mfva/pull/42",
 			Branch: "appknox-autofix/analysis-11754", Base: "master",
 			CommitSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		},
@@ -60,6 +67,7 @@ func TestBuildAutofixPR(t *testing.T) {
 	require.Equal(t, "master", pr.BaseBranch)
 	require.Equal(t, "appknox-autofix/analysis-11754", pr.Branch)
 	require.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", pr.CommitSHA)
+	require.Equal(t, "https://github.com/appknox/mfva/pull/42", pr.PRURL)
 	require.Equal(t, []string{"app/src/Main.java"}, pr.PatchedFiles)
 	require.Nil(t, pr.SourcePR)
 }
@@ -70,7 +78,7 @@ func TestBuildAutofixPR_SourcePRFromCI(t *testing.T) {
 	pr := buildAutofixPR(
 		AutofixOptions{FileID: 118, AnalysisID: 11754, Repo: "appknox/mfva", Ref: "master"},
 		Delivery{
-			URL:    "https://github.com/appknox/mfva/compare/master...appknox-autofix/analysis-11754?expand=1",
+			URL:    "https://github.com/appknox/mfva/pull/42",
 			Branch: "appknox-autofix/analysis-11754", Base: "master",
 			CommitSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		},
@@ -100,7 +108,7 @@ func TestReportAutofixPR_PostsPayload(t *testing.T) {
 	err := reportAutofixPRWith(context.Background(), client,
 		AutofixOptions{FileID: 118, AnalysisID: 11754, Repo: "appknox/mfva"},
 		Delivery{
-			URL:    "https://github.com/appknox/mfva/compare/master...b?expand=1",
+			URL:    "https://github.com/appknox/mfva/pull/42",
 			Branch: "appknox-autofix/analysis-11754", Base: "master",
 			CommitSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		},

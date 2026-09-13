@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/appknox/appknox-go/ghpr"
@@ -21,8 +22,8 @@ type Delivery struct {
 	CommitSHA string
 }
 
-// deliverBranch pushes all patched files to one new branch on GitHub (no PR
-// opened) and returns a compare URL.
+// deliverBranch pushes patched files to a new branch, opens a GitHub PR, and
+// returns the PR URL for Mycroft's AutofixPR row.
 func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch, inputs FindingInputs) (Delivery, error) {
 	opts = applyCIDefaults(opts)
 	owner, name, err := splitRepo(opts.Repo)
@@ -37,13 +38,48 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 	for i, p := range patches {
 		files[i] = ghpr.FileChange{Path: p.Path, Content: p.Content, Message: commitMessage(inputs, p.Path)}
 	}
-	res, err := ghpr.PushFiles(ctx,
-		ghpr.Config{Owner: owner, Repo: name, BaseRef: opts.Ref, Token: token},
-		prBranch(opts.AnalysisID, patches[0].Path), files)
+	cfg := ghpr.Config{Owner: owner, Repo: name, BaseRef: opts.Ref, Token: token, APIBase: os.Getenv("GITHUB_API_URL")}
+	res, err := ghpr.PushFiles(ctx, cfg, prBranch(opts.AnalysisID, patches[0].Path), files)
 	if err != nil {
 		return Delivery{}, err
 	}
-	return Delivery{URL: res.URL, Branch: res.Branch, Base: res.Base, CommitSHA: res.CommitSHA}, nil
+	prURL, err := ghpr.OpenPullRequest(ctx, cfg, res.Base, res.Branch, prTitle(inputs, opts.AnalysisID), prBody(opts, inputs, patches))
+	if err != nil {
+		return Delivery{}, fmt.Errorf("pushed branch %s but failed to open a pull request (needs pull-requests: write): %w", res.Branch, err)
+	}
+	return Delivery{URL: prURL, Branch: res.Branch, Base: res.Base, CommitSHA: res.CommitSHA}, nil
+}
+
+func prTitle(inputs FindingInputs, analysisID int) string {
+	name := inputs.Finding
+	if name == "" {
+		name = "security finding"
+	}
+	if analysisID > 0 {
+		return fmt.Sprintf("fix(autofix): %s (analysis %d)", name, analysisID)
+	}
+	return fmt.Sprintf("fix(autofix): %s", name)
+}
+
+func prBody(opts AutofixOptions, inputs FindingInputs, patches []filePatch) string {
+	var b strings.Builder
+	b.WriteString("Appknox autofix generated this change from a scan finding.\n\n")
+	if opts.AnalysisID > 0 {
+		fmt.Fprintf(&b, "- Analysis: `%d`\n", opts.AnalysisID)
+	}
+	if opts.FileID > 0 {
+		fmt.Fprintf(&b, "- File id: `%d`\n", opts.FileID)
+	}
+	if inputs.Finding != "" {
+		fmt.Fprintf(&b, "- Finding: %s\n", inputs.Finding)
+	}
+	if len(patches) > 0 {
+		b.WriteString("- Patched files:\n")
+		for _, p := range patches {
+			fmt.Fprintf(&b, "  - `%s`\n", p.Path)
+		}
+	}
+	return b.String()
 }
 
 // reportAutofixPR POSTs the pushed branch to Mycroft so the dashboard can list it.

@@ -194,3 +194,45 @@ func TestWebBase(t *testing.T) {
 	require.Equal(t, "https://github.com", webBase(Config{}))
 	require.Equal(t, "https://ghe.corp", webBase(Config{APIBase: "https://ghe.corp/api/v3"}))
 }
+
+func TestOpenPullRequest_CreatesPR(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/repos/appknox/mfva/pulls", r.URL.Path)
+		var b map[string]string
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&b))
+		require.Equal(t, "master", b["base"])
+		require.Equal(t, "appknox-autofix/analysis-42", b["head"])
+		require.Contains(t, b["title"], "autofix")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"html_url": "https://github.com/appknox/mfva/pull/9"})
+	}))
+	defer srv.Close()
+	url, err := OpenPullRequest(context.Background(),
+		Config{Owner: "appknox", Repo: "mfva", Token: "ghtok", APIBase: srv.URL},
+		"master", "appknox-autofix/analysis-42", "fix(autofix): weak PRNG", "body")
+	require.NoError(t, err)
+	require.Equal(t, "https://github.com/appknox/mfva/pull/9", url)
+}
+
+func TestOpenPullRequest_ReusesExisting(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/pulls":
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]string{"message": "A pull request already exists for o:appknox-autofix/analysis-42"})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/pulls":
+			require.Equal(t, "o:appknox-autofix/analysis-42", r.URL.Query().Get("head"))
+			require.Equal(t, "master", r.URL.Query().Get("base"))
+			_ = json.NewEncoder(w).Encode([]map[string]string{{"html_url": "https://github.com/o/r/pull/3"}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	url, err := OpenPullRequest(context.Background(),
+		Config{Owner: "o", Repo: "r", Token: "ghtok", APIBase: srv.URL},
+		"master", "appknox-autofix/analysis-42", "t", "")
+	require.NoError(t, err)
+	require.Equal(t, "https://github.com/o/r/pull/3", url)
+}
