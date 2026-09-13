@@ -44,9 +44,24 @@ func repoPathFromCI() string {
 	return ""
 }
 
-// refFromCI is the PR base branch (compare target). Empty on non-PR pipelines.
+// refFromCI is the PR base branch (compare target).
+// Prefer GITHUB_BASE_REF on pull_request jobs; on push/workflow_dispatch use
+// the branch from GITHUB_REF (refs/heads/...). Empty falls through to the
+// repo default branch in ghpr.
 func refFromCI() string {
-	return strings.TrimSpace(os.Getenv("GITHUB_BASE_REF"))
+	if r := strings.TrimSpace(os.Getenv("GITHUB_BASE_REF")); r != "" {
+		return r
+	}
+	return branchFromGitHubRef(os.Getenv("GITHUB_REF"))
+}
+
+func branchFromGitHubRef(ref string) string {
+	const heads = "refs/heads/"
+	ref = strings.TrimSpace(ref)
+	if strings.HasPrefix(ref, heads) {
+		return strings.TrimPrefix(ref, heads)
+	}
+	return ""
 }
 
 func validRepoSpec(spec string) bool {

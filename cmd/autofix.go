@@ -36,7 +36,7 @@ The repository stays on this machine; only model turns route through Mycroft
 func init() {
 	RootCmd.AddCommand(autofixCmd)
 	f := autofixCmd.Flags()
-	f.String("ref", "", "Git ref (branch, tag, or SHA); CI uses GITHUB_BASE_REF if empty")
+	f.String("ref", "", "PR base branch; CI uses GITHUB_BASE_REF, else the push branch (GITHUB_REF)")
 	f.String("repo-path", "", "Path to an already-checked-out repo (CI uses GITHUB_WORKSPACE if empty)")
 	f.Int("file-id", 0, "Appknox file id (fixes every analysis with class hints + remediation)")
 	f.String("finding", "", "Manual finding detail (when not using --file-id)")

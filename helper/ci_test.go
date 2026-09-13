@@ -11,6 +11,7 @@ func clearCIRepoEnv(t *testing.T) {
 	t.Setenv("GITHUB_REPOSITORY", "")
 	t.Setenv("GITHUB_WORKSPACE", "")
 	t.Setenv("GITHUB_BASE_REF", "")
+	t.Setenv("GITHUB_REF", "")
 	t.Setenv("CI_PROJECT_PATH", "")
 	t.Setenv("CI_PROJECT_DIR", "")
 	t.Setenv("CIRCLE_PROJECT_USERNAME", "")
@@ -28,6 +29,29 @@ func TestApplyCIDefaults_GitHubActions(t *testing.T) {
 	require.Equal(t, "appknox/mfva", got.Repo)
 	require.Equal(t, ws, got.RepoPath)
 	require.Equal(t, "master", got.Ref)
+}
+
+func TestApplyCIDefaults_GitHubPushBranch(t *testing.T) {
+	clearCIRepoEnv(t)
+	t.Setenv("GITHUB_REF", "refs/heads/feature/autofixbranch")
+
+	got := applyCIDefaults(AutofixOptions{})
+	require.Equal(t, "feature/autofixbranch", got.Ref)
+}
+
+func TestApplyCIDefaults_PrefersPullRequestBase(t *testing.T) {
+	clearCIRepoEnv(t)
+	t.Setenv("GITHUB_BASE_REF", "master")
+	t.Setenv("GITHUB_REF", "refs/pull/15/merge")
+
+	got := applyCIDefaults(AutofixOptions{})
+	require.Equal(t, "master", got.Ref)
+}
+
+func TestRefFromCI_IgnoresPullMergeRef(t *testing.T) {
+	clearCIRepoEnv(t)
+	t.Setenv("GITHUB_REF", "refs/pull/15/merge")
+	require.Empty(t, refFromCI())
 }
 
 func TestApplyCIDefaults_DoesNotOverrideSetFields(t *testing.T) {
