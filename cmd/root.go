@@ -101,23 +101,36 @@ func defaultConfigFile() (string, error) {
 	return filepath.Join(homeDir, ".config", "appknox.json"), nil
 }
 
-// createDefaultConfigFile creates an empty config file at configFile
-// (making its parent directory if needed) and registers the path with
-// viper directly. WriteConfig only falls back to the (Windows-broken)
-// search-path lookup when no config file has been registered yet, so
-// without this last step, the first `config set`/`init` on a machine would
-// still fail even with the path resolution above fixed.
+// createDefaultConfigFile creates configFile containing an empty JSON object
+// (making its parent directory if needed) and registers the path with viper
+// directly. It must write valid JSON, not just an empty file: an empty file
+// can never be parsed by ReadInConfig, so a blank file would leave every
+// future command re-triggering warnAndRecreateConfigFile forever instead of
+// actually recovering. Writing the path to viper also matters on its own —
+// WriteConfig only falls back to the (Windows-broken) search-path lookup
+// when no config file has been registered yet, so without this last step,
+// the first `config set`/`init` on a machine would still fail even with the
+// path resolution above fixed.
 func createDefaultConfigFile(configFile string) error {
 	if err := os.MkdirAll(filepath.Dir(configFile), 0o700); err != nil {
 		return err
 	}
-	f, err := os.Create(configFile)
-	if err != nil {
+	if err := os.WriteFile(configFile, []byte("{}"), 0o600); err != nil {
 		return err
 	}
-	f.Close()
 	viper.SetConfigFile(configFile)
 	return nil
+}
+
+// warnAndRecreateConfigFile (re)creates configFile, warning first if a file
+// already existed there. The warning goes to stderr, never stdout: CI
+// scripts commonly do `file_id=$(./appknox upload ...)`, and anything this
+// prints to stdout becomes part of that captured value.
+func warnAndRecreateConfigFile(configFile string) error {
+	if _, statErr := os.Stat(configFile); statErr == nil {
+		helper.PrintError("Warning: config file exists but could not be read; recreating it.")
+	}
+	return createDefaultConfigFile(configFile)
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -149,10 +162,7 @@ func initConfig() {
 		fmt.Println(err.Error())
 		os.Exit(1)
 	}
-	if _, statErr := os.Stat(configFile); statErr == nil {
-		fmt.Println("Warning: config file exists but could not be read; recreating it.")
-	}
-	if err := createDefaultConfigFile(configFile); err != nil {
+	if err := warnAndRecreateConfigFile(configFile); err != nil {
 		fmt.Println(err.Error())
 		os.Exit(1)
 	}
