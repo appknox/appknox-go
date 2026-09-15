@@ -23,7 +23,7 @@ type Delivery struct {
 }
 
 // deliverBranch pushes patched files to a new branch, opens a GitHub PR, and
-// returns the PR URL for Mycroft's AutofixPR row.
+// returns the PR URL for Mycroft's KnoxIQ AutofixPR row.
 func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch) (Delivery, error) {
 	opts = applyCIDefaults(opts)
 	owner, name, err := splitRepo(opts.Repo)
@@ -96,7 +96,7 @@ func uniqueFindings(patches []filePatch) []string {
 	return out
 }
 
-// reportAutofixPR POSTs the pushed branch to Mycroft so the dashboard can list it.
+// reportAutofixPR POSTs the pushed branch to KnoxIQ so the dashboard can list it.
 // Skipped when --file-id is not set (manual --finding has nothing to attach to).
 func reportAutofixPR(ctx context.Context, opts AutofixOptions, d Delivery, patches []filePatch) error {
 	return reportAutofixPRWith(ctx, getClient(), opts, d, patches)
@@ -106,7 +106,7 @@ func reportAutofixPRWith(ctx context.Context, client *appknox.Client, opts Autof
 	if opts.FileID <= 0 {
 		return nil
 	}
-	_, _, err := client.Files.CreateAutofixPR(ctx, opts.FileID, buildAutofixPR(opts, d, patches))
+	_, _, err := client.KnoxIQ.CreateAutofixPR(ctx, opts.FileID, buildAutofixPR(opts, d, patches))
 	return err
 }
 

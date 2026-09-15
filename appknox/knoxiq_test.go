@@ -2,6 +2,7 @@ package appknox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
@@ -95,5 +96,69 @@ func TestKnoxIQ_ListCICDAnalyses_404(t *testing.T) {
 	_, _, err := client.KnoxIQ.ListCICDAnalyses(context.Background(), 1, nil)
 	if err == nil {
 		t.Errorf("KnoxIQ.ListCICDAnalyses expected a 404 error, got nil")
+	}
+}
+
+func TestAutofixPR_marshall(t *testing.T) {
+	testJSONMarshal(t, &AutofixPR{}, `{"repo":"","base_branch":"","branch":"","pr_url":""}`)
+	u := &AutofixPR{
+		ID:           1,
+		File:         118,
+		Repo:         "appknox/mfva",
+		BaseBranch:   "master",
+		Branch:       "appknox-autofix/analysis-118",
+		PRURL:        "https://github.com/appknox/mfva/compare/master...b",
+		CommitSHA:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PatchedFiles: []string{"app/src/Main.java"},
+	}
+	want := `{
+		"id": 1,
+		"file": 118,
+		"repo": "appknox/mfva",
+		"base_branch": "master",
+		"branch": "appknox-autofix/analysis-118",
+		"pr_url": "https://github.com/appknox/mfva/compare/master...b",
+		"commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"patched_files": ["app/src/Main.java"]
+	}`
+	testJSONMarshal(t, u, want)
+}
+
+func TestKnoxIQService_CreateAutofixPR(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/knoxiq/file/118/autofix_prs", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "POST")
+		var got AutofixPR
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if got.CommitSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+			t.Errorf("commit_sha = %q", got.CommitSHA)
+		}
+		if got.Branch != "appknox-autofix/analysis-118" {
+			t.Errorf("branch = %q", got.Branch)
+		}
+		fmt.Fprint(w, `{"id":9,"file":118,"repo":"appknox/mfva","base_branch":"master","branch":"appknox-autofix/analysis-118","pr_url":"https://github.com/appknox/mfva/compare/master...b","commits":[{"id":3,"commit_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","patched_files":["app/src/Main.java"]}]}`)
+	})
+
+	in := &AutofixPR{
+		Repo:         "appknox/mfva",
+		BaseBranch:   "master",
+		Branch:       "appknox-autofix/analysis-118",
+		PRURL:        "https://github.com/appknox/mfva/compare/master...b",
+		CommitSHA:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PatchedFiles: []string{"app/src/Main.java"},
+	}
+	got, _, err := client.KnoxIQ.CreateAutofixPR(context.Background(), 118, in)
+	if err != nil {
+		t.Fatalf("KnoxIQ.CreateAutofixPR returned error: %v", err)
+	}
+	if got.ID != 9 || got.File != 118 {
+		t.Errorf("CreateAutofixPR returned %+v", got)
+	}
+	if len(got.Commits) != 1 || got.Commits[0].CommitSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Errorf("CreateAutofixPR commits = %+v", got.Commits)
 	}
 }

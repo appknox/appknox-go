@@ -3,24 +3,51 @@
 // The model plans and calls local read-only tools (read_file, grep, glob) over
 // the checked-out repository and returns the single source file to fix. Only the
 // model turns leave the machine, and they are routed through Mycroft
-// ({APPKNOX_API_HOST}/api/autofix + a PAT, never a provider key). Mycroft
-// forwards to Sherrinford, which injects the server-held provider key.
+// ({APPKNOX_API_HOST}/api/knoxiq/autofix/ + a PAT, never a provider key).
+// Mycroft forwards to Sherrinford, which injects the server-held provider key.
 package agent
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
-// autofixBaseURL is the Mycroft autofix prefix on the same API host. The SDK
-// appends /v1/messages → POST {APPKNOX_API_HOST}/api/autofix/v1/messages.
+const (
+	autofixMessagesPath     = "/api/knoxiq/autofix/"
+	anthropicMessagesSuffix = "/v1/messages"
+)
+
+// autofixBaseURL is Mycroft's KnoxIQ autofix proxy on the same API host.
+// The Anthropic SDK still appends /v1/messages; rewriteAutofixMessages
+// strips that so the POST lands on /api/knoxiq/autofix/.
 func autofixBaseURL(host string) string {
-	return strings.TrimRight(host, "/") + "/api/autofix"
+	return strings.TrimRight(host, "/") + autofixMessagesPath
+}
+
+// rewriteAutofixMessages maps the SDK's /v1/messages path onto Mycroft's
+// KnoxIQ proxy. Query strings (e.g. beta=true) are left intact.
+func rewriteAutofixMessages(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	if strings.HasSuffix(req.URL.Path, anthropicMessagesSuffix) {
+		req.URL.Path = strings.TrimSuffix(req.URL.Path, anthropicMessagesSuffix)
+		if !strings.HasSuffix(req.URL.Path, "/") {
+			req.URL.Path += "/"
+		}
+	}
+	return next(req)
+}
+
+func newAutofixSDK(cfg Config) sdk.Client {
+	return sdk.NewClient(
+		option.WithBaseURL(autofixBaseURL(cfg.Host)),
+		option.WithAPIKey(cfg.Token),
+		option.WithMiddleware(rewriteAutofixMessages),
+	)
 }
 
 const (
@@ -36,7 +63,7 @@ const locateSystemPrompt = "You are a security code-locating assistant. A SAST s
 
 // Config uses the same Mycroft API host as every other CLI command.
 type Config struct {
-	Host          string // APPKNOX_API_HOST; messages go to {Host}/api/autofix
+	Host          string // APPKNOX_API_HOST; messages go to {Host}/api/knoxiq/autofix/
 	Token         string // Appknox PAT presented to Mycroft (not a provider key)
 	Model         string // optional; defaults to Claude Sonnet
 	MaxTokens     int64  // optional; defaults to defaultMaxTokens
@@ -78,10 +105,7 @@ func sdkLocate(ctx context.Context, cfg Config, req Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	client := sdk.NewClient(
-		option.WithBaseURL(autofixBaseURL(cfg.Host)),
-		option.WithAPIKey(cfg.Token),
-	)
+	client := newAutofixSDK(cfg)
 	runner := client.Beta.Messages.NewToolRunner(tools, locateParams(cfg, req))
 	final, err := runner.RunToCompletion(ctx)
 	if err != nil {

@@ -3,6 +3,7 @@ package appknox
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/appknox/appknox-go/appknox/enums"
 )
@@ -114,4 +115,41 @@ func (s *KnoxIQService) ListCICDAnalyses(ctx context.Context, fileID int, opt *A
 		return nil, nil, err
 	}
 	return drfResponse.Results, &drfResponse, nil
+}
+
+// AutofixPRCommitRecord is one delivered commit on an AutofixPR.
+type AutofixPRCommitRecord struct {
+	ID           int        `json:"id,omitempty"`
+	CommitSHA    string     `json:"commit_sha,omitempty"`
+	PatchedFiles []string   `json:"patched_files,omitempty"`
+	CreatedOn    *time.Time `json:"created_on,omitempty"`
+}
+
+// AutofixPR is a delivered autofix GitHub PR for one scanned file.
+// CommitSHA and PatchedFiles are write-only on POST; the response lists them
+// under Commits as AutofixPRCommitRecord rows.
+type AutofixPR struct {
+	ID           int                     `json:"id,omitempty"`
+	File         int                     `json:"file,omitempty"`
+	Repo         string                  `json:"repo"`
+	BaseBranch   string                  `json:"base_branch"`
+	Branch       string                  `json:"branch"`
+	PRURL        string                  `json:"pr_url"`
+	CommitSHA    string                  `json:"commit_sha,omitempty"`
+	PatchedFiles []string                `json:"patched_files,omitempty"`
+	Commits      []AutofixPRCommitRecord `json:"commits,omitempty"`
+	CreatedOn    *time.Time              `json:"created_on,omitempty"`
+	UpdatedOn    *time.Time              `json:"updated_on,omitempty"`
+}
+
+// CreateAutofixPR records a delivered autofix: upserts the PR, appends a commit.
+func (s *KnoxIQService) CreateAutofixPR(ctx context.Context, fileID int, pr *AutofixPR) (*AutofixPR, *Response, error) {
+	u := fmt.Sprintf("api/knoxiq/file/%d/autofix_prs", fileID)
+	req, err := s.client.NewRequest("POST", u, pr)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out AutofixPR
+	resp, err := s.client.Do(ctx, req, &out)
+	return &out, resp, err
 }

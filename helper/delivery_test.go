@@ -79,7 +79,7 @@ func TestReportAutofixPR_PostsPayload(t *testing.T) {
 	var got appknox.AutofixPR
 	client := testAppknoxClient(t, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
-		require.Equal(t, "/api/v2/files/118/autofix_prs", r.URL.Path)
+		require.Equal(t, "/api/knoxiq/file/118/autofix_prs", r.URL.Path)
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "file": 118})

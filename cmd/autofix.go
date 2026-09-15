@@ -16,7 +16,7 @@ When --file-id is set, every fixable analysis on that file is processed and
 the PR is saved as an AutofixPR.
 
 The repository stays on this machine; only model turns route through Mycroft
-({APPKNOX_API_HOST}/api/autofix) using APPKNOX_ACCESS_TOKEN. No provider key is needed here.`,
+({APPKNOX_API_HOST}/api/knoxiq/autofix/) using APPKNOX_ACCESS_TOKEN. No provider key is needed here.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		f := cmd.Flags()
 		opts := helper.AutofixOptions{}

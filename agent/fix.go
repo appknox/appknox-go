@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/toolrunner"
 )
 
@@ -84,10 +83,7 @@ func sdkFix(ctx context.Context, cfg Config, req FixRequest, edits *[]editRecord
 	if err != nil {
 		return err
 	}
-	client := sdk.NewClient(
-		option.WithBaseURL(autofixBaseURL(cfg.Host)),
-		option.WithAPIKey(cfg.Token),
-	)
+	client := newAutofixSDK(cfg)
 	runner := client.Beta.Messages.NewToolRunner(tools, runnerParams(cfg, fixSystemPrompt, fixUserPrompt(req)))
 	_, err = runner.RunToCompletion(ctx)
 	return err
