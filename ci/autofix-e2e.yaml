@@ -93,7 +93,7 @@ env:
   # holds the provider key. SHERRINFORD_URL is gone for that reason rather than
   # by oversight: a separate gateway URL could drift from the API host, and a
   # run pointed at a mismatched pair failed at the first model turn.
-  APPKNOX_API_HOST: https://autofix.staging.appknox.io
+  APPKNOX_API_HOST: https://autofix.staging.appknox.io/
   AUTOFIX_CLI_REF: autofix-v3
 
 jobs:
