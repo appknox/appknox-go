@@ -24,6 +24,63 @@ func writeRepo(t *testing.T, files map[string]string) string {
 	return root
 }
 
+// agp8NoBuildConfig is AndroGoat's shape: AGP 8, viewBinding on, buildConfig
+// never enabled -- so the class is never generated.
+func agp8NoBuildConfig() map[string]string {
+	return map[string]string{
+		"build.gradle":     "buildscript {\n dependencies {\n  classpath 'com.android.tools.build:gradle:8.13.1'\n }\n}\n",
+		"app/build.gradle": "android {\n compileSdkVersion 34\n buildFeatures {\n  viewBinding true\n }\n}\n",
+	}
+}
+
+// AndroGoat, 2026-09-16: once the brace break was fixed, the next run wrote
+// `if (BuildConfig.DEBUG)` into a file in the module's own package -- no import,
+// so the import rule never saw it -- and kotlinc answered "Unresolved
+// reference: BuildConfig".
+func TestVerifyPatchRejectsBareBuildConfigWhenNotGenerated(t *testing.T) {
+	root := writeRepo(t, agp8NoBuildConfig())
+	original := "package a\n\nclass A {\n    fun f() {\n    }\n}\n"
+	patched := "package a\n\nclass A {\n    fun f() {\n        if (BuildConfig.DEBUG) { log() }\n    }\n}\n"
+
+	v := verifyPatch(root, "app/src/main/java/a/A.kt", original, patched)
+
+	require.NotNil(t, v)
+	require.Equal(t, "buildconfig-not-generated", v.Rule)
+}
+
+// The same reference is perfectly legal once a module asks for the class.
+func TestVerifyPatchAcceptsBuildConfigWhenEnabled(t *testing.T) {
+	files := agp8NoBuildConfig()
+	files["app/build.gradle"] = "android {\n compileSdkVersion 34\n buildFeatures {\n  buildConfig true\n }\n}\n"
+	root := writeRepo(t, files)
+	original := "package a\n\nclass A {\n    fun f() {\n    }\n}\n"
+	patched := "package a\n\nclass A {\n    fun f() {\n        if (BuildConfig.DEBUG) { log() }\n    }\n}\n"
+
+	require.Nil(t, verifyPatch(root, "app/src/main/java/a/A.kt", original, patched))
+}
+
+// AGP 7 generates BuildConfig by default, so the same patch must pass there.
+// Abstaining is the whole point: the gate must not punish an older project.
+func TestVerifyPatchAbstainsOnBuildConfigForAGP7(t *testing.T) {
+	files := agp8NoBuildConfig()
+	files["build.gradle"] = "buildscript {\n dependencies {\n  classpath 'com.android.tools.build:gradle:7.4.2'\n }\n}\n"
+	root := writeRepo(t, files)
+	original := "package a\n\nclass A {\n    fun f() {\n    }\n}\n"
+	patched := "package a\n\nclass A {\n    fun f() {\n        if (BuildConfig.DEBUG) { log() }\n    }\n}\n"
+
+	require.Nil(t, verifyPatch(root, "app/src/main/java/a/A.kt", original, patched))
+}
+
+// Rule 1: a BuildConfig reference the repository already had is not the
+// fixer's to answer for.
+func TestVerifyPatchIgnoresPreExistingBuildConfigUsage(t *testing.T) {
+	root := writeRepo(t, agp8NoBuildConfig())
+	original := "package a\n\nclass A {\n    val d = BuildConfig.DEBUG\n}\n"
+	patched := original + "\n// touched elsewhere\n"
+
+	require.Nil(t, verifyPatch(root, "app/src/main/java/a/A.kt", original, patched))
+}
+
 func TestVerifyPatchRejectsBuildFile(t *testing.T) {
 	// aibom-android: edited app/build.gradle.kts, which SCOPE forbids.
 	root := writeRepo(t, map[string]string{"app/build.gradle.kts": "android { }\n"})
