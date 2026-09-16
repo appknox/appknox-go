@@ -2,7 +2,6 @@ package helper
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/appknox/appknox-go/agent"
@@ -27,34 +26,35 @@ func TestRiskThreshold_isPassedThroughToTargetSelection(t *testing.T) {
 	require.Equal(t, 3, gotThreshold, "the configured threshold must reach the filter")
 }
 
-// The fix belongs beside the work that produced it, so the PR targets the
-// feature branch rather than the repository default.
-func TestDeliverBranch_targetsTheSourceFeatureBranch(t *testing.T) {
-	t.Setenv("GITHUB_HEAD_REF", "feature/payment")
-	t.Setenv("GITHUB_REF_NAME", "")
-	t.Setenv("GITHUB_TOKEN", "")
-
-	// No token, so it stops before any network call -- enough to prove the
-	// branch name is derived from the feature branch.
-	require.Equal(t, "autofix-feature/payment",
-		prBranch(SourceBranch(""), 0, 11829, "app/Main.java"))
+// The branch is keyed on the FILE -- one scan of one build -- so every finding
+// on that scan lands on one branch and one pull request.
+func TestPRBranch_isKeyedOnTheFile(t *testing.T) {
+	require.Equal(t, "appknox-autofix/analysis-11829",
+		prBranch(11829, "app/Main.java"))
 }
 
-// Repeated scans of one branch must not fan out into many PRs.
-func TestPRBranch_repeatedScansOfOneBranchShareABranch(t *testing.T) {
-	first := prBranch("feature/payment", 0, 101, "app/A.java")
-	second := prBranch("feature/payment", 0, 202, "app/B.java")
+// A file with many findings must not fan out into many pull requests. Two
+// different paths patched under the same scan share one branch.
+func TestPRBranch_everyFindingOnAScanSharesABranch(t *testing.T) {
+	first := prBranch(101, "app/A.java")
+	second := prBranch(101, "app/B.java")
 	require.Equal(t, first, second,
-		"a later scan of the same branch must reuse the branch, not open a second PR")
+		"findings from one scan must reuse the branch, not open a second PR")
 }
 
-func TestSourceBranch_isEmptyOutsideCI(t *testing.T) {
-	t.Setenv("GITHUB_HEAD_REF", "")
-	t.Setenv("GITHUB_REF_NAME", "")
-	require.Empty(t, SourceBranch(""))
-	_ = os.Getenv("HOME")
-	// falls back to the analysis-keyed name
-	require.Equal(t, "appknox-autofix/analysis-7", prBranch("", 0, 7, "a.java"))
+// Re-running the same scan updates the existing branch rather than opening
+// another, because the name is derived and not generated.
+func TestPRBranch_isStableAcrossRuns(t *testing.T) {
+	require.Equal(t, prBranch(7, "a.java"), prBranch(7, "a.java"))
+}
+
+// Manual --finding runs have no file id, so the path is the only identity
+// available; it must still be deterministic.
+func TestPRBranch_fallsBackToThePathHashWithoutAFileID(t *testing.T) {
+	got := prBranch(0, "app/Main.java")
+	require.Equal(t, got, prBranch(0, "app/Main.java"))
+	require.Contains(t, got, "appknox-autofix/fix-")
+	require.NotEqual(t, got, prBranch(0, "app/Other.java"))
 }
 
 var _ = agent.Config{}

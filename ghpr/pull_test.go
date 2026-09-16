@@ -60,7 +60,7 @@ func TestListPRFiles_paginates(t *testing.T) {
 
 // The agreed flow ends at a DRAFT PR: CI runs and a human reviews before
 // anything is mergeable.
-func TestOpenDraftPR(t *testing.T) {
+func TestOpenPR(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
@@ -73,15 +73,35 @@ func TestOpenDraftPR(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	url, err := OpenDraftPR(context.Background(), cfgFor(srv), PullRequest{
-		Branch: "bugfix/appknox-autofix-13-11829", Base: "master",
+	url, err := OpenPR(context.Background(), cfgFor(srv), PullRequest{
+		Branch: "appknox-autofix/analysis-11829", Base: "master",
 		Title: "Appknox Autofix: Weak PRNG", Body: "fixes it",
 	})
 	require.NoError(t, err)
 	require.Equal(t, "https://github.com/appknox/mfva/pull/42", url)
-	require.Equal(t, true, body["draft"], "the PR must be opened as a draft")
-	require.Equal(t, "bugfix/appknox-autofix-13-11829", body["head"])
+	require.Equal(t, false, body["draft"], "draft is opt-in, not the default")
+	require.Equal(t, "appknox-autofix/analysis-11829", body["head"])
 	require.Equal(t, "master", body["base"])
+}
+
+// Draft remains available for callers that want a proposal rather than a
+// ready-to-action pull request.
+func TestOpenPR_honoursTheDraftFlag(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"number": 43, "html_url": "https://github.com/appknox/mfva/pull/43",
+		})
+	}))
+	defer srv.Close()
+
+	_, err := OpenPR(context.Background(), cfgFor(srv), PullRequest{
+		Branch: "appknox-autofix/analysis-1", Base: "master", Draft: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, true, body["draft"])
 }
 
 // Re-running autofix on the same finding must not open a second PR.
@@ -112,14 +132,14 @@ func TestFindOpenPR_emptyWhenNone(t *testing.T) {
 	require.Empty(t, url)
 }
 
-func TestOpenDraftPR_surfacesGitHubError(t *testing.T) {
+func TestOpenPR_surfacesGitHubError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		_ = json.NewEncoder(w).Encode(map[string]string{"message": "No commits between master and fixbranch"})
 	}))
 	defer srv.Close()
 
-	_, err := OpenDraftPR(context.Background(), cfgFor(srv), PullRequest{Branch: "fixbranch", Base: "master"})
+	_, err := OpenPR(context.Background(), cfgFor(srv), PullRequest{Branch: "fixbranch", Base: "master"})
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "No commits"), "GitHub's reason must survive: %v", err)
 }

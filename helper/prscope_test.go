@@ -2,7 +2,6 @@ package helper
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -30,14 +29,6 @@ func TestPRScoped_defaultsOnWithPRNumberAndOffWithout(t *testing.T) {
 	require.True(t, AutofixOptions{PRNumber: 13, Scope: "pr"}.prScoped())
 	require.False(t, AutofixOptions{PRNumber: 13, Scope: "repo"}.prScoped(), "--scope repo must widen it")
 	require.False(t, AutofixOptions{}.prScoped(), "no PR number means no PR scoping")
-}
-
-// Fallbacks for runs with no branch context. With a source branch the name is
-// keyed on that instead -- see TestAutofixBranchFor_isStablePerFeatureBranch.
-func TestPRBranch_carriesPRAndAnalysis(t *testing.T) {
-	require.Equal(t, "bugfix/appknox-autofix-13-11829", prBranch("", 13, 11829, "app/Main.java"))
-	require.Equal(t, "appknox-autofix/analysis-11829", prBranch("", 0, 11829, "app/Main.java"))
-	require.True(t, strings.HasPrefix(prBranch("", 0, 0, "app/Main.java"), "appknox-autofix/fix-"))
 }
 
 // A reviewer must never read a tidy diff as proof the fix was checked.

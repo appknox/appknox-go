@@ -28,17 +28,17 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 	if token == "" {
 		return "", errors.New("--push-branch needs a GitHub token (--github-token or GITHUB_TOKEN)")
 	}
-	// The fix belongs beside the work that produced it, so it targets the source
-	// feature branch rather than the repository default.
-	source := SourceBranch(opts.SourceBranch)
-	base := firstNonEmpty(source, opts.Ref)
+	// Base comes from the pipeline (applyCIDefaults): GITHUB_BASE_REF on a
+	// pull_request job, else the branch from GITHUB_REF, else empty, which
+	// leaves ghpr to resolve the repository's default branch.
+	base := opts.Ref
 	cfg := ghpr.Config{Owner: owner, Repo: name, BaseRef: base, Token: token}
 
 	files := make([]ghpr.FileChange, len(patches))
 	for i, p := range patches {
 		files[i] = ghpr.FileChange{Path: p.Path, Content: p.Content, Message: commitMessage(inputs, p.Path)}
 	}
-	branch := prBranch(source, opts.PRNumber, opts.AnalysisID, patches[0].Path)
+	branch := prBranch(opts.FileID, patches[0].Path)
 	if _, err := ghpr.PushFiles(ctx, cfg, branch, files); err != nil {
 		return "", err
 	}
@@ -50,7 +50,7 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 	if existing != "" {
 		return existing, nil
 	}
-	return ghpr.OpenDraftPR(ctx, cfg, ghpr.PullRequest{
+	return ghpr.OpenPR(ctx, cfg, ghpr.PullRequest{
 		Branch: branch, Base: base,
 		Title: prTitle(inputs),
 		Body:  prBody(inputs, patches),
@@ -59,22 +59,16 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 
 // prBranch is a stable branch name for the fix.
 //
-// Keyed on the SOURCE FEATURE BRANCH where possible: one active autofix branch
-// and one draft PR per feature branch, so a second scan of the same branch
-// updates them rather than opening another. Keying on the scan or the analysis
-// instead is how a busy branch ends up with a dozen remediation PRs.
+// Keyed on the FILE, which is one scan of one build: every finding on that
+// scan lands on one branch and one pull request, so re-running the same scan
+// updates them rather than opening another. Keying per analysis instead is how
+// a file with a dozen findings becomes a dozen pull requests.
 //
-// The older analysis- and hash-based names remain as fallbacks for runs outside
-// CI, where no branch context exists.
-func prBranch(sourceBranch string, prNumber, analysisID int, path string) string {
-	if name := autofixBranchFor(sourceBranch); name != "" {
-		return name
-	}
-	switch {
-	case prNumber > 0 && analysisID > 0:
-		return fmt.Sprintf("bugfix/appknox-autofix-%d-%d", prNumber, analysisID)
-	case analysisID > 0:
-		return fmt.Sprintf("appknox-autofix/analysis-%d", analysisID)
+// The hash fallback covers manual --finding runs, which have no file id and so
+// no natural identity beyond the path being patched.
+func prBranch(fileID int, path string) string {
+	if fileID > 0 {
+		return fmt.Sprintf("appknox-autofix/analysis-%d", fileID)
 	}
 	sum := sha256.Sum256([]byte(path))
 	return "appknox-autofix/fix-" + hex.EncodeToString(sum[:])[:10]

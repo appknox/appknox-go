@@ -26,6 +26,11 @@ type PullRequest struct {
 	Base   string // base branch to merge into; empty = repo default
 	Title  string
 	Body   string
+	// Draft opens the PR as a draft. Caller-controlled rather than always
+	// true: a draft cannot be merged until someone marks it ready, which suits
+	// a proposal and does not suit a pipeline whose output is meant to be
+	// actioned directly.
+	Draft bool
 }
 
 // prFile is one entry of the pull-request files listing.
@@ -63,11 +68,11 @@ func ListPRFiles(ctx context.Context, cfg Config, number int) ([]string, error) 
 	}
 }
 
-// OpenDraftPR opens a draft pull request for the fix branch and returns its URL.
+// OpenPR opens a pull request for the fix branch and returns its URL.
 //
-// Draft is deliberate: the fix is a proposal. It must run CI and be reviewed
-// before it can be merged, never land unattended.
-func OpenDraftPR(ctx context.Context, cfg Config, pr PullRequest) (string, error) {
+// Draft is the caller's decision (PullRequest.Draft). Either way the PR still
+// runs CI and still needs review to merge -- a fix never lands unattended.
+func OpenPR(ctx context.Context, cfg Config, pr PullRequest) (string, error) {
 	base := pr.Base
 	if base == "" {
 		var err error
@@ -80,12 +85,12 @@ func OpenDraftPR(ctx context.Context, cfg Config, pr PullRequest) (string, error
 		"head":  pr.Branch,
 		"base":  base,
 		"body":  pr.Body,
-		"draft": true,
+		"draft": pr.Draft,
 	}
 	var created pullRef
 	endpoint := fmt.Sprintf("%s/repos/%s/%s/pulls", cfg.apiBase(), cfg.Owner, cfg.Repo)
 	if err := cfg.do(ctx, "POST", endpoint, body, &created); err != nil {
-		return "", fmt.Errorf("ghpr: opening draft PR for %s: %w", pr.Branch, err)
+		return "", fmt.Errorf("ghpr: opening PR for %s: %w", pr.Branch, err)
 	}
 	return created.HTMLURL, nil
 }

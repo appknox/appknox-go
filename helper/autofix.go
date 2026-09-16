@@ -47,10 +47,6 @@ type AutofixOptions struct {
 	// AllowUnverified ships a patch KnoxIQ gave us no way to check. Never
 	// ships one that demonstrably FAILS a check.
 	AllowUnverified bool
-	// SourceBranch is the feature branch being remediated. The autofix branch
-	// and the PR base both derive from it, so repeated scans of one branch
-	// update a single PR instead of opening a new one each time.
-	SourceBranch string
 	// RiskThreshold is the minimum computed risk worth fixing, matching the
 	// severity policy the customer already sets on cicheck.
 	RiskThreshold int
