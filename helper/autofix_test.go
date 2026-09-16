@@ -9,8 +9,34 @@ import (
 	"testing"
 
 	"github.com/appknox/appknox-go/agent"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
+
+// The gateway is no longer configured per-run: autofix reads the same viper
+// access-token and host as every other command. Tests therefore need those set
+// the way a configured CLI would have them, rather than passing a token in the
+// options struct.
+func init() {
+	viper.Set("access-token", "test-token")
+	viper.Set("host", "https://api.example.com/")
+}
+
+// withoutAccessToken clears the credential for one test and restores it.
+func withoutAccessToken(t *testing.T) {
+	t.Helper()
+	prev := viper.GetString("access-token")
+	viper.Set("access-token", "")
+	t.Cleanup(func() { viper.Set("access-token", prev) })
+}
+
+// withHost points the API host, and therefore the gateway, at one URL.
+func withHost(t *testing.T, host string) {
+	t.Helper()
+	prev := viper.GetString("host")
+	viper.Set("host", host)
+	t.Cleanup(func() { viper.Set("host", prev) })
+}
 
 // A finding that locates two files and patches one is a half-fix. It has to be
 // reported as such, because the vulnerability stays open and the scan will keep
@@ -112,7 +138,7 @@ func deps(path string, res fixResult, in FindingInputs) autofixDeps {
 }
 
 func appknoxOpts(root string) AutofixOptions {
-	return AutofixOptions{RepoPath: root, FileID: 1, AnalysisID: 1, FixToken: "tok"}
+	return AutofixOptions{RepoPath: root, FileID: 1, AnalysisID: 1}
 }
 
 // oneClass carries a KnoxIQ criterion too: delivery is now gated on the patch
@@ -124,23 +150,28 @@ func oneClass(finding, remediation string) FindingInputs {
 	}
 }
 
+// The access token is the ONLY credential autofix needs; without it the run
+// must stop before any model turn rather than fail at the gateway.
 func TestRunAutofix_RequiresToken(t *testing.T) {
-	t.Setenv("APPKNOX_AUTOFIX_FIX_TOKEN", "")
+	withoutAccessToken(t)
 	_, err := runAutofix(context.Background(),
 		AutofixOptions{RepoPath: t.TempDir(), Finding: "x"}, defaultDeps())
 	require.Error(t, err)
 }
 
-func TestRunAutofix_RejectsPlaintextRemoteFixURL(t *testing.T) {
+// The gateway is the API host, so a plaintext remote API host would also send
+// the access token in the clear. Refuse it up front (CWE-319).
+func TestRunAutofix_RejectsPlaintextRemoteHost(t *testing.T) {
+	withHost(t, "http://gateway.example.com")
 	_, err := runAutofix(context.Background(),
-		AutofixOptions{RepoPath: t.TempDir(), Finding: "x", FixToken: "tok", FixURL: "http://gateway.example.com"},
+		AutofixOptions{RepoPath: t.TempDir(), Finding: "x"},
 		deps("app/A.java", fixResult{}, FindingInputs{}))
 	require.Error(t, err)
 }
 
 func TestRunAutofix_Advisory_WhenLocateAbstains(t *testing.T) {
 	out, err := runAutofix(context.Background(),
-		AutofixOptions{RepoPath: t.TempDir(), Finding: "x", FixToken: "tok"},
+		AutofixOptions{RepoPath: t.TempDir(), Finding: "x"},
 		deps("", fixResult{}, FindingInputs{}))
 	require.NoError(t, err)
 	require.Empty(t, out.Located)
@@ -149,7 +180,7 @@ func TestRunAutofix_Advisory_WhenLocateAbstains(t *testing.T) {
 func TestRunAutofix_LocateOnly_WhenNoRemediation(t *testing.T) {
 	root, rel := repoWithFile(t, "orig")
 	out, err := runAutofix(context.Background(),
-		AutofixOptions{RepoPath: root, Finding: "x", FixToken: "tok"},
+		AutofixOptions{RepoPath: root, Finding: "x"},
 		deps(rel, fixResult{}, FindingInputs{}))
 	require.NoError(t, err)
 	require.Equal(t, []string{rel}, out.Located)
@@ -366,7 +397,7 @@ func retrySession(t *testing.T, patches ...string) (fixSession, *[]string) {
 func TestProduceFix_RetriesOnceWithTheViolation(t *testing.T) {
 	s, told := retrySession(t,
 		"import com.example.BuildConfig;\nclass A {}\n", // generated symbol
-		"class A { int x; }\n")                      // clean
+		"class A { int x; }\n")                          // clean
 
 	res, err := s.produceFix(context.Background(), "A.java")
 

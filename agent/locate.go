@@ -43,10 +43,27 @@ const locateSystemPrompt = "You are a security code-locating assistant. A SAST s
 	"vulnerable code. Never edit anything. When found, reply with ONLY the repository-relative " +
 	"path of that file and nothing else. If you cannot confidently identify it, reply with exactly NONE."
 
-// Config carries the gateway endpoint and the scoped token (not a provider key).
+// autofixBaseURL is the Mycroft autofix prefix on the same API host. The SDK
+// appends /v1/messages, so every model turn is
+// POST {APPKNOX_API_HOST}/api/autofix/v1/messages.
+//
+// Mycroft forwards to Sherrinford, which injects the provider key server-side.
+// Nothing here ever holds one, and there is no second URL to configure: the
+// gateway is wherever the Appknox API already is. That collapse is the point --
+// a separate --fix-url defaulted to localhost, which in CI silently pointed at
+// nothing.
+func autofixBaseURL(host string) string {
+	return strings.TrimRight(host, "/") + "/api/autofix"
+}
+
+// Config carries the Appknox API host and the ordinary access token.
+//
+// The same token every other CLI command uses. There is no separate gateway
+// credential to mint, store or rotate: Mycroft authenticates the caller and
+// holds the provider key on the far side.
 type Config struct {
-	FixURL        string // hosted fix-service base, e.g. http://localhost:8100
-	Token         string // scoped session/fix token used as the gateway credential
+	Host          string // APPKNOX_API_HOST; messages go to {Host}/api/autofix
+	Token         string // Appknox access token presented to Mycroft (not a provider key)
 	Model         string // optional; defaults to Claude Sonnet
 	MaxTokens     int64  // optional; defaults to defaultMaxTokens
 	MaxIterations int    // optional; defaults to defaultMaxIterations
@@ -80,16 +97,16 @@ func locateWith(ctx context.Context, cfg Config, req Request, run locateRunner) 
 
 // sdkLocate drives the anthropic-sdk-go Tool Runner through the gateway.
 func sdkLocate(ctx context.Context, cfg Config, req Request) (string, error) {
-	if cfg.FixURL == "" || cfg.Token == "" {
-		return "", errors.New("agent: FixURL and Token are required to reach the gateway")
+	if cfg.Host == "" || cfg.Token == "" {
+		return "", errors.New("agent: Host and Token are required to reach Mycroft")
 	}
 	tools, err := buildLocateTools(req.RepoRoot)
 	if err != nil {
 		return "", err
 	}
 	client := anthropic.NewClient(
-		option.WithBaseURL(strings.TrimRight(cfg.FixURL, "/")+"/anthropic"),
-		option.WithAPIKey(cfg.Token), // scoped gateway token (like ANTHROPIC_API_KEY), NOT a provider key
+		option.WithBaseURL(autofixBaseURL(cfg.Host)),
+		option.WithAPIKey(cfg.Token), // Appknox access token, NOT a provider key
 	)
 	runner := client.Beta.Messages.NewToolRunner(tools, locateParams(cfg, req))
 	final, err := runner.RunToCompletion(ctx)

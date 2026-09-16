@@ -64,18 +64,24 @@ func ResolveHostAndRegion(host, region string, hostMappings map[string]string) (
 	return hostMappings["global"], nil
 }
 
+// resolvedAPIHost is the Mycroft base URL used by every CLI command, autofix
+// included. --host / APPKNOX_API_HOST wins; else --region; else global.
+//
+// Autofix reaches its LLM gateway at {resolvedAPIHost()}/api/autofix, so there
+// is deliberately no second URL to configure: the gateway is wherever the API
+// already is, and a caller that can upload can also fix.
+func resolvedAPIHost() (string, error) {
+	return ResolveHostAndRegion(
+		viper.GetString("host"),
+		viper.GetString("region"),
+		GetHostMappings(),
+	)
+}
+
 func getClient() *appknox.Client {
 	token := getAppknoxAccessToken()
 
-	// Check for region and host first
-	region := viper.GetString("region")
-	host := viper.GetString("host")
-
-	// Get the host mappings
-	hostMappings := GetHostMappings()
-
-	// Use the new function to resolve the host and region
-	resolvedHost, err := ResolveHostAndRegion(host, region, hostMappings)
+	resolvedHost, err := resolvedAPIHost()
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)

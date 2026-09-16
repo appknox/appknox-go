@@ -18,15 +18,13 @@ import (
 
 // AutofixOptions carries the flags for the client-side autofix flow.
 type AutofixOptions struct {
-	Repo         string // GitHub owner/name to auto-fetch
-	Ref          string // git ref (branch/tag/sha); empty = default branch
-	RepoPath     string // already-checked-out repo (alternative to Repo)
-	FileID       int    // Appknox file id (with AnalysisID → finding + remediation)
-	AnalysisID   int    // Appknox analysis id
-	Finding      string // manual finding detail (when not using file/analysis id)
-	ClassHint    string // manual class/symbol hint
-	FixURL       string // Appknox fix-service/gateway base URL
-	FixToken     string // scoped fix-service token
+	Repo       string // GitHub owner/name to auto-fetch
+	Ref        string // git ref (branch/tag/sha); empty = default branch
+	RepoPath   string // already-checked-out repo (alternative to Repo)
+	FileID     int    // Appknox file id (with AnalysisID → finding + remediation)
+	AnalysisID int    // Appknox analysis id
+	Finding    string // manual finding detail (when not using file/analysis id)
+	ClassHint  string // manual class/symbol hint
 
 	// Model overrides the model used for BOTH turns. Empty keeps the SDK
 	// default (Sonnet), which is what every run has used so far.
@@ -39,7 +37,7 @@ type AutofixOptions struct {
 	// holds this class?" from grep and glob output; fixing writes the security
 	// patch that ships. Running a cheaper model for locate is where the saving
 	// is, and it does not put the patch itself on a weaker model.
-	LocateModel string
+	LocateModel  string
 	GithubToken  string // GitHub token for the --repo fetch
 	DryRun       bool   // locate + fix but do not write the patch
 	PushBranch   bool   // push the fix to a new GitHub branch instead of local apply
@@ -158,19 +156,25 @@ func ProcessAutofix(opts AutofixOptions) {
 
 // runAutofix: resolve inputs → locate each class → fix each file → deliver.
 func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcome, error) {
-	gatewayURL := firstNonEmpty(opts.FixURL, "http://localhost:8100")
-	// Gate the endpoint before ANY credential is sent: the id-token exchange
-	// below, and every later model turn, carry bearer credentials (CWE-319).
+	// One host for everything. The LLM gateway lives at {host}/api/autofix, so
+	// there is no second URL to configure and no way for CI to point the fixer
+	// somewhere the uploader is not already pointing.
+	gatewayURL, err := resolvedAPIHost()
+	if err != nil {
+		return Outcome{}, err
+	}
+	// Gate the endpoint before ANY credential is sent: every model turn carries
+	// the access token (CWE-319).
 	if err := fixservice.ValidateEndpoint(gatewayURL); err != nil {
 		return Outcome{}, err
 	}
-	// In CI this mints a per-run session token from the runner's OIDC identity,
-	// so no long-lived gateway secret has to be stored anywhere.
-	token, err := fixservice.ResolveToken(ctx, gatewayURL,
-		firstNonEmpty(opts.FixToken, os.Getenv("APPKNOX_AUTOFIX_FIX_TOKEN")),
-		viper.GetString("access-token"))
-	if err != nil {
-		return Outcome{}, err
+	// The ordinary CLI credential. Mycroft authenticates the caller and holds
+	// the provider key on the far side, so there is no separate gateway secret
+	// to mint, store or rotate.
+	token := viper.GetString("access-token")
+	if token == "" {
+		return Outcome{}, errors.New(
+			"autofix needs an Appknox access token (--access-token or APPKNOX_ACCESS_TOKEN)")
 	}
 	targets, err := resolveTargets(ctx, opts, d)
 	if err != nil {
@@ -427,7 +431,7 @@ func (s fixSession) locateAll(ctx context.Context) ([]string, error) {
 		// worth running on a smaller model. Falls back to Model, then the SDK
 		// default.
 		p, err := s.d.locate(ctx, agent.Config{
-			FixURL: s.fixCfg.URL, Token: s.fixCfg.Token,
+			Host: s.fixCfg.URL, Token: s.fixCfg.Token,
 			Model: firstNonEmpty(s.opts.LocateModel, s.opts.Model),
 		},
 			agent.Request{RepoRoot: s.root, ClassHint: hint, Finding: s.inputs.Finding})
@@ -502,7 +506,7 @@ func (s fixSession) produceFix(ctx context.Context, path string) (agent.FixResul
 // not silently inherit a model chosen to make file-finding cheaper.
 func (s fixSession) attemptFix(ctx context.Context, path, prior string) (agent.FixResult, error) {
 	return s.d.agentFix(ctx, agent.Config{
-		FixURL: s.fixCfg.URL, Token: s.fixCfg.Token, Model: s.opts.Model,
+		Host: s.fixCfg.URL, Token: s.fixCfg.Token, Model: s.opts.Model,
 	},
 		agent.FixRequest{RepoRoot: s.root, Path: path,
 			Finding: s.inputs.Finding, Remediation: s.inputs.Remediation,

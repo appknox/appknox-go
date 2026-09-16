@@ -62,7 +62,20 @@ func TestLocateParams_HonoursOverrides(t *testing.T) {
 }
 
 func TestSdkLocate_RequiresConfig(t *testing.T) {
-	// Missing FixURL/Token must fail before any network call.
+	// Missing Host/Token must fail before any network call.
 	_, err := sdkLocate(context.Background(), Config{}, Request{RepoRoot: t.TempDir()})
 	require.Error(t, err)
+}
+
+// The gateway path is load-bearing and invisible: the SDK appends /v1/messages,
+// so a wrong prefix here 404s every model turn at runtime and nothing else in
+// the suite would notice. Pin it.
+func TestAutofixBaseURL_IsTheMycroftAutofixPrefix(t *testing.T) {
+	for _, tc := range []struct{ host, want string }{
+		{"https://api.appknox.com", "https://api.appknox.com/api/autofix"},
+		{"https://api.appknox.com/", "https://api.appknox.com/api/autofix"},
+		{"https://autofix.staging.appknox.io///", "https://autofix.staging.appknox.io/api/autofix"},
+	} {
+		require.Equal(t, tc.want, autofixBaseURL(tc.host))
+	}
 }

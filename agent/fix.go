@@ -100,15 +100,15 @@ func fixWith(ctx context.Context, cfg Config, req FixRequest, run fixRunner) (Fi
 // through the gateway.
 func sdkFix(ctx context.Context, cfg Config, req FixRequest,
 	edits *[]editRecord, reason *string) error {
-	if cfg.FixURL == "" || cfg.Token == "" {
-		return errors.New("agent: FixURL and Token are required to reach the gateway")
+	if cfg.Host == "" || cfg.Token == "" {
+		return errors.New("agent: Host and Token are required to reach Mycroft")
 	}
 	tools, err := buildFixTools(req.RepoRoot, req.Path, edits)
 	if err != nil {
 		return err
 	}
 	client := anthropic.NewClient(
-		option.WithBaseURL(strings.TrimRight(cfg.FixURL, "/")+"/anthropic"),
+		option.WithBaseURL(autofixBaseURL(cfg.Host)),
 		option.WithAPIKey(cfg.Token),
 	)
 	runner := client.Beta.Messages.NewToolRunner(tools,
