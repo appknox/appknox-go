@@ -11,7 +11,9 @@ import (
 )
 
 // ProcessUpload takes the filePath and upload it to the appknox dashboard.
-func ProcessUpload(file *os.File) {
+// knoxiq requests KnoxIQ triage for this build, which is what later gives
+// `appknox autofix` its remediation and verification criteria.
+func ProcessUpload(file *os.File, knoxiq bool) {
 	ctx := context.Background()
 	client := getClient()
 	stat, _ := file.Stat()
@@ -32,7 +34,7 @@ func ProcessUpload(file *os.File) {
 		),
 	)
 	filewithbar := bar.ProxyReader(file)
-	submissionID, err := client.Upload.UploadFileUsingReader(ctx, filewithbar, fileSize)
+	submissionID, err := client.Upload.UploadFileUsingReader(ctx, filewithbar, fileSize, knoxiq)
 	if err != nil {
 		PrintError(err)
 		os.Exit(1)

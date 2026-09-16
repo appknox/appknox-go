@@ -27,10 +27,16 @@ var uploadCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		file, _ := os.Open(args[0])
 		defer file.Close()
-		helper.ProcessUpload(file)
+		knoxiq, _ := cmd.Flags().GetBool("knoxiq")
+		helper.ProcessUpload(file, knoxiq)
 	},
 }
 
 func init() {
 	RootCmd.AddCommand(uploadCmd)
+	// The trigger for the whole autofix pipeline: without it the build is
+	// scanned but never triaged, and `appknox autofix` has no remediation to
+	// work from. Off by default, because KnoxIQ triage is not free.
+	uploadCmd.Flags().Bool(
+		"knoxiq", false, "Request KnoxIQ triage for this build once SAST completes")
 }

@@ -120,7 +120,7 @@ func TestUploadService_UploadFileUsingReader(t *testing.T) {
 		testBody(t, r, "Upload me !\n")
 	})
 
-	submissionID, err := client.Upload.UploadFileUsingReader(context.Background(), file, 12)
+	submissionID, err := client.Upload.UploadFileUsingReader(context.Background(), file, 12, false)
 	if err != nil {
 		t.Errorf("Upload.UploadFileUsingReader returned error: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestUploadService_UploadFile(t *testing.T) {
 		testBody(t, r, "Upload me !\n")
 	})
 
-	akFile, _, err := client.Upload.UploadFile(context.Background(), file)
+	akFile, _, err := client.Upload.UploadFile(context.Background(), file, false)
 	if err != nil {
 		t.Errorf("Upload.UploadFile returned error: %v", err)
 	}

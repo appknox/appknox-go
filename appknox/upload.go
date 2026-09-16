@@ -19,6 +19,15 @@ type Upload struct {
 	FileKey       string `json:"file_key,omitempty"`
 	FileKeySigned string `json:"file_key_signed,omitempty"`
 	SubmissionID  int    `json:"submission_id,omitempty"`
+
+	// KnoxIQ requests KnoxIQ triage for this build once SAST completes (see
+	// `appknox upload --knoxiq`). omitempty so nothing is sent when false,
+	// keeping the request byte-identical for callers that never ask for it.
+	//
+	// This is what TRIGGERS KnoxIQ. Autofix reads its remediation and its
+	// verification criteria from KnoxIQ, so a build uploaded without this flag
+	// has nothing for autofix to act on later.
+	KnoxIQ bool `json:"knoxiq,omitempty"`
 }
 
 // uploadFileUsingReaderHelper is used to get a minio upload url
@@ -49,8 +58,9 @@ func (s *UploadService) uploadFileUsingReaderHelper(ctx context.Context, file io
 }
 
 // UploadFileUsingReader is used to upload a file to appknox dashboard.
+// knoxiq requests KnoxIQ triage for this build (see the Upload.KnoxIQ field).
 // Returns the submissionID.
-func (s *UploadService) UploadFileUsingReader(ctx context.Context, file io.Reader, size int64) (*int, error) {
+func (s *UploadService) UploadFileUsingReader(ctx context.Context, file io.Reader, size int64, knoxiq bool) (*int, error) {
 	me, _, err := s.client.Me.CurrentAuthenticatedUser(ctx)
 	if err != nil {
 		return nil, err
@@ -61,6 +71,9 @@ func (s *UploadService) UploadFileUsingReader(ctx context.Context, file io.Reade
 	if err != nil {
 		return nil, err
 	}
+	// Set after the minio handshake and before the POST that registers the
+	// build: the helper's response is the body we are about to send back.
+	uploadResponse.KnoxIQ = knoxiq
 	req, err := s.client.NewRequest("POST", u, uploadResponse)
 	if err != nil {
 		return nil, err
@@ -74,14 +87,15 @@ func (s *UploadService) UploadFileUsingReader(ctx context.Context, file io.Reade
 }
 
 // UploadFile is used to upload a file to appknox dashboard.
+// knoxiq requests KnoxIQ triage for this build (see the Upload.KnoxIQ field).
 // Returns the file object.
-func (s *UploadService) UploadFile(ctx context.Context, file *os.File) (*File, *Response, error) {
+func (s *UploadService) UploadFile(ctx context.Context, file *os.File, knoxiq bool) (*File, *Response, error) {
 	stat, err := file.Stat()
 	if err != nil {
 		return nil, nil, err
 	}
 	fileSize := stat.Size()
-	submissionID, err := s.UploadFileUsingReader(ctx, file, fileSize)
+	submissionID, err := s.UploadFileUsingReader(ctx, file, fileSize, knoxiq)
 	if err != nil {
 		return nil, nil, err
 	}

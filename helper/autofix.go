@@ -65,6 +65,8 @@ type autofixDeps struct {
 	prFiles  func(ctx context.Context, opts AutofixOptions) ([]string, error)
 	// analysisIDs lists the analyses on a file worth attempting.
 	analysisIDs func(ctx context.Context, fileID, riskThreshold int) ([]int, error)
+	// knoxiqReady refuses the run until KnoxIQ has finished with the file.
+	knoxiqReady func(ctx context.Context, fileID int) error
 }
 
 func defaultDeps() autofixDeps {
@@ -75,6 +77,7 @@ func defaultDeps() autofixDeps {
 		deliver:     deliverBranch,
 		prFiles:     fetchPRFiles,
 		analysisIDs: locatableAnalysisIDs,
+		knoxiqReady: checkKnoxIQReady,
 	}
 }
 
@@ -156,6 +159,14 @@ func ProcessAutofix(opts AutofixOptions) {
 
 // runAutofix: resolve inputs → locate each class → fix each file → deliver.
 func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcome, error) {
+	// FIRST, before targets and before any model turn is paid for. KnoxIQ not
+	// being finished looks exactly like a clean file downstream, so a run that
+	// skipped this check would exit 0 over a scan that had not started.
+	if d.knoxiqReady != nil {
+		if err := d.knoxiqReady(ctx, opts.FileID); err != nil {
+			return Outcome{}, err
+		}
+	}
 	// One host for everything. The LLM gateway lives at {host}/api/autofix, so
 	// there is no second URL to configure and no way for CI to point the fixer
 	// somewhere the uploader is not already pointing.
@@ -620,6 +631,11 @@ func findAnalysis(ctx context.Context, client *appknox.Client, fileID, analysisI
 func listAnalyses(fileID int) error {
 	if fileID <= 0 {
 		return errors.New("--list-analyses needs --file-id")
+	}
+	// Same gate: listing before KnoxIQ finishes shows a file with no fixable
+	// findings, which reads as "nothing to do" rather than "not ready yet".
+	if err := checkKnoxIQReady(context.Background(), fileID); err != nil {
+		return err
 	}
 	all, err := allAnalyses(context.Background(), getClient(), fileID)
 	if err != nil {
