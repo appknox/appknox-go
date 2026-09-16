@@ -163,3 +163,28 @@ func TestFixUserPrompt_asksForOneEditPerOccurrence(t *testing.T) {
 		t.Errorf("the per-file instruction should not imply a single edit:\n%s", got)
 	}
 }
+
+// The fixer sees ONE file and cannot infer the build system from it. The
+// profile must reach the model, and must arrive BEFORE the remediation,
+// because it constrains how that remediation can be applied.
+func TestFixUserPrompt_carriesTheProjectProfileBeforeTheRemediation(t *testing.T) {
+	got := fixUserPrompt(FixRequest{
+		Path: "a.kt", Finding: "f", Remediation: "wrap the log in BuildConfig.DEBUG",
+		ProjectProfile: "Build system: Gradle / Android\nBuildConfig is NOT generated here",
+	})
+	if !strings.Contains(got, "BuildConfig is NOT generated here") {
+		t.Fatalf("the project profile must be visible to the fixer:\n%s", got)
+	}
+	if strings.Index(got, "NOT generated here") > strings.Index(got, "Remediation:") {
+		t.Errorf("the profile must precede the remediation it constrains:\n%s", got)
+	}
+}
+
+// A repository with no readable build files produces an empty profile, and an
+// empty profile must add no section at all rather than an empty heading.
+func TestFixUserPrompt_omitsTheProfileSectionWhenUnknown(t *testing.T) {
+	got := fixUserPrompt(FixRequest{Path: "a.java", Finding: "f", Remediation: "r"})
+	if strings.Contains(got, "read from its build files") {
+		t.Errorf("an empty profile should print no heading:\n%s", got)
+	}
+}

@@ -197,6 +197,10 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	}
 	defer cleanup()
 
+	// Once per run, not once per finding: describeBuild walks the build files
+	// and the answer is identical for every analysis in the repository.
+	profile := describeBuild(root).String()
+
 	fixCfg := fixservice.Config{URL: gatewayURL, Token: token}
 
 	// Every target is attempted, then everything that passed its own gate is
@@ -204,7 +208,8 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	var out Outcome
 	work := newWorkingTree(root)
 	for i, t := range targets {
-		session := fixSession{opts: opts, d: d, root: root, fixCfg: fixCfg, inputs: t.Inputs, work: work}
+		session := fixSession{opts: opts, d: d, root: root, fixCfg: fixCfg,
+			inputs: t.Inputs, work: work, profile: profile}
 		err := session.attempt(ctx, t, &out)
 		if err == nil {
 			continue
@@ -341,6 +346,11 @@ type fixSession struct {
 	root   string
 	fixCfg fixservice.Config
 	inputs FindingInputs
+
+	// profile is the build-system context handed to every fix turn. Computed
+	// once per run: it walks the build files, and the answer is the same for
+	// every finding in the repository.
+	profile string
 
 	// work is shared across analyses so two findings in the same file compose
 	// instead of overwriting each other.
@@ -522,7 +532,7 @@ func (s fixSession) attemptFix(ctx context.Context, path, prior string) (agent.F
 		agent.FixRequest{RepoRoot: s.root, Path: path,
 			Finding: s.inputs.Finding, Remediation: s.inputs.Remediation,
 			DeveloperPrompt: s.inputs.DeveloperPrompt, Criteria: s.inputs.Criteria,
-			PriorViolation: prior})
+			ProjectProfile: s.profile, PriorViolation: prior})
 }
 
 // deliver pushes all patches to one branch (--push-branch) or applies them locally.

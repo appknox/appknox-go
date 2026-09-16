@@ -200,6 +200,13 @@ func fixUserPrompt(req FixRequest) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Target file (edit ONLY this): %s\n", req.Path)
 	fmt.Fprintf(&b, "Finding: %s\n\n", req.Finding)
+
+	// Before the remediation, because it constrains how the remediation can be
+	// applied. Every line was read off the build files; the fixer sees one
+	// source file and could not have derived any of it.
+	if p := strings.TrimSpace(req.ProjectProfile); p != "" {
+		fmt.Fprintf(&b, "This project, read from its build files:\n%s\n\n", p)
+	}
 	fmt.Fprintf(&b, "Remediation:\n%s\n", req.Remediation)
 
 	if strings.TrimSpace(req.DeveloperPrompt) != "" {

@@ -25,6 +25,14 @@ type FixRequest struct {
 	// Criteria are the checks the patch will be measured against, passed in so
 	// the fixer aims at them rather than discovering a miss afterwards.
 	Criteria []string
+	// ProjectProfile states what kind of project this is -- build system, AGP
+	// version, compileSdk, whether BuildConfig is generated -- read from the
+	// build files on disk.
+	//
+	// The fixer sees ONE file and cannot infer any of this from it. Handing it
+	// over up front is cheaper than letting the gate reject a patch that
+	// guessed wrong and then paying for a retry.
+	ProjectProfile string
 	// PriorViolation is the fact a previous attempt at this same file got wrong
 	// -- a build script it may not edit, XML it left unparseable, a resource or
 	// type that is not in the checkout. Set only on a retry, and only ever once.
