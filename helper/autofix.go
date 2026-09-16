@@ -176,6 +176,10 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 		return Outcome{}, errors.New(
 			"autofix needs an Appknox access token (--access-token or APPKNOX_ACCESS_TOKEN)")
 	}
+	// Repo, checkout and base ref come from the pipeline when the caller did
+	// not name them. Done before resolveRepoRoot so RepoPath can be inferred.
+	opts = applyCIDefaults(opts)
+
 	targets, err := resolveTargets(ctx, opts, d)
 	if err != nil {
 		return Outcome{}, err
