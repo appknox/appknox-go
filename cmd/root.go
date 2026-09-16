@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	
+
 	// "github.com/appknox/appknox-go/appknox"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -36,14 +36,14 @@ func init() {
 	viper.SetDefault("access-token", "")
 
 	RootCmd.PersistentFlags().String("host", "", "Appknox Server") // No default value here
-    viper.BindPFlag("host", RootCmd.PersistentFlags().Lookup("host"))
-    viper.BindEnv("host", "APPKNOX_API_HOST")
+	viper.BindPFlag("host", RootCmd.PersistentFlags().Lookup("host"))
+	viper.BindEnv("host", "APPKNOX_API_HOST")
 
 	// Define flags globally here for all subcommands
 	RootCmd.PersistentFlags().String("region", "", "Region names, e.g., global, saudi, uae. By default, global is used")
-    viper.BindPFlag("region", RootCmd.PersistentFlags().Lookup("region"))
-    viper.BindEnv("region", "APPKNOX_API_REGION")
-    viper.SetDefault("region", "global")
+	viper.BindPFlag("region", RootCmd.PersistentFlags().Lookup("region"))
+	viper.BindEnv("region", "APPKNOX_API_REGION")
+	viper.SetDefault("region", "global")
 
 	RootCmd.PersistentFlags().String("proxy", "", "proxy url")
 	viper.BindPFlag("proxy", RootCmd.PersistentFlags().Lookup("proxy"))
