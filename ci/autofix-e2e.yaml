@@ -88,9 +88,13 @@ on:
         default: "false"
 
 env:
-  APPKNOX_API_HOST: https://sherlock-knoxiq-uat.staging.appknox.io/
-  SHERRINFORD_URL: https://sherrinford-uat.staging.appknox.io
-  AUTOFIX_CLI_REF: feat/autofix-v2
+  # ONE host. The autofix gateway is {APPKNOX_API_HOST}/api/autofix, so there is
+  # no second URL to keep in step -- Mycroft forwards to Sherrinford, which
+  # holds the provider key. SHERRINFORD_URL is gone for that reason rather than
+  # by oversight: a separate gateway URL could drift from the API host, and a
+  # run pointed at a mismatched pair failed at the first model turn.
+  APPKNOX_API_HOST: https://autofix.staging.appknox.io
+  AUTOFIX_CLI_REF: autofix-v3
 
 jobs:
   autofix:
@@ -345,8 +349,13 @@ jobs:
             echo "reusing file $REUSE_FILE_ID"
             exit 0
           fi
+          # --knoxiq is what TRIGGERS the triage autofix later reads. Without
+          # it the build is scanned but never triaged, and the autofix step
+          # finds no remediation and no verification criteria -- which reads as
+          # "nothing to fix" rather than "nothing was analysed".
+          #
           # upload prints the file id as its only stdout output
-          file_id=$(appknox upload "${{ steps.build.outputs.artifact }}" --host "$APPKNOX_API_HOST")
+          file_id=$(appknox upload "${{ steps.build.outputs.artifact }}" --knoxiq --host "$APPKNOX_API_HOST")
           echo "file_id=${file_id}" >> "$GITHUB_OUTPUT"
           echo "uploaded as file ${file_id}"
 
@@ -484,15 +493,15 @@ jobs:
           APPKNOX_ACCESS_TOKEN: ${{ secrets.APPKNOX_ACCESS_TOKEN || secrets.APPKNOX_UAT_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # No --fix-token: in CI the gateway credential is minted from this
-          # run's OIDC identity and expires with the job.
+          # One credential, no URLs. APPKNOX_ACCESS_TOKEN authenticates to
+          # Mycroft, which forwards model turns to Sherrinford and injects the
+          # provider key server-side; the gateway address is derived from
+          # --host. --repo, --repo-path and the base ref come from the runner's
+          # own environment, so nothing here restates what CI already knows.
           appknox autofix \
-            --repo-path . \
-            --repo "${{ github.repository }}" \
             --file-id "${{ steps.upload.outputs.file_id }}" \
             --risk-threshold "${{ inputs.riskThreshold || 'low' }}" \
             ${{ inputs.analysisId != '' && format('--analysis-id {0}', inputs.analysisId) || '' }} \
             --host "$APPKNOX_API_HOST" \
-            --fix-url "$SHERRINFORD_URL" \
             --allow-unverified \
             ${{ inputs.dryRun == 'false' && '--push-branch' || '--dry-run' }}
