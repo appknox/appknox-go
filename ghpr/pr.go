@@ -8,7 +8,6 @@ package ghpr
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,51 +40,51 @@ func (c Config) apiBase() string {
 	return defaultAPIBase
 }
 
-// Change is the branch + single patched file + commit message to push.
-type Change struct {
-	Branch  string
-	Path    string
-	Content string
-	Message string
-}
-
 // FileChange is one patched file (path + content + commit message).
+//
+// Message survives for per-file provenance in the report, but every file now
+// lands in ONE commit, so PushFiles takes the commit subject separately.
 type FileChange struct {
 	Path    string
 	Content string
 	Message string
 }
 
-// PushBranch pushes a single patched file to a new branch (thin wrapper).
-func PushBranch(ctx context.Context, cfg Config, ch Change) (string, error) {
-	return PushFiles(ctx, cfg, ch.Branch, []FileChange{{Path: ch.Path, Content: ch.Content, Message: ch.Message}})
-}
-
-// PushFiles creates branch off the base ref and commits each patched file to it
-// (one commit per file), returning a compare URL that pre-fills a PR. Idempotent:
-// an existing branch is reused. It does not open the PR itself.
-func PushFiles(ctx context.Context, cfg Config, branch string, files []FileChange) (string, error) {
+// PushFiles creates branch off the base ref and writes every patched file in
+// ONE commit, returning the compare URL and the commit SHA. Idempotent: an
+// existing branch is reused and the commit is parented on its tip. It does not
+// open the PR itself.
+func PushFiles(ctx context.Context, cfg Config, branch string, files []FileChange, message string) (Result, error) {
 	if cfg.Owner == "" || cfg.Repo == "" || cfg.Token == "" {
-		return "", errors.New("ghpr: owner, repo, and token are required")
+		return Result{}, errors.New("ghpr: owner, repo, and token are required")
 	}
 	if len(files) == 0 {
-		return "", errors.New("ghpr: no files to push")
+		return Result{}, errors.New("ghpr: no files to push")
 	}
 	base, err := resolveBase(ctx, cfg)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 	baseSHA, err := branchSHA(ctx, cfg, base)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 	if err := createBranch(ctx, cfg, branch, baseSHA); err != nil {
-		return "", err
+		return Result{}, err
 	}
-	if err := commitFiles(ctx, cfg, branch, files); err != nil {
-		return "", err
+	if message == "" {
+		message = "fix(autofix): apply scan fixes"
 	}
-	return compareURL(cfg, base, branch), nil
+	sha, err := commitFiles(ctx, cfg, branch, files, message)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{
+		URL:       compareURL(cfg, base, branch),
+		Branch:    branch,
+		Base:      base,
+		CommitSHA: sha,
+	}, nil
 }
 
 // resolveBase returns the configured base ref or the repo's default branch.
@@ -94,22 +93,6 @@ func resolveBase(ctx context.Context, cfg Config) (string, error) {
 		return cfg.BaseRef, nil
 	}
 	return defaultBranch(ctx, cfg)
-}
-
-// commitFiles commits each file to the branch, one commit per file. On a re-run
-// the file's current blob sha on the branch is used so the update is accepted.
-func commitFiles(ctx context.Context, cfg Config, branch string, files []FileChange) error {
-	for _, f := range files {
-		fileSHA, err := currentFileSHA(ctx, cfg, f.Path, branch)
-		if err != nil {
-			return err
-		}
-		ch := Change{Branch: branch, Path: f.Path, Content: f.Content, Message: f.Message}
-		if err := putFile(ctx, cfg, ch, fileSHA); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func defaultBranch(ctx context.Context, cfg Config) (string, error) {
@@ -152,43 +135,6 @@ func createBranch(ctx context.Context, cfg Config, branch, sha string) error {
 		return nil // reuse the existing branch
 	}
 	return err
-}
-
-// currentFileSHA returns the file's blob sha on ref (needed to update it), or ""
-// when the file does not exist yet (a new file).
-func currentFileSHA(ctx context.Context, cfg Config, path, ref string) (string, error) {
-	var out struct {
-		SHA string `json:"sha"`
-	}
-	u := contentsURL(cfg, path) + "?ref=" + url.QueryEscape(ref)
-	if err := cfg.do(ctx, http.MethodGet, u, nil, &out); err != nil {
-		if strings.Contains(err.Error(), "HTTP 404") {
-			return "", nil
-		}
-		return "", err
-	}
-	return out.SHA, nil
-}
-
-func putFile(ctx context.Context, cfg Config, ch Change, fileSHA string) error {
-	body := map[string]string{
-		"message": ch.Message,
-		"content": base64.StdEncoding.EncodeToString([]byte(ch.Content)),
-		"branch":  ch.Branch,
-	}
-	if fileSHA != "" {
-		body["sha"] = fileSHA
-	}
-	return cfg.do(ctx, http.MethodPut, contentsURL(cfg, ch.Path), body, nil)
-}
-
-// contentsURL builds the Contents API URL with each path segment escaped.
-func contentsURL(cfg Config, path string) string {
-	segs := strings.Split(path, "/")
-	for i, s := range segs {
-		segs[i] = url.PathEscape(s)
-	}
-	return fmt.Sprintf("%s/repos/%s/%s/contents/%s", cfg.apiBase(), cfg.Owner, cfg.Repo, strings.Join(segs, "/"))
 }
 
 // compareURL is the "open a PR" page for base...branch.

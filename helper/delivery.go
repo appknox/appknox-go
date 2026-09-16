@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/appknox/appknox-go/appknox"
 	"github.com/appknox/appknox-go/ghpr"
 )
 
@@ -39,10 +40,27 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 		files[i] = ghpr.FileChange{Path: p.Path, Content: p.Content, Message: commitMessage(inputs, p.Path)}
 	}
 	branch := prBranch(opts.FileID, patches[0].Path)
-	if _, err := ghpr.PushFiles(ctx, cfg, branch, files); err != nil {
+	res, err := ghpr.PushFiles(ctx, cfg, branch, files, commitMessage(inputs, patches[0].Path))
+	if err != nil {
 		return "", err
 	}
+	prURL, err := openOrReusePR(ctx, cfg, branch, res.Base, inputs, patches)
+	if err != nil {
+		return "", err
+	}
+	// Record the delivery on Appknox. A failure here is reported but does not
+	// fail the run: the pull request exists and is the thing that matters, so
+	// losing the link is a reporting gap, not a reason to discard a delivered
+	// fix the developer can already see.
+	if err := reportAutofixPR(ctx, opts, res, prURL, patches); err != nil {
+		fmt.Printf("   !! pushed %s but failed to record it on Appknox: %v\n", branch, err)
+	}
+	return prURL, nil
+}
 
+// openOrReusePR returns the existing open PR for the branch, else opens one.
+func openOrReusePR(ctx context.Context, cfg ghpr.Config, branch, base string,
+	inputs FindingInputs, patches []filePatch) (string, error) {
 	existing, err := ghpr.FindOpenPR(ctx, cfg, branch)
 	if err != nil {
 		return "", err
@@ -55,6 +73,31 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 		Title: prTitle(inputs),
 		Body:  prBody(inputs, patches),
 	})
+}
+
+// reportAutofixPR links the delivered pull request back to the scanned file,
+// so the platform can show that a fix is waiting rather than only that the
+// finding is still open.
+//
+// Skipped without a file id: a manual --finding run has no scan to attach to.
+func reportAutofixPR(ctx context.Context, opts AutofixOptions,
+	res ghpr.Result, prURL string, patches []filePatch) error {
+	if opts.FileID <= 0 {
+		return nil
+	}
+	paths := make([]string, len(patches))
+	for i, p := range patches {
+		paths[i] = p.Path
+	}
+	_, _, err := getClient().Files.CreateAutofixPR(ctx, opts.FileID, &appknox.AutofixPR{
+		Repo:         opts.Repo,
+		BaseBranch:   res.Base,
+		Branch:       res.Branch,
+		PRURL:        prURL,
+		CommitSHA:    res.CommitSHA,
+		PatchedFiles: paths,
+	})
+	return err
 }
 
 // prBranch is a stable branch name for the fix.

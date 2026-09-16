@@ -11,166 +11,184 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeGitHub serves the endpoints PushBranch calls; fileExists toggles the
-// contents GET between 200 (update) and 404 (new file).
-func fakeGitHub(t *testing.T, fileExists bool) (*httptest.Server, *[]string) {
+// gitDB records what the Git Database API was asked to do, so a test can
+// assert the SHAPE of the push -- how many blobs, how many commits -- rather
+// than only that it returned no error.
+type gitDB struct {
+	seen         []string
+	blobs        int
+	commits      int
+	treeEntries  []treeEntry
+	baseTree     string
+	commitMsg    string
+	refUpdated   string
+	branchExists bool
+}
+
+// fakeGitDB serves the endpoints PushFiles calls.
+func fakeGitDB(t *testing.T, db *gitDB) *httptest.Server {
 	t.Helper()
-	seen := &[]string{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		*seen = append(*seen, r.Method+" "+r.URL.Path)
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		db.seen = append(db.seen, r.Method+" "+r.URL.Path)
 		require.Equal(t, "Bearer ghtok", r.Header.Get("Authorization"))
 		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/git/ref/heads/master"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "BASESHA"}})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/git/ref/heads/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"object": map[string]string{"sha": "PARENTSHA"}})
+
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/refs"):
-			var b map[string]string
-			_ = json.NewDecoder(r.Body).Decode(&b)
-			require.Equal(t, "refs/heads/appknox-autofix/analysis-42", b["ref"])
-			require.Equal(t, "BASESHA", b["sha"])
-			w.WriteHeader(http.StatusCreated)
-		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/contents/"):
-			if !fileExists {
-				w.WriteHeader(http.StatusNotFound)
-				_ = json.NewEncoder(w).Encode(map[string]string{"message": "Not Found"})
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]string{"sha": "OLDBLOB"})
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/contents/"):
-			var b map[string]string
-			_ = json.NewDecoder(r.Body).Decode(&b)
-			require.Equal(t, "appknox-autofix/analysis-42", b["branch"])
-			require.NotEmpty(t, b["content"]) // base64 patched content
-			if fileExists {
-				require.Equal(t, "OLDBLOB", b["sha"])
-			} else {
-				_, hasSHA := b["sha"]
-				require.False(t, hasSHA) // new file: no sha
-			}
-			w.WriteHeader(http.StatusCreated)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	return srv, seen
-}
-
-func change() Change {
-	return Change{
-		Branch: "appknox-autofix/analysis-42", Path: "app/src/Main.java",
-		Content: "fixed\n", Message: "fix(autofix): weak PRNG",
-	}
-}
-
-func TestPushBranch_ExistingFile(t *testing.T) {
-	srv, seen := fakeGitHub(t, true)
-	defer srv.Close()
-	url, err := PushBranch(context.Background(),
-		Config{Owner: "appknox", Repo: "mfva", BaseRef: "master", Token: "ghtok", APIBase: srv.URL}, change())
-	require.NoError(t, err)
-	require.Contains(t, url, "/appknox/mfva/compare/master...appknox-autofix/analysis-42")
-	require.Contains(t, *seen, "POST /repos/appknox/mfva/git/refs")
-}
-
-func TestPushBranch_NewFile(t *testing.T) {
-	srv, _ := fakeGitHub(t, false)
-	defer srv.Close()
-	_, err := PushBranch(context.Background(),
-		Config{Owner: "appknox", Repo: "mfva", BaseRef: "master", Token: "ghtok", APIBase: srv.URL}, change())
-	require.NoError(t, err) // 404 on contents -> new file, no sha, still commits
-}
-
-func TestPushBranch_RequiresConfig(t *testing.T) {
-	_, err := PushBranch(context.Background(), Config{Owner: "o", Repo: "r"}, change()) // no token
-	require.Error(t, err)
-}
-
-func TestPushBranch_ReusesExistingBranch(t *testing.T) {
-	// 422 "already exists" on the ref create must be treated as reuse (idempotent
-	// re-run): commit the new patch onto the existing branch using ITS file sha.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/git/ref/heads/master"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "S"}})
-		case strings.HasSuffix(r.URL.Path, "/git/refs"):
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			_ = json.NewEncoder(w).Encode(map[string]string{"message": "Reference already exists"})
-		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/contents/"):
-			_ = json.NewEncoder(w).Encode(map[string]string{"sha": "BRANCHBLOB"})
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/contents/"):
-			var b map[string]string
-			_ = json.NewDecoder(r.Body).Decode(&b)
-			require.Equal(t, "BRANCHBLOB", b["sha"]) // the branch's file sha, not base
-			w.WriteHeader(http.StatusCreated)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-	url, err := PushBranch(context.Background(),
-		Config{Owner: "o", Repo: "r", BaseRef: "master", Token: "ghtok", APIBase: srv.URL}, change())
-	require.NoError(t, err)
-	require.Contains(t, url, "/compare/")
-}
-
-func TestPushBranch_ResolvesDefaultBranch(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r":
-			_ = json.NewEncoder(w).Encode(map[string]string{"default_branch": "main"})
-		case strings.HasSuffix(r.URL.Path, "/git/ref/heads/main"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "S"}})
-		case strings.HasSuffix(r.URL.Path, "/git/refs"):
-			w.WriteHeader(http.StatusCreated)
-		case strings.Contains(r.URL.Path, "/contents/"):
-			if r.Method == http.MethodGet {
-				w.WriteHeader(http.StatusNotFound)
+			if db.branchExists {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"message": "Reference already exists"})
 				return
 			}
 			w.WriteHeader(http.StatusCreated)
+
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/git/commits/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"tree": map[string]string{"sha": "BASETREE"}})
+
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/blobs"):
+			db.blobs++
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": "BLOB"})
+
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/trees"):
+			var b struct {
+				BaseTree string      `json:"base_tree"`
+				Tree     []treeEntry `json:"tree"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			db.baseTree, db.treeEntries = b.BaseTree, b.Tree
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": "TREE"})
+
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/commits"):
+			db.commits++
+			var b map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			db.commitMsg, _ = b["message"].(string)
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": "NEWCOMMIT"})
+
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/git/refs/heads/"):
+			db.refUpdated = strings.SplitN(r.URL.Path, "/git/refs/heads/", 2)[1]
+			w.WriteHeader(http.StatusOK)
+
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/repos/o/r"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"default_branch": "develop"})
+
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
-	defer srv.Close()
-	url, err := PushBranch(context.Background(),
-		Config{Owner: "o", Repo: "r", Token: "ghtok", APIBase: srv.URL}, change()) // no BaseRef
-	require.NoError(t, err)
-	require.Contains(t, url, "/compare/main...") // resolved default branch
 }
 
-func TestPushFiles_MultipleFiles(t *testing.T) {
-	puts := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/git/ref/heads/master"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "S"}})
-		case strings.HasSuffix(r.URL.Path, "/git/refs"):
-			w.WriteHeader(http.StatusCreated)
-		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/contents/"):
-			w.WriteHeader(http.StatusNotFound) // new files
-		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/contents/"):
-			puts++
-			w.WriteHeader(http.StatusCreated)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
+func pushCfg(srv *httptest.Server, base string) Config {
+	return Config{Owner: "o", Repo: "r", BaseRef: base, Token: "ghtok", APIBase: srv.URL}
+}
+
+// The point of the Git Database path: many files, ONE commit. The Contents API
+// this replaced wrote one commit per file, so no intermediate commit was ever
+// a state the fixer intended.
+func TestPushFiles_writesEveryFileInOneCommit(t *testing.T) {
+	db := &gitDB{}
+	srv := fakeGitDB(t, db)
 	defer srv.Close()
-	url, err := PushFiles(context.Background(),
-		Config{Owner: "o", Repo: "r", BaseRef: "master", Token: "ghtok", APIBase: srv.URL},
+
+	res, err := PushFiles(context.Background(), pushCfg(srv, "master"),
 		"appknox-autofix/analysis-42",
 		[]FileChange{
-			{Path: "app/A.java", Content: "a", Message: "fix A"},
-			{Path: "app/B.java", Content: "b", Message: "fix B"},
-		})
+			{Path: "app/A.java", Content: "a"},
+			{Path: "app/B.java", Content: "b"},
+			{Path: "app/C.java", Content: "c"},
+		}, "fix(autofix): three files")
+
 	require.NoError(t, err)
-	require.Equal(t, 2, puts) // one commit per file
-	require.Contains(t, url, "/compare/master...appknox-autofix/analysis-42")
+	require.Equal(t, 3, db.blobs, "one blob per file")
+	require.Equal(t, 1, db.commits, "exactly one commit for the whole scan")
+	require.Len(t, db.treeEntries, 3)
+	require.Equal(t, "BASETREE", db.baseTree, "tree must be a delta, not a replacement")
+	require.Equal(t, "fix(autofix): three files", db.commitMsg)
+	require.Equal(t, "NEWCOMMIT", res.CommitSHA)
+	require.Equal(t, "appknox-autofix/analysis-42", res.Branch)
+	require.Equal(t, "master", res.Base)
+	require.Contains(t, res.URL, "/compare/master...appknox-autofix/analysis-42")
 }
 
-func TestPushFiles_NoFiles(t *testing.T) {
-	_, err := PushFiles(context.Background(), Config{Owner: "o", Repo: "r", Token: "t"}, "b", nil)
-	require.Error(t, err)
+// Tree entries must carry a normal file mode, or GitHub rejects the tree.
+func TestPushFiles_treeEntriesAreBlobsWithAFileMode(t *testing.T) {
+	db := &gitDB{}
+	srv := fakeGitDB(t, db)
+	defer srv.Close()
+
+	_, err := PushFiles(context.Background(), pushCfg(srv, "master"), "b",
+		[]FileChange{{Path: "app/A.java", Content: "a"}}, "m")
+
+	require.NoError(t, err)
+	require.Equal(t, "100644", db.treeEntries[0].Mode)
+	require.Equal(t, "blob", db.treeEntries[0].Type)
+	require.Equal(t, "app/A.java", db.treeEntries[0].Path)
+}
+
+// A re-run must reuse the branch and add a commit, not fail.
+func TestPushFiles_reusesAnExistingBranch(t *testing.T) {
+	db := &gitDB{branchExists: true}
+	srv := fakeGitDB(t, db)
+	defer srv.Close()
+
+	res, err := PushFiles(context.Background(), pushCfg(srv, "master"), "b",
+		[]FileChange{{Path: "a.java", Content: "a"}}, "m")
+
+	require.NoError(t, err)
+	require.Equal(t, "NEWCOMMIT", res.CommitSHA)
+}
+
+// The branch name keeps its slash: %2F would name a branch containing a
+// literal slash character rather than a path segment.
+func TestPushFiles_keepsSlashesInTheBranchRef(t *testing.T) {
+	db := &gitDB{}
+	srv := fakeGitDB(t, db)
+	defer srv.Close()
+
+	_, err := PushFiles(context.Background(), pushCfg(srv, "master"),
+		"appknox-autofix/analysis-42",
+		[]FileChange{{Path: "a.java", Content: "a"}}, "m")
+
+	require.NoError(t, err)
+	require.Equal(t, "appknox-autofix/analysis-42", db.refUpdated)
+}
+
+func TestPushFiles_resolvesTheDefaultBranch(t *testing.T) {
+	db := &gitDB{}
+	srv := fakeGitDB(t, db)
+	defer srv.Close()
+
+	res, err := PushFiles(context.Background(), pushCfg(srv, ""), "b",
+		[]FileChange{{Path: "a.java", Content: "a"}}, "m")
+
+	require.NoError(t, err)
+	require.Equal(t, "develop", res.Base)
+}
+
+func TestPushFiles_requiresConfigAndFiles(t *testing.T) {
+	_, err := PushFiles(context.Background(), Config{Owner: "o", Repo: "r", Token: "t"}, "b", nil, "m")
+	require.Error(t, err, "no files")
+
+	_, err = PushFiles(context.Background(), Config{Owner: "o"}, "b",
+		[]FileChange{{Path: "a", Content: "a"}}, "m")
+	require.Error(t, err, "missing token")
+}
+
+// An empty subject must not produce a commit with no message.
+func TestPushFiles_fallsBackToADefaultCommitMessage(t *testing.T) {
+	db := &gitDB{}
+	srv := fakeGitDB(t, db)
+	defer srv.Close()
+
+	_, err := PushFiles(context.Background(), pushCfg(srv, "master"), "b",
+		[]FileChange{{Path: "a.java", Content: "a"}}, "")
+
+	require.NoError(t, err)
+	require.NotEmpty(t, db.commitMsg)
 }
 
 func TestWebBase(t *testing.T) {
