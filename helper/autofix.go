@@ -84,6 +84,10 @@ type filePatch struct {
 	Diff       string
 	Confidence float64
 	Applied    bool
+	// Formatting is cosmetic advice about the patch -- tabs in a space-indented
+	// file, trailing whitespace. Reported, never enforced: formatting does not
+	// break a build, so it must not cost a working fix. See formatting.go.
+	Formatting string
 }
 
 // declinedFile is a located file the fixer chose not to edit, with its reason.
@@ -418,8 +422,14 @@ func (s fixSession) produce(ctx context.Context) (Outcome, error) {
 			return out, err
 		}
 		if res.Changed && res.PatchedContent != "" {
+			// Cosmetic only, and read from the file we already have. A failure
+			// to read it is not a reason to hold up a patch that passed the gate.
+			advice := ""
+			if before, err := os.ReadFile(filepath.Join(s.root, filepath.FromSlash(p))); err == nil {
+				advice = formattingAdvice(p, string(before), res.PatchedContent)
+			}
 			out.Patches = append(out.Patches, filePatch{
-				Path: p, Content: res.PatchedContent, Diff: res.Diff})
+				Path: p, Content: res.PatchedContent, Diff: res.Diff, Formatting: advice})
 		} else if reason := strings.TrimSpace(res.Reason); reason != "" {
 			// The fixer declined this file and said why. Keep it: without it the
 			// run reports only that no edit appeared, which is the symptom, not
@@ -697,6 +707,11 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 		fmt.Printf("\n=== %s ===\n", p.Path)
 		if p.Confidence > 0 {
 			fmt.Printf("confidence: %.2f\n", p.Confidence)
+		}
+		// Cosmetic, and said so: this never held the patch back, and a reviewer
+		// settles it in seconds on the pull request.
+		if p.Formatting != "" {
+			fmt.Printf("formatting (not enforced): %s\n", p.Formatting)
 		}
 		fmt.Println(p.Diff)
 	}
