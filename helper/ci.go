@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 )
@@ -15,6 +16,9 @@ func applyCIDefaults(opts AutofixOptions) AutofixOptions {
 	}
 	if opts.Ref == "" {
 		opts.Ref = refFromCI()
+	}
+	if opts.HeadRef == "" {
+		opts.HeadRef = headRefFromCI()
 	}
 	return opts
 }
@@ -44,12 +48,19 @@ func repoPathFromCI() string {
 	return ""
 }
 
-// refFromCI is the PR base branch (compare target).
-// Prefer GITHUB_BASE_REF on pull_request jobs; on push/workflow_dispatch use
-// the branch from GITHUB_REF (refs/heads/...). Empty falls through to the
-// repo default branch in ghpr.
+// refFromCI is the PR base branch (compare / merge target).
+// Prefer GITHUB_BASE_REF on pull_request jobs. On push / workflow_dispatch it
+// is empty so ghpr uses the repo default branch. Never GITHUB_REF_NAME
+// (on pull_request that is often "merge" / "123/merge").
 func refFromCI() string {
-	if r := strings.TrimSpace(os.Getenv("GITHUB_BASE_REF")); r != "" {
+	return strings.TrimSpace(os.Getenv("GITHUB_BASE_REF"))
+}
+
+// headRefFromCI is the customer feature branch that keys the shared autofix PR.
+// Prefer GITHUB_HEAD_REF on pull_request jobs; on push use the branch from
+// GITHUB_REF (refs/heads/...). Never GITHUB_REF_NAME.
+func headRefFromCI() string {
+	if r := strings.TrimSpace(os.Getenv("GITHUB_HEAD_REF")); r != "" {
 		return r
 	}
 	return branchFromGitHubRef(os.Getenv("GITHUB_REF"))
@@ -67,4 +78,45 @@ func branchFromGitHubRef(ref string) string {
 func validRepoSpec(spec string) bool {
 	_, _, err := splitRepo(spec)
 	return err == nil
+}
+
+// forkPRFromCI reports a pull_request whose head repo is not the base repo.
+// Autofix cannot push that head with the base-repo token.
+func forkPRFromCI() bool {
+	head, base := forkReposFromGitHubEvent(os.Getenv("GITHUB_EVENT_PATH"))
+	if head == "" {
+		return false
+	}
+	if base == "" {
+		base = os.Getenv("GITHUB_REPOSITORY")
+	}
+	return base != "" && !strings.EqualFold(head, base)
+}
+
+func forkReposFromGitHubEvent(path string) (headFullName, baseFullName string) {
+	if path == "" {
+		return "", ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", ""
+	}
+	var ev struct {
+		PullRequest struct {
+			Head struct {
+				Repo struct {
+					FullName string `json:"full_name"`
+				} `json:"repo"`
+			} `json:"head"`
+			Base struct {
+				Repo struct {
+					FullName string `json:"full_name"`
+				} `json:"repo"`
+			} `json:"base"`
+		} `json:"pull_request"`
+	}
+	if json.Unmarshal(data, &ev) != nil {
+		return "", ""
+	}
+	return ev.PullRequest.Head.Repo.FullName, ev.PullRequest.Base.Repo.FullName
 }

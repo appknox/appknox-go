@@ -18,7 +18,8 @@ import (
 // AutofixOptions carries the flags for the client-side autofix flow.
 type AutofixOptions struct {
 	Repo         string // GitHub owner/name from CI (GITHUB_REPOSITORY)
-	Ref          string // git ref (branch/tag/sha); empty = default branch
+	Ref          string // PR base / merge target; empty = repo default branch
+	HeadRef      string // feature branch this autofix belongs to (CI: GITHUB_HEAD_REF / GITHUB_REF)
 	RepoPath     string // already-checked-out repo (CI: GITHUB_WORKSPACE)
 	FileID       int    // Appknox file id (every fixable analysis on the file)
 	Finding      string // manual finding detail (when not using file id)

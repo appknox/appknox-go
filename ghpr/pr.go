@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	defaultAPIBase = "https://api.github.com"
-	httpTimeout    = 60 * time.Second
-	maxRespBytes   = 8 << 20 // cap any GitHub response (OOM guard)
-	fileMode       = "100644"
+	defaultAPIBase       = "https://api.github.com"
+	httpTimeout          = 60 * time.Second
+	maxRespBytes         = 8 << 20 // cap any GitHub response (OOM guard)
+	fileMode             = "100644"
+	maxRefUpdateAttempts = 5
 )
 
 // Config identifies the repo + base ref and carries the GitHub token.
@@ -117,7 +118,24 @@ func resolveBase(ctx context.Context, cfg Config) (string, error) {
 }
 
 // commitFiles writes every file into one commit on branch and points the ref at it.
+// Parallel jobs sharing the head can lose a non-fast-forward race; retry by
+// re-reading the tip and rebuilding the commit.
 func commitFiles(ctx context.Context, cfg Config, branch string, files []FileChange, message string) (string, error) {
+	var last error
+	for i := 0; i < maxRefUpdateAttempts; i++ {
+		sha, err := commitFilesOnce(ctx, cfg, branch, files, message)
+		if err == nil {
+			return sha, nil
+		}
+		last = err
+		if !isNotFastForward(err) {
+			return "", err
+		}
+	}
+	return "", last
+}
+
+func commitFilesOnce(ctx context.Context, cfg Config, branch string, files []FileChange, message string) (string, error) {
 	parent, err := branchSHA(ctx, cfg, branch)
 	if err != nil {
 		return "", err
@@ -148,6 +166,17 @@ func commitFiles(ctx context.Context, cfg Config, branch string, files []FileCha
 		return "", err
 	}
 	return sha, nil
+}
+
+func isNotFastForward(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "422") {
+		return false
+	}
+	return strings.Contains(msg, "fast-forward") || strings.Contains(msg, "fast forward")
 }
 
 func defaultBranch(ctx context.Context, cfg Config) (string, error) {
@@ -262,13 +291,24 @@ func createBranch(ctx context.Context, cfg Config, branch, sha string) error {
 	return err
 }
 
-// refPath keeps slashes in branch names (appknox-autofix/analysis-118).
+// refPath keeps slashes in branch names (appknox-autofix/feat/login).
 func refPath(ref string) string {
 	return strings.ReplaceAll(url.PathEscape(ref), "%2F", "/")
 }
 
+type pullRequest struct {
+	Number  int    `json:"number"`
+	HTMLURL string `json:"html_url"`
+	State   string `json:"state"`
+	Body    string `json:"body"`
+	Head    struct {
+		Ref string `json:"ref"`
+	} `json:"head"`
+}
+
 // OpenPullRequest opens a PR from branch into base and returns its html_url.
-// If that PR already exists, the existing URL is returned.
+// An already-open PR for the same head+base is reused (body appended). After
+// that PR is closed or merged, a new PR is opened when the head has new commits.
 func OpenPullRequest(ctx context.Context, cfg Config, base, branch, title, body string) (string, error) {
 	if cfg.Owner == "" || cfg.Repo == "" || cfg.Token == "" {
 		return "", errors.New("ghpr: owner, repo, and token are required")
@@ -278,6 +318,12 @@ func OpenPullRequest(ctx context.Context, cfg Config, base, branch, title, body 
 	}
 	if title == "" {
 		title = "Appknox autofix"
+	}
+	if existing, ok, err := lookupPR(ctx, cfg, base, branch, "open"); err != nil {
+		return "", err
+	} else if ok {
+		_ = appendPRBody(ctx, cfg, existing, body)
+		return existing.HTMLURL, nil
 	}
 	var out struct {
 		HTMLURL string `json:"html_url"`
@@ -290,7 +336,15 @@ func OpenPullRequest(ctx context.Context, cfg Config, base, branch, title, body 
 	}, &out)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "already exists") {
-			return findExistingPR(ctx, cfg, base, branch)
+			existing, ok, findErr := lookupPR(ctx, cfg, base, branch, "open")
+			if findErr != nil {
+				return "", findErr
+			}
+			if !ok {
+				return "", fmt.Errorf("ghpr: pull request already exists but could not be found for %s: %w", branch, err)
+			}
+			_ = appendPRBody(ctx, cfg, existing, body)
+			return existing.HTMLURL, nil
 		}
 		return "", err
 	}
@@ -300,22 +354,51 @@ func OpenPullRequest(ctx context.Context, cfg Config, base, branch, title, body 
 	return out.HTMLURL, nil
 }
 
-func findExistingPR(ctx context.Context, cfg Config, base, branch string) (string, error) {
-	var out []struct {
-		HTMLURL string `json:"html_url"`
+func lookupPR(ctx context.Context, cfg Config, base, branch, state string) (pullRequest, bool, error) {
+	pulls, err := listPulls(ctx, cfg, base, branch, state, true)
+	if err != nil {
+		return pullRequest{}, false, err
 	}
+	if len(pulls) > 0 && pulls[0].HTMLURL != "" {
+		return pulls[0], true, nil
+	}
+	pulls, err = listPulls(ctx, cfg, base, "", state, false)
+	if err != nil {
+		return pullRequest{}, false, err
+	}
+	for _, p := range pulls {
+		if p.Head.Ref == branch && p.HTMLURL != "" {
+			return p, true, nil
+		}
+	}
+	return pullRequest{}, false, nil
+}
+
+func listPulls(ctx context.Context, cfg Config, base, branch, state string, withHead bool) ([]pullRequest, error) {
 	q := url.Values{
-		"head":  {cfg.Owner + ":" + branch},
-		"base":  {base},
-		"state": {"open"},
+		"base":     {base},
+		"state":    {state},
+		"per_page": {"100"},
 	}
-	if err := cfg.do(ctx, http.MethodGet, cfg.repoURL("pulls")+"?"+q.Encode(), nil, &out); err != nil {
-		return "", err
+	if withHead && branch != "" {
+		q.Set("head", cfg.Owner+":"+branch)
 	}
-	if len(out) == 0 || out[0].HTMLURL == "" {
-		return "", fmt.Errorf("ghpr: pull request already exists but could not be found for %s", branch)
+	var out []pullRequest
+	err := cfg.do(ctx, http.MethodGet, cfg.repoURL("pulls")+"?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+func appendPRBody(ctx context.Context, cfg Config, pr pullRequest, extra string) error {
+	extra = strings.TrimSpace(extra)
+	if extra == "" || pr.Number == 0 {
+		return nil
 	}
-	return out[0].HTMLURL, nil
+	merged := extra
+	if strings.TrimSpace(pr.Body) != "" {
+		merged = strings.TrimRight(pr.Body, "\n") + "\n\n---\n\n" + extra
+	}
+	return cfg.do(ctx, http.MethodPatch, cfg.repoURL(fmt.Sprintf("pulls/%d", pr.Number)),
+		map[string]string{"body": merged}, nil)
 }
 
 // compareURL is the "open a PR" page for base...branch.

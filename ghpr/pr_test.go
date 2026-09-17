@@ -3,6 +3,7 @@ package ghpr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -219,35 +220,58 @@ func TestWebBase(t *testing.T) {
 }
 
 func TestOpenPullRequest_CreatesPR(t *testing.T) {
+	posted := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodPost, r.Method)
-		require.Equal(t, "/repos/appknox/mfva/pulls", r.URL.Path)
-		var b map[string]string
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&b))
-		require.Equal(t, "master", b["base"])
-		require.Equal(t, "appknox-autofix/analysis-42", b["head"])
-		require.Contains(t, b["title"], "autofix")
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]string{"html_url": "https://github.com/appknox/mfva/pull/9"})
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/appknox/mfva/pulls":
+			_ = json.NewEncoder(w).Encode([]any{})
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/appknox/mfva/pulls":
+			posted = true
+			var b map[string]string
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&b))
+			require.Equal(t, "master", b["base"])
+			require.Equal(t, "appknox-autofix/feat/login", b["head"])
+			require.Contains(t, b["title"], "autofix")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]string{"html_url": "https://github.com/appknox/mfva/pull/9"})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	defer srv.Close()
 	url, err := OpenPullRequest(context.Background(),
 		Config{Owner: "appknox", Repo: "mfva", Token: "ghtok", APIBase: srv.URL},
-		"master", "appknox-autofix/analysis-42", "fix(autofix): weak PRNG", "body")
+		"master", "appknox-autofix/feat/login", "fix(autofix): feat/login", "body")
 	require.NoError(t, err)
+	require.True(t, posted)
 	require.Equal(t, "https://github.com/appknox/mfva/pull/9", url)
 }
 
 func TestOpenPullRequest_ReusesExisting(t *testing.T) {
+	posted, patched := false, false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/pulls":
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			_ = json.NewEncoder(w).Encode(map[string]string{"message": "A pull request already exists for o:appknox-autofix/analysis-42"})
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/pulls":
-			require.Equal(t, "o:appknox-autofix/analysis-42", r.URL.Query().Get("head"))
+			require.Equal(t, "o:appknox-autofix/feat/login", r.URL.Query().Get("head"))
 			require.Equal(t, "master", r.URL.Query().Get("base"))
-			_ = json.NewEncoder(w).Encode([]map[string]string{{"html_url": "https://github.com/o/r/pull/3"}})
+			require.Equal(t, "open", r.URL.Query().Get("state"))
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"html_url": "https://github.com/o/r/pull/3",
+				"number":   3,
+				"state":    "open",
+				"body":     "first run",
+				"head":     map[string]string{"ref": "appknox-autofix/feat/login"},
+			}})
+		case r.Method == http.MethodPatch && r.URL.Path == "/repos/o/r/pulls/3":
+			patched = true
+			var b map[string]string
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&b))
+			require.Contains(t, b["body"], "first run")
+			require.Contains(t, b["body"], "file 119")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/pulls":
+			posted = true
+			w.WriteHeader(http.StatusInternalServerError)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -255,7 +279,204 @@ func TestOpenPullRequest_ReusesExisting(t *testing.T) {
 	defer srv.Close()
 	url, err := OpenPullRequest(context.Background(),
 		Config{Owner: "o", Repo: "r", Token: "ghtok", APIBase: srv.URL},
-		"master", "appknox-autofix/analysis-42", "t", "")
+		"master", "appknox-autofix/feat/login", "fix(autofix): feat/login", "file 119")
 	require.NoError(t, err)
+	require.False(t, posted)
+	require.True(t, patched)
 	require.Equal(t, "https://github.com/o/r/pull/3", url)
+}
+
+func TestOpenPullRequest_ClosedPROpensNew(t *testing.T) {
+	posted := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/pulls":
+			require.Equal(t, "open", r.URL.Query().Get("state"))
+			_ = json.NewEncoder(w).Encode([]any{})
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/pulls":
+			posted = true
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]string{"html_url": "https://github.com/o/r/pull/10"})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	url, err := OpenPullRequest(context.Background(),
+		Config{Owner: "o", Repo: "r", Token: "ghtok", APIBase: srv.URL},
+		"master", "appknox-autofix/feat/login", "t", "second generation")
+	require.NoError(t, err)
+	require.True(t, posted)
+	require.Equal(t, "https://github.com/o/r/pull/10", url)
+}
+
+func TestOpenPullRequest_MissingExistingErrorsClearly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/pulls":
+			_ = json.NewEncoder(w).Encode([]any{})
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/pulls":
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"message": "A pull request already exists for o:appknox-autofix/feat/login",
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	url, err := OpenPullRequest(context.Background(),
+		Config{Owner: "o", Repo: "r", Token: "ghtok", APIBase: srv.URL},
+		"master", "appknox-autofix/feat/login", "t", "")
+	require.Error(t, err)
+	require.Empty(t, url)
+	require.Contains(t, err.Error(), "could not be found")
+	require.Contains(t, err.Error(), "already exists")
+	require.NotContains(t, err.Error(), "/compare/")
+}
+
+func TestOpenPullRequest_LookupWithoutOwnerHead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/pulls":
+			if r.URL.Query().Get("head") != "" {
+				_ = json.NewEncoder(w).Encode([]any{})
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]map[string]any{{
+				"html_url": "https://github.com/o/r/pull/4",
+				"number":   4,
+				"state":    "open",
+				"head":     map[string]string{"ref": "appknox-autofix/feat/login"},
+			}})
+		case r.Method == http.MethodPatch && r.URL.Path == "/repos/o/r/pulls/4":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	url, err := OpenPullRequest(context.Background(),
+		Config{Owner: "o", Repo: "r", Token: "ghtok", APIBase: srv.URL},
+		"master", "appknox-autofix/feat/login", "t", "")
+	require.NoError(t, err)
+	require.Equal(t, "https://github.com/o/r/pull/4", url)
+}
+
+func TestPushFiles_RetriesNotFastForward(t *testing.T) {
+	const stale, winner, firstSHA, retrySHA = "STALESHA", "WINNERSHA", "COMMIT1", "COMMIT2"
+	patches := 0
+	parents := []string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/git/ref/heads/master"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "BASESHA"}})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/git/ref/heads/"):
+			sha := stale
+			if patches > 0 {
+				sha = winner
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": sha}})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/refs"):
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]string{"message": "Reference already exists"})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/git/commits/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"tree": map[string]string{"sha": testTreeSHA}})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/blobs"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": testBlobSHA})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/trees"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": "NEWTREE"})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/commits"):
+			var b struct {
+				Parents []string `json:"parents"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			parents = append(parents, b.Parents...)
+			sha := firstSHA
+			if patches > 0 {
+				sha = retrySHA
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": sha})
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/git/refs/heads/"):
+			if patches == 0 {
+				patches++
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_ = json.NewEncoder(w).Encode(map[string]string{"message": "Update is not a fast-forward"})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	res, err := PushFiles(context.Background(),
+		Config{Owner: "o", Repo: "r", BaseRef: "master", Token: "ghtok", APIBase: srv.URL},
+		"appknox-autofix/feat/login",
+		[]FileChange{{Path: "app/A.java", Content: "a"}},
+		"fix(autofix): feat/login")
+	require.NoError(t, err)
+	require.Equal(t, retrySHA, res.CommitSHA)
+	require.Equal(t, []string{stale, winner}, parents)
+}
+
+func TestPushFiles_SecondCommitParentsOnFirst(t *testing.T) {
+	tip := "BASESHA"
+	parents := []string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/git/ref/heads/master"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "BASESHA"}})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/git/ref/heads/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": tip}})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/refs"):
+			if tip != "BASESHA" {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_ = json.NewEncoder(w).Encode(map[string]string{"message": "Reference already exists"})
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/git/commits/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"tree": map[string]string{"sha": testTreeSHA}})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/blobs"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": testBlobSHA})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/trees"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": "NEWTREE"})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git/commits"):
+			var b struct {
+				Parents []string `json:"parents"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			parents = append(parents, b.Parents...)
+			sha := "COMMIT-A"
+			if len(parents) > 1 {
+				sha = "COMMIT-B"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": sha})
+		case r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/git/refs/heads/"):
+			var b map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			tip = b["sha"].(string)
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	cfg := Config{Owner: "o", Repo: "r", BaseRef: "master", Token: "ghtok", APIBase: srv.URL}
+	first, err := PushFiles(context.Background(), cfg, "appknox-autofix/feat/login",
+		[]FileChange{{Path: "app/A.java", Content: "a"}}, "c1")
+	require.NoError(t, err)
+	second, err := PushFiles(context.Background(), cfg, "appknox-autofix/feat/login",
+		[]FileChange{{Path: "app/B.java", Content: "b"}}, "c2")
+	require.NoError(t, err)
+	require.Equal(t, "COMMIT-A", first.CommitSHA)
+	require.Equal(t, "COMMIT-B", second.CommitSHA)
+	require.Equal(t, []string{"BASESHA", "COMMIT-A"}, parents)
+}
+
+func TestIsNotFastForward(t *testing.T) {
+	require.True(t, isNotFastForward(errors.New("ghpr: PATCH /x -> HTTP 422: Update is not a fast-forward")))
+	require.False(t, isNotFastForward(errors.New("ghpr: PATCH /x -> HTTP 422: Validation Failed")))
+	require.False(t, isNotFastForward(errors.New("ghpr: PATCH /x -> HTTP 403: forbidden")))
 }

@@ -8,10 +8,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/appknox/appknox-go/ghpr"
+)
+
+const (
+	autofixBranchPrefix = "appknox-autofix/"
+	// GitHub refs are limited to ~244 bytes including "refs/heads/".
+	gitHubRefMaxBytes = 244
+	refsHeadsPrefix   = "refs/heads/"
+)
+
+var (
+	errNeedHeadRef = errors.New("autofix needs --head-ref (or GITHUB_HEAD_REF / GITHUB_REF refs/heads/…)")
+	errForkPR      = errors.New("autofix does not support fork PRs (cannot push the head)")
+	disallowedHead = regexp.MustCompile(`[^A-Za-z0-9._/-]+`)
 )
 
 // Delivery is the GitHub push outcome recorded on Appknox after autofix.
@@ -26,6 +40,9 @@ type Delivery struct {
 // returns the PR URL for Mycroft's KnoxIQ AutofixPR row.
 func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch) (Delivery, error) {
 	opts = applyCIDefaults(opts)
+	if forkPRFromCI() {
+		return Delivery{}, errForkPR
+	}
 	owner, name, err := splitRepo(opts.Repo)
 	if err != nil {
 		return Delivery{}, errors.New("autofix needs a CI repo (GITHUB_REPOSITORY) to push the fix branch")
@@ -34,16 +51,16 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 	if token == "" {
 		return Delivery{}, errors.New("autofix needs a GitHub token (--github-token or GITHUB_TOKEN) to push the fix branch")
 	}
+	branch, err := prBranch(opts.HeadRef)
+	if err != nil {
+		return Delivery{}, err
+	}
 	files := make([]ghpr.FileChange, len(patches))
 	for i, p := range patches {
 		files[i] = ghpr.FileChange{Path: p.Path, Content: p.Content}
 	}
 	cfg := ghpr.Config{Owner: owner, Repo: name, BaseRef: opts.Ref, Token: token, APIBase: os.Getenv("GITHUB_API_URL")}
-	fallback := ""
-	if len(patches) > 0 {
-		fallback = patches[0].Path
-	}
-	res, err := ghpr.PushFiles(ctx, cfg, prBranch(opts.FileID, fallback), files, prTitle(opts))
+	res, err := ghpr.PushFiles(ctx, cfg, branch, files, prTitle(opts))
 	if err != nil {
 		return Delivery{}, err
 	}
@@ -55,8 +72,8 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 }
 
 func prTitle(opts AutofixOptions) string {
-	if opts.FileID > 0 {
-		return fmt.Sprintf("fix(autofix): Appknox scan (file %d)", opts.FileID)
+	if opts.HeadRef != "" {
+		return "fix(autofix): " + strings.TrimSpace(opts.HeadRef)
 	}
 	return "fix(autofix): security findings"
 }
@@ -65,7 +82,7 @@ func prBody(opts AutofixOptions, patches []filePatch) string {
 	var b strings.Builder
 	b.WriteString("Appknox autofix generated this change from a scan.\n\n")
 	if opts.FileID > 0 {
-		fmt.Fprintf(&b, "- File id: `%d`\n", opts.FileID)
+		fmt.Fprintf(&b, "- File id (this run): `%d`\n", opts.FileID)
 	}
 	findings := uniqueFindings(patches)
 	if len(findings) > 0 {
@@ -129,13 +146,61 @@ func buildAutofixPR(opts AutofixOptions, d Delivery, patches []filePatch) *appkn
 	}
 }
 
-// prBranch is a stable branch name for the file's fix PR.
-func prBranch(fileID int, path string) string {
-	if fileID > 0 {
-		return fmt.Sprintf("appknox-autofix/analysis-%d", fileID)
+// prBranch is a stable GitHub head for every file id on the same feature branch.
+func prBranch(headRef string) (string, error) {
+	feature, err := sanitizeFeature(headRef)
+	if err != nil {
+		return "", err
 	}
-	sum := sha256.Sum256([]byte(path))
-	return "appknox-autofix/fix-" + hex.EncodeToString(sum[:])[:10]
+	return capGitRef(autofixBranchPrefix+feature, headRef), nil
+}
+
+func sanitizeFeature(headRef string) (string, error) {
+	headRef = strings.TrimSpace(headRef)
+	if headRef == "" {
+		return "", errNeedHeadRef
+	}
+	replaced := disallowedHead.ReplaceAllString(headRef, "-")
+	var kept []string
+	for _, part := range strings.Split(replaced, "/") {
+		part = strings.Trim(part, ".")
+		if part == "" || part == "." || part == ".." {
+			continue
+		}
+		for strings.Contains(part, "..") {
+			part = strings.ReplaceAll(part, "..", ".")
+		}
+		part = strings.Trim(part, ".")
+		if part == "" {
+			continue
+		}
+		kept = append(kept, part)
+	}
+	out := strings.Join(kept, "/")
+	if out == "" {
+		return "", fmt.Errorf("illegal feature branch name %q", headRef)
+	}
+	return out, nil
+}
+
+// capGitRef truncates a branch name to GitHub's ref limit, keeping uniqueness
+// with a short hash of the original feature name.
+func capGitRef(branch, original string) string {
+	max := gitHubRefMaxBytes - len(refsHeadsPrefix)
+	if len(branch) <= max {
+		return branch
+	}
+	sum := sha256.Sum256([]byte(original))
+	suffix := "-" + hex.EncodeToString(sum[:4])
+	keep := max - len(suffix)
+	if keep < 1 {
+		return suffix[1:]
+	}
+	truncated := strings.TrimRight(branch[:keep], "/.-")
+	if truncated == "" {
+		truncated = strings.TrimRight(autofixBranchPrefix, "/")
+	}
+	return truncated + suffix
 }
 
 // commitMessage is a conventional-commit subject for the fix.
