@@ -14,7 +14,7 @@ request, and record it on Appknox. Repo, checkout, and token come from CI
 (GITHUB_REPOSITORY, GITHUB_WORKSPACE, GITHUB_TOKEN). The feature branch
 (GITHUB_HEAD_REF, or GITHUB_REF on push) names one shared head
 appknox-autofix/{feature}; every --file-id on that branch appends a commit
-to the same PR. --ref is the PR base (GITHUB_BASE_REF / repo default).
+to the same PR. --ref is the PR base (GITHUB_BASE_REF, else the push branch).
 
 On GitHub Actions, set concurrency: autofix-${{ github.head_ref || github.ref_name }}
 so parallel file-id jobs do not race the shared ref (the CLI also retries
@@ -43,7 +43,7 @@ The repository stays on this machine; only model turns route through Mycroft
 func init() {
 	RootCmd.AddCommand(autofixCmd)
 	f := autofixCmd.Flags()
-	f.String("ref", "", "PR base / merge target; CI uses GITHUB_BASE_REF, else the repo default branch")
+	f.String("ref", "", "PR base / merge target; CI uses GITHUB_BASE_REF, else the push branch (GITHUB_REF)")
 	f.String("head-ref", "", "Feature branch this autofix belongs to (CI: GITHUB_HEAD_REF / GITHUB_REF). All file ids on this branch share one GitHub PR.")
 	f.String("repo-path", "", "Path to an already-checked-out repo (CI uses GITHUB_WORKSPACE if empty)")
 	f.Int("file-id", 0, "Appknox file id (fixes every analysis with class hints + remediation)")

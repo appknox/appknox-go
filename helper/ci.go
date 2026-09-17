@@ -20,6 +20,10 @@ func applyCIDefaults(opts AutofixOptions) AutofixOptions {
 	if opts.HeadRef == "" {
 		opts.HeadRef = headRefFromCI()
 	}
+	// Known feature + no merge target → PR into that branch, not the repo default (master).
+	if opts.Ref == "" && opts.HeadRef != "" {
+		opts.Ref = opts.HeadRef
+	}
 	return opts
 }
 
@@ -48,12 +52,15 @@ func repoPathFromCI() string {
 	return ""
 }
 
-// refFromCI is the PR base branch (compare / merge target).
-// Prefer GITHUB_BASE_REF on pull_request jobs. On push / workflow_dispatch it
-// is empty so ghpr uses the repo default branch. Never GITHUB_REF_NAME
-// (on pull_request that is often "merge" / "123/merge").
+// refFromCI is the PR base (the branch the autofix PR merges into, and the
+// git parent of appknox-autofix/…). Prefer GITHUB_BASE_REF on pull_request
+// jobs. On push / workflow_dispatch use the branch from GITHUB_REF so we do
+// not silently target the repo default (master). Never GITHUB_REF_NAME.
 func refFromCI() string {
-	return strings.TrimSpace(os.Getenv("GITHUB_BASE_REF"))
+	if r := strings.TrimSpace(os.Getenv("GITHUB_BASE_REF")); r != "" {
+		return r
+	}
+	return branchFromGitHubRef(os.Getenv("GITHUB_REF"))
 }
 
 // headRefFromCI is the customer feature branch that keys the shared autofix PR.

@@ -45,7 +45,14 @@ func TestApplyCIDefaults_GitHubPushBranch(t *testing.T) {
 
 	got := applyCIDefaults(AutofixOptions{})
 	require.Equal(t, "feature/autofixbranch", got.HeadRef)
-	require.Empty(t, got.Ref) // push has no GITHUB_BASE_REF; ghpr uses the default branch
+	require.Equal(t, "feature/autofixbranch", got.Ref) // push: PR into the branch that was pushed, not master
+}
+
+func TestApplyCIDefaults_HeadRefFillsMissingBase(t *testing.T) {
+	clearCIRepoEnv(t)
+	got := applyCIDefaults(AutofixOptions{HeadRef: "feat/login"})
+	require.Equal(t, "feat/login", got.HeadRef)
+	require.Equal(t, "feat/login", got.Ref)
 }
 
 func TestApplyCIDefaults_PrefersPullRequestBase(t *testing.T) {
@@ -84,6 +91,12 @@ func TestRefFromCI_IgnoresPullMergeRef(t *testing.T) {
 	clearCIRepoEnv(t)
 	t.Setenv("GITHUB_REF", "refs/pull/15/merge")
 	require.Empty(t, refFromCI())
+}
+
+func TestRefFromCI_PushUsesHeadsRef(t *testing.T) {
+	clearCIRepoEnv(t)
+	t.Setenv("GITHUB_REF", "refs/heads/feat/login")
+	require.Equal(t, "feat/login", refFromCI())
 }
 
 func TestApplyCIDefaults_DoesNotOverrideSetFields(t *testing.T) {
