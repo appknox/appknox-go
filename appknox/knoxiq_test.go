@@ -162,3 +162,61 @@ func TestKnoxIQService_CreateAutofixPR(t *testing.T) {
 		t.Errorf("CreateAutofixPR commits = %+v", got.Commits)
 	}
 }
+
+func TestKnoxIQService_StartAutofix(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/knoxiq/file/118/autofix", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "POST")
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprint(w, `{"id":12,"file":118,"project":45,"status":"Pending","pr_url":null,"error_message":""}`)
+	})
+
+	got, _, err := client.KnoxIQ.StartAutofix(context.Background(), 118)
+	if err != nil {
+		t.Fatalf("StartAutofix returned error: %v", err)
+	}
+	if got.ID != 12 || got.File != 118 || got.Project != 45 || got.Status != AutofixStatusPending {
+		t.Errorf("StartAutofix returned %+v", got)
+	}
+}
+
+func TestKnoxIQService_GetAutofixStatus(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/status", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		fmt.Fprint(w, `{"id":12,"file":118,"project":45,"status":"Processed","pr_url":"https://github.com/appknox/mfva/pull/16","error_message":""}`)
+	})
+
+	got, _, err := client.KnoxIQ.GetAutofixStatus(context.Background(), 118)
+	if err != nil {
+		t.Fatalf("GetAutofixStatus returned error: %v", err)
+	}
+	if got.Status != AutofixStatusProcessed || got.PRURL != "https://github.com/appknox/mfva/pull/16" {
+		t.Errorf("GetAutofixStatus returned %+v", got)
+	}
+	if got.Project != 45 || got.File != 118 {
+		t.Errorf("GetAutofixStatus ids = %+v", got)
+	}
+}
+
+func TestKnoxIQService_MarkAutofixTimedOut(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/timeout", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "POST")
+		fmt.Fprint(w, `{"id":12,"file":118,"project":45,"status":"Timed Out","pr_url":null,"error_message":""}`)
+	})
+
+	got, _, err := client.KnoxIQ.MarkAutofixTimedOut(context.Background(), 118)
+	if err != nil {
+		t.Fatalf("MarkAutofixTimedOut returned error: %v", err)
+	}
+	if got.Status != AutofixStatusTimedOut || got.File != 118 || got.Project != 45 {
+		t.Errorf("MarkAutofixTimedOut returned %+v", got)
+	}
+}

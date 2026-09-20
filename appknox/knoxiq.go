@@ -153,3 +153,60 @@ func (s *KnoxIQService) CreateAutofixPR(ctx context.Context, fileID int, pr *Aut
 	resp, err := s.client.Do(ctx, req, &out)
 	return &out, resp, err
 }
+
+// Autofix job status labels from GET /api/knoxiq/file/{id}/autofix/status/.
+const (
+	AutofixStatusPending    = "Pending"
+	AutofixStatusProcessing = "Processing"
+	AutofixStatusProcessed  = "Processed"
+	AutofixStatusErrored    = "Errored"
+	AutofixStatusTimedOut   = "Timed Out"
+)
+
+// AutofixRequest is one autofix job for a scanned file.
+type AutofixRequest struct {
+	ID           int        `json:"id,omitempty"`
+	File         int        `json:"file,omitempty"`
+	Project      int        `json:"project,omitempty"`
+	Status       string     `json:"status"`
+	PRURL        string     `json:"pr_url"`
+	ErrorMessage string     `json:"error_message,omitempty"`
+	CreatedOn    *time.Time `json:"created_on,omitempty"`
+	UpdatedOn    *time.Time `json:"updated_on,omitempty"`
+}
+
+// StartAutofix registers an autofix job for the file (PENDING) and enqueues it.
+func (s *KnoxIQService) StartAutofix(ctx context.Context, fileID int) (*AutofixRequest, *Response, error) {
+	u := fmt.Sprintf("api/knoxiq/file/%d/autofix", fileID)
+	req, err := s.client.NewRequest("POST", u, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out AutofixRequest
+	resp, err := s.client.Do(ctx, req, &out)
+	return &out, resp, err
+}
+
+// GetAutofixStatus returns the latest autofix job status for the file.
+func (s *KnoxIQService) GetAutofixStatus(ctx context.Context, fileID int) (*AutofixRequest, *Response, error) {
+	u := fmt.Sprintf("api/knoxiq/file/%d/autofix/status", fileID)
+	req, err := s.client.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out AutofixRequest
+	resp, err := s.client.Do(ctx, req, &out)
+	return &out, resp, err
+}
+
+// MarkAutofixTimedOut marks the in-flight autofix job as Timed Out.
+func (s *KnoxIQService) MarkAutofixTimedOut(ctx context.Context, fileID int) (*AutofixRequest, *Response, error) {
+	u := fmt.Sprintf("api/knoxiq/file/%d/autofix/timeout", fileID)
+	req, err := s.client.NewRequest("POST", u, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out AutofixRequest
+	resp, err := s.client.Do(ctx, req, &out)
+	return &out, resp, err
+}

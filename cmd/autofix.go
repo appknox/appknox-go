@@ -5,24 +5,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// autofixCmd locates the source file to fix for a finding, client-side.
+// autofixCmd starts autofix for a file and waits until the PR is recorded.
 var autofixCmd = &cobra.Command{
 	Use:   "autofix",
-	Short: "Locate the source file to fix for a finding (client-side).",
-	Long: `Locate source files for a scan, generate fixes, open a GitHub pull
-request, and record it on Appknox. Repo, checkout, and token come from CI
-(GITHUB_REPOSITORY, GITHUB_WORKSPACE, GITHUB_TOKEN). The feature branch
-(GITHUB_HEAD_REF, or GITHUB_REF on push) names one shared head
-appknox-autofix/{feature}; every --file-id on that branch appends a commit
-to the same PR. --ref is the PR base (GITHUB_BASE_REF, else the push branch).
+	Short: "Start autofix for a file and wait until the PR is raised.",
+	Long: `With --file-id, register an autofix job on Appknox and poll
+/api/knoxiq/file/{id}/autofix/status/ until the PR is recorded (Processed)
+or the job fails. CI stays in a waiting state for the same command:
 
-On GitHub Actions, set concurrency: autofix-${{ github.head_ref || github.ref_name }}
-so parallel file-id jobs do not race the shared ref (the CLI also retries
-non-fast-forward pushes). The workflow needs contents: write and
-pull-requests: write. Fork PRs are not supported.
+  appknox autofix --file-id 118
 
-The repository stays on this machine; only model turns route through Mycroft
-({APPKNOX_API_HOST}/api/knoxiq/autofix/) using APPKNOX_ACCESS_TOKEN. No provider key is needed here.`,
+--list-analyses still prints analyses for the file, then exits.
+--dry-run and --finding keep the local locate/fix path (no wait).
+
+APPKNOX_ACCESS_TOKEN is required. No provider key is needed here.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		f := cmd.Flags()
 		opts := helper.AutofixOptions{}
@@ -46,7 +42,7 @@ func init() {
 	f.String("ref", "", "PR base / merge target; CI uses GITHUB_BASE_REF, else the push branch (GITHUB_REF)")
 	f.String("head-ref", "", "Feature branch this autofix belongs to (CI: GITHUB_HEAD_REF / GITHUB_REF). All file ids on this branch share one GitHub PR.")
 	f.String("repo-path", "", "Path to an already-checked-out repo (CI uses GITHUB_WORKSPACE if empty)")
-	f.Int("file-id", 0, "Appknox file id (fixes every analysis with class hints + remediation)")
+	f.Int("file-id", 0, "Appknox file id (start autofix and wait until the PR is raised)")
 	f.String("finding", "", "Manual finding detail (when not using --file-id)")
 	f.String("class-hint", "", "Manual class/symbol hint from the finding (optional)")
 	f.String("github-token", "", "GitHub token for fetch + push (or env GITHUB_TOKEN)")

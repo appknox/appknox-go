@@ -2,10 +2,13 @@ package helper
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/appknox/appknox-go/agent"
 	"github.com/appknox/appknox-go/fixservice"
@@ -408,4 +411,111 @@ func TestRunAutofix_FileID_SkipsFailedFinding(t *testing.T) {
 	require.Len(t, out.Patches, 1)
 	require.Equal(t, "app/B.java", out.Patches[0].Path)
 	require.Contains(t, out.BranchURL, "/pull/")
+}
+
+func TestAwaitAutofix_NilClient(t *testing.T) {
+	err := awaitAutofix(context.Background(), nil, 118)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing Appknox client")
+}
+
+func TestAwaitAutofix_ProcessedOnStart(t *testing.T) {
+	client := testAppknoxClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/api/knoxiq/file/118/autofix", r.URL.Path)
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 12, "file": 118, "project": 45, "status": "Processed",
+			"pr_url": "https://github.com/appknox/mfva/pull/16",
+		})
+	})
+	require.NoError(t, awaitAutofix(context.Background(), client, 118))
+}
+
+func TestAwaitAutofix_PollsUntilProcessed(t *testing.T) {
+	prevSleep := autofixSleep
+	t.Cleanup(func() { autofixSleep = prevSleep })
+	autofixSleep = func(time.Duration) {}
+
+	n := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/knoxiq/file/118/autofix", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 12, "file": 118, "project": 45, "status": "Pending",
+		})
+	})
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/status", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		n++
+		status := "Processing"
+		pr := ""
+		if n >= 2 {
+			status = "Processed"
+			pr = "https://github.com/appknox/mfva/pull/16"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 12, "file": 118, "project": 45, "status": status, "pr_url": pr,
+		})
+	})
+	client := testAppknoxClient(t, mux.ServeHTTP)
+	require.NoError(t, awaitAutofix(context.Background(), client, 118))
+	require.GreaterOrEqual(t, n, 2)
+}
+
+func TestAwaitAutofix_Errored(t *testing.T) {
+	client := testAppknoxClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 12, "file": 118, "project": 45, "status": "Errored",
+			"error_message": "Sherrinford is unavailable",
+		})
+	})
+	err := awaitAutofix(context.Background(), client, 118)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Sherrinford is unavailable")
+}
+
+func TestAwaitAutofix_Timeout(t *testing.T) {
+	marked := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/timeout", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		marked = true
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 12, "file": 118, "project": 45, "status": "Timed Out",
+		})
+	})
+	mux.HandleFunc("/api/knoxiq/file/118/autofix", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 12, "file": 118, "project": 45, "status": "Pending",
+		})
+	})
+	client := testAppknoxClient(t, mux.ServeHTTP)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	err := awaitAutofix(ctx, client, 118)
+	require.EqualError(t, err, "autofix timed out for file 118 after 1h0m0s")
+	require.True(t, marked)
+}
+
+func TestAwaitAutofix_AlreadyTimedOut(t *testing.T) {
+	client := testAppknoxClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 12, "file": 118, "project": 45, "status": "Timed Out",
+		})
+	})
+	err := awaitAutofix(context.Background(), client, 118)
+	require.EqualError(t, err, "autofix timed out for file 118 after 1h0m0s")
+}
+
+func TestAwaitAutofix_StartError(t *testing.T) {
+	client := testAppknoxClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"detail": "denied"})
+	})
+	err := awaitAutofix(context.Background(), client, 118)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "autofix start failed")
 }

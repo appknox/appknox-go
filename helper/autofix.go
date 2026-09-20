@@ -7,12 +7,19 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/appknox/appknox-go/agent"
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/appknox/appknox-go/fixservice"
 	"github.com/appknox/appknox-go/ghfetch"
 	"github.com/spf13/viper"
+)
+
+var (
+	autofixPollInterval = 5 * time.Second
+	autofixHardLimit    = time.Hour
+	autofixSleep        = time.Sleep
 )
 
 // AutofixOptions carries the flags for the client-side autofix flow.
@@ -85,12 +92,110 @@ func ProcessAutofix(opts AutofixOptions) {
 		}
 		return
 	}
+	// CI / --file-id waits on Mycroft until the autofix PR is recorded.
+	// --dry-run and manual --finding keep the local locate/fix path.
+	if opts.FileID > 0 && !opts.DryRun {
+		if err := processAutofixWait(context.Background(), opts.FileID); err != nil {
+			PrintError(err)
+			os.Exit(1)
+		}
+		return
+	}
 	out, err := runAutofix(context.Background(), opts, defaultDeps())
 	if err != nil {
 		PrintError(err)
 		os.Exit(1)
 	}
 	printOutcome(opts, out)
+}
+
+func processAutofixWait(ctx context.Context, fileID int) error {
+	ctx, cancel := context.WithTimeout(ctx, autofixHardLimit)
+	defer cancel()
+	if err := checkKnoxIQReady(ctx, fileID); err != nil {
+		if isAutofixTimeout(ctx, err) {
+			return autofixTimeoutError(fileID)
+		}
+		return err
+	}
+	return awaitAutofix(ctx, getClient(), fileID)
+}
+
+func awaitAutofix(ctx context.Context, client *appknox.Client, fileID int) error {
+	if client == nil {
+		return fmt.Errorf("autofix start failed: missing Appknox client")
+	}
+	started, _, err := client.KnoxIQ.StartAutofix(ctx, fileID)
+	if err != nil {
+		if isAutofixTimeout(ctx, err) {
+			reportAutofixTimeout(client, fileID)
+			return autofixTimeoutError(fileID)
+		}
+		return fmt.Errorf("autofix start failed: %w", err)
+	}
+	fmt.Println("\nAutofix status:")
+	return pollAutofix(ctx, client, fileID, started)
+}
+
+func pollAutofix(ctx context.Context, client *appknox.Client, fileID int, current *appknox.AutofixRequest) error {
+	last := ""
+	for {
+		if current == nil {
+			return fmt.Errorf("autofix status missing for file %d", fileID)
+		}
+		if current.Status != last {
+			fmt.Printf("  %s\n", current.Status)
+			last = current.Status
+		}
+		switch current.Status {
+		case appknox.AutofixStatusProcessed:
+			if current.PRURL != "" {
+				fmt.Printf("Opened PR: %s\n", current.PRURL)
+			}
+			return nil
+		case appknox.AutofixStatusErrored:
+			msg := current.ErrorMessage
+			if msg == "" {
+				msg = "autofix failed"
+			}
+			return fmt.Errorf("autofix errored for file %d: %s", fileID, msg)
+		case appknox.AutofixStatusTimedOut:
+			return autofixTimeoutError(fileID)
+		}
+		if err := ctx.Err(); err != nil {
+			reportAutofixTimeout(client, fileID)
+			return autofixTimeoutError(fileID)
+		}
+		autofixSleep(autofixPollInterval)
+		if err := ctx.Err(); err != nil {
+			reportAutofixTimeout(client, fileID)
+			return autofixTimeoutError(fileID)
+		}
+		next, _, err := client.KnoxIQ.GetAutofixStatus(ctx, fileID)
+		if err != nil {
+			if isAutofixTimeout(ctx, err) {
+				reportAutofixTimeout(client, fileID)
+				return autofixTimeoutError(fileID)
+			}
+			return fmt.Errorf("autofix status check failed: %w", err)
+		}
+		current = next
+	}
+}
+
+func isAutofixTimeout(ctx context.Context, err error) bool {
+	return errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func autofixTimeoutError(fileID int) error {
+	return fmt.Errorf("autofix timed out for file %d after %s", fileID, autofixHardLimit)
+}
+
+func reportAutofixTimeout(client *appknox.Client, fileID int) {
+	if client == nil {
+		return
+	}
+	_, _, _ = client.KnoxIQ.MarkAutofixTimedOut(context.Background(), fileID)
 }
 
 // runAutofix: KnoxIQ ready → resolve inputs → locate each class → fix → deliver.
