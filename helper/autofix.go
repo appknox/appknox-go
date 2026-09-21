@@ -74,9 +74,10 @@ type filePatch struct {
 type Outcome struct {
 	Located   []string    // every located path
 	Patches   []filePatch // per-file fixes that changed something
-	BranchURL string      // compare URL after the fix branch is pushed
+	BranchURL string      // GitHub PR URL after delivery
 	CommitSHA string      // git commit SHA of the pushed branch
 	Branch    string      // pushed branch name
+	PRCreated bool        // true when GitHub opened a new PR this run
 }
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
@@ -111,6 +112,9 @@ func ProcessAutofix(opts AutofixOptions) {
 		os.Exit(1)
 	}
 	printOutcome(opts, out)
+	if opts.FileID > 0 && !opts.DryRun && out.BranchURL != "" {
+		printJobResult(opts.FileID, out)
+	}
 }
 
 func processAutofixWait(ctx context.Context, fileID int) (alreadyDone bool, err error) {
@@ -127,9 +131,7 @@ func processAutofixWait(ctx context.Context, fileID int) (alreadyDone bool, err 
 		return false, err
 	}
 	if req != nil && req.Status == appknox.AutofixStatusProcessed {
-		if req.PRURL != "" {
-			fmt.Printf("Opened PR: %s\n", req.PRURL)
-		}
+		printJobSummary(req.Status, req.PRURL, false, true)
 		return true, nil
 	}
 	return false, nil
@@ -355,6 +357,7 @@ func (s fixSession) deliver(ctx context.Context, out Outcome) (Outcome, error) {
 	out.BranchURL = del.URL
 	out.CommitSHA = del.CommitSHA
 	out.Branch = del.Branch
+	out.PRCreated = del.PRCreated
 	if s.d.report != nil {
 		if err := s.d.report(ctx, s.opts, del, out.Patches); err != nil {
 			return out, fmt.Errorf("pushed %s but failed to record on Appknox: %w", del.URL, err)
@@ -483,19 +486,64 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 	printDelivery(opts, out)
 }
 
-// printDelivery renders the delivery outcome (dry-run or opened PR).
+// printDelivery renders the delivery outcome (dry-run or created/updated PR).
 func printDelivery(opts AutofixOptions, out Outcome) {
 	switch {
 	case opts.DryRun:
 		fmt.Printf("\n[dry-run] not pushing %d patched file(s).\n", len(out.Patches))
+	case out.BranchURL != "" && opts.FileID > 0:
+		// ProcessAutofix prints Autofix request + Created/Updated PR after Mycroft records it.
+		return
 	case out.BranchURL != "":
-		fmt.Printf("\nOpened PR for %d file(s): %s\n", len(out.Patches), out.BranchURL)
+		fmt.Printf("\n%s: %s\n", prAction(out.PRCreated), out.BranchURL)
 		if out.CommitSHA != "" {
 			fmt.Printf("commit: %s\n", out.CommitSHA)
 		}
 	default:
 		fmt.Printf("\nGenerated fix for %d file(s): %s\n", len(out.Patches), patchPaths(out.Patches))
 	}
+}
+
+func printJobResult(fileID int, out Outcome) {
+	status := appknox.AutofixStatusProcessed
+	prURL := out.BranchURL
+	if client := getClient(); client != nil {
+		req, _, err := client.KnoxIQ.GetAutofixStatus(context.Background(), fileID)
+		if err == nil && req != nil {
+			status = req.Status
+			if req.PRURL != "" {
+				prURL = req.PRURL
+			}
+		}
+	}
+	printJobSummary(status, prURL, out.PRCreated, false)
+	if out.CommitSHA != "" {
+		fmt.Printf("commit: %s\n", out.CommitSHA)
+	}
+}
+
+// printJobSummary prints Mycroft job status and the GitHub PR.
+// existing is true when this run did not create or update a PR (already Processed).
+func printJobSummary(status, prURL string, created, existing bool) {
+	fmt.Println()
+	if status != "" {
+		fmt.Printf("Autofix request: %s\n", status)
+	}
+	if prURL == "" {
+		return
+	}
+	if existing {
+		fmt.Printf("PR: %s\n", prURL)
+		return
+	}
+	fmt.Printf("%s: %s\n", prAction(created), prURL)
+}
+
+func prAction(created bool) string {
+	if created {
+		return "Created PR"
+	}
+	return "Updated PR"
 }
 
 // patchPaths joins the patched file paths for display.

@@ -307,23 +307,24 @@ type pullRequest struct {
 }
 
 // OpenPullRequest opens a PR from branch into base and returns its html_url.
-// An already-open PR for the same head+base is reused (body appended). After
-// that PR is closed or merged, a new PR is opened when the head has new commits.
-func OpenPullRequest(ctx context.Context, cfg Config, base, branch, title, body string) (string, error) {
+// created is true when this call opened a new PR, false when an already-open
+// PR for the same head+base is reused (body appended). After that PR is closed
+// or merged, a new PR is opened when the head has new commits.
+func OpenPullRequest(ctx context.Context, cfg Config, base, branch, title, body string) (string, bool, error) {
 	if cfg.Owner == "" || cfg.Repo == "" || cfg.Token == "" {
-		return "", errors.New("ghpr: owner, repo, and token are required")
+		return "", false, errors.New("ghpr: owner, repo, and token are required")
 	}
 	if base == "" || branch == "" {
-		return "", errors.New("ghpr: base and branch are required")
+		return "", false, errors.New("ghpr: base and branch are required")
 	}
 	if title == "" {
 		title = "Appknox autofix"
 	}
 	if existing, ok, err := lookupPR(ctx, cfg, base, branch, "open"); err != nil {
-		return "", err
+		return "", false, err
 	} else if ok {
 		_ = appendPRBody(ctx, cfg, existing, body)
-		return existing.HTMLURL, nil
+		return existing.HTMLURL, false, nil
 	}
 	var out struct {
 		HTMLURL string `json:"html_url"`
@@ -338,20 +339,20 @@ func OpenPullRequest(ctx context.Context, cfg Config, base, branch, title, body 
 		if strings.Contains(strings.ToLower(err.Error()), "already exists") {
 			existing, ok, findErr := lookupPR(ctx, cfg, base, branch, "open")
 			if findErr != nil {
-				return "", findErr
+				return "", false, findErr
 			}
 			if !ok {
-				return "", fmt.Errorf("ghpr: pull request already exists but could not be found for %s: %w", branch, err)
+				return "", false, fmt.Errorf("ghpr: pull request already exists but could not be found for %s: %w", branch, err)
 			}
 			_ = appendPRBody(ctx, cfg, existing, body)
-			return existing.HTMLURL, nil
+			return existing.HTMLURL, false, nil
 		}
-		return "", err
+		return "", false, err
 	}
 	if out.HTMLURL == "" {
-		return "", errors.New("ghpr: pull request created but html_url was empty")
+		return "", false, errors.New("ghpr: pull request created but html_url was empty")
 	}
-	return out.HTMLURL, nil
+	return out.HTMLURL, true, nil
 }
 
 func lookupPR(ctx context.Context, cfg Config, base, branch, state string) (pullRequest, bool, error) {

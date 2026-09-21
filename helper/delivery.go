@@ -34,6 +34,7 @@ type Delivery struct {
 	Branch    string
 	Base      string
 	CommitSHA string
+	PRCreated bool // true when GitHub opened a new PR; false when an open PR was reused
 }
 
 // deliverBranch pushes patched files to a new branch, opens a GitHub PR, and
@@ -64,11 +65,11 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 	if err != nil {
 		return Delivery{}, err
 	}
-	prURL, err := ghpr.OpenPullRequest(ctx, cfg, res.Base, res.Branch, prTitle(opts), prBody(opts, patches))
+	prURL, created, err := ghpr.OpenPullRequest(ctx, cfg, res.Base, res.Branch, prTitle(opts), prBody(opts, patches))
 	if err != nil {
 		return Delivery{}, fmt.Errorf("pushed branch %s but failed to open a pull request: %w\nGITHUB_TOKEN cannot open PRs unless the workflow has pull-requests: write and the repo allows Actions to create PRs (Settings → Actions → General). Or set APPKNOX_GITHUB_TOKEN to a PAT with repo scope", res.Branch, err)
 	}
-	return Delivery{URL: prURL, Branch: res.Branch, Base: res.Base, CommitSHA: res.CommitSHA}, nil
+	return Delivery{URL: prURL, Branch: res.Branch, Base: res.Base, CommitSHA: res.CommitSHA, PRCreated: created}, nil
 }
 
 func prTitle(opts AutofixOptions) string {

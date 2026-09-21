@@ -239,11 +239,12 @@ func TestOpenPullRequest_CreatesPR(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	url, err := OpenPullRequest(context.Background(),
+	url, created, err := OpenPullRequest(context.Background(),
 		Config{Owner: "appknox", Repo: "mfva", Token: "ghtok", APIBase: srv.URL},
 		"master", "appknox-autofix/feat/login", "fix(autofix): feat/login", "body")
 	require.NoError(t, err)
 	require.True(t, posted)
+	require.True(t, created)
 	require.Equal(t, "https://github.com/appknox/mfva/pull/9", url)
 }
 
@@ -277,11 +278,12 @@ func TestOpenPullRequest_ReusesExisting(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	url, err := OpenPullRequest(context.Background(),
+	url, created, err := OpenPullRequest(context.Background(),
 		Config{Owner: "o", Repo: "r", Token: "ghtok", APIBase: srv.URL},
 		"master", "appknox-autofix/feat/login", "fix(autofix): feat/login", "file 119")
 	require.NoError(t, err)
 	require.False(t, posted)
+	require.False(t, created)
 	require.True(t, patched)
 	require.Equal(t, "https://github.com/o/r/pull/3", url)
 }
@@ -302,11 +304,12 @@ func TestOpenPullRequest_ClosedPROpensNew(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	url, err := OpenPullRequest(context.Background(),
+	url, created, err := OpenPullRequest(context.Background(),
 		Config{Owner: "o", Repo: "r", Token: "ghtok", APIBase: srv.URL},
 		"master", "appknox-autofix/feat/login", "t", "second generation")
 	require.NoError(t, err)
 	require.True(t, posted)
+	require.True(t, created)
 	require.Equal(t, "https://github.com/o/r/pull/10", url)
 }
 
@@ -325,10 +328,11 @@ func TestOpenPullRequest_MissingExistingErrorsClearly(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	url, err := OpenPullRequest(context.Background(),
+	url, created, err := OpenPullRequest(context.Background(),
 		Config{Owner: "o", Repo: "r", Token: "ghtok", APIBase: srv.URL},
 		"master", "appknox-autofix/feat/login", "t", "")
 	require.Error(t, err)
+	require.False(t, created)
 	require.Empty(t, url)
 	require.Contains(t, err.Error(), "could not be found")
 	require.Contains(t, err.Error(), "already exists")
@@ -356,10 +360,11 @@ func TestOpenPullRequest_LookupWithoutOwnerHead(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	url, err := OpenPullRequest(context.Background(),
+	url, created, err := OpenPullRequest(context.Background(),
 		Config{Owner: "o", Repo: "r", Token: "ghtok", APIBase: srv.URL},
 		"master", "appknox-autofix/feat/login", "t", "")
 	require.NoError(t, err)
+	require.False(t, created)
 	require.Equal(t, "https://github.com/o/r/pull/4", url)
 }
 

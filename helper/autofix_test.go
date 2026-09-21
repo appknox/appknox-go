@@ -536,3 +536,8 @@ func TestAwaitAutofix_StartError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "autofix start failed")
 }
+
+func TestPrAction(t *testing.T) {
+	require.Equal(t, "Created PR", prAction(true))
+	require.Equal(t, "Updated PR", prAction(false))
+}
