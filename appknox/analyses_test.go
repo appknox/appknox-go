@@ -51,6 +51,7 @@ func TestAnalysesCompliance_marshall(t *testing.T) {
 		Nistsp800171:    []string{"3_1_1", "3_1_3"},
 		Sama:            []string{"3_3_6"},
 		Eucra:           []string{"cra_i_2_d", "cra_i_2_e"},
+		Dora:            []string{"dora_9_2_crypto", "dora_25_1_security_testing"},
 		Owaspmobile2024: []string{"M6_2024"},
 		VulnerabilityID: 1,
 	}
@@ -69,6 +70,7 @@ func TestAnalysesCompliance_marshall(t *testing.T) {
 		"nistsp800171": ["3_1_1", "3_1_3"],
 		"sama": ["3_3_6"],
 		"eucra": ["cra_i_2_d", "cra_i_2_e"],
+		"dora": ["dora_9_2_crypto", "dora_25_1_security_testing"],
 		"owaspmobile2024": ["M6_2024"],
 		"vulnerability": 1
 	}`
@@ -84,7 +86,8 @@ func TestAnalysesService_ListByFile_Compliance(t *testing.T) {
 		fmt.Fprint(w, `{"count": 1, "results":[{
 			"id": 1,
 			"sama": ["3_3_6"],
-			"eucra": ["cra_i_2_d", "cra_i_2_e"]
+			"eucra": ["cra_i_2_d", "cra_i_2_e"],
+			"dora": ["dora_9_2_crypto", "dora_25_1_security_testing"]
 		}]}`)
 	})
 
@@ -97,6 +100,7 @@ func TestAnalysesService_ListByFile_Compliance(t *testing.T) {
 		ID:    1,
 		Sama:  []string{"3_3_6"},
 		Eucra: []string{"cra_i_2_d", "cra_i_2_e"},
+		Dora:  []string{"dora_9_2_crypto", "dora_25_1_security_testing"},
 	}}
 	if !reflect.DeepEqual(analyses, want) {
 		t.Errorf("Analyses.ListByFile returned %+v, want %+v", analyses, want)

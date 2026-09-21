@@ -56,6 +56,9 @@ func ProcessAnalyses(fileID int) {
 	if profileReportPref.ShowEucra.Value {
 		header = append(header, "EU CRA")
 	}
+	if profileReportPref.ShowDora.Value {
+		header = append(header, "DORA")
+	}
 	header = append(header, "UPDATED-ON", "VULNERABILITY-ID")
 	t.AddHeader(header...)
 	for i := 0; i < len(finalAnalyses); i++ {
@@ -94,6 +97,9 @@ func ProcessAnalyses(fileID int) {
 		}
 		if profileReportPref.ShowEucra.Value {
 			row = append(row, finalAnalyses[i].Eucra)
+		}
+		if profileReportPref.ShowDora.Value {
+			row = append(row, finalAnalyses[i].Dora)
 		}
 		row = append(row, *finalAnalyses[i].UpdatedOn,
 			finalAnalyses[i].VulnerabilityID)

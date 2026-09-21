@@ -18,7 +18,7 @@ func TestRegulatoryPreference_marshall(t *testing.T) {
 }
 func TestProjectProfileReportPreference_marshall(t *testing.T) {
 	testJSONMarshal(t, &ProjectProfileReportPreference{},
-		`{"show_pcidss":{}, "show_hipaa":{}, "show_gdpr":{}, "show_nist":{}, "show_sama":{}, "show_eucra":{}}`)
+		`{"show_pcidss":{}, "show_hipaa":{}, "show_gdpr":{}, "show_nist":{}, "show_sama":{}, "show_eucra":{}, "show_dora":{}}`)
 
 	u := &ProjectProfileReportPreference{
 		ShowPcidss: RegulatoryPreference{Value: true},
@@ -27,6 +27,7 @@ func TestProjectProfileReportPreference_marshall(t *testing.T) {
 		ShowNist:   RegulatoryPreference{Value: true},
 		ShowSama:   RegulatoryPreference{Value: true},
 		ShowEucra:  RegulatoryPreference{Value: true},
+		ShowDora:   RegulatoryPreference{Value: true},
 	}
 	want := `{
 		"show_pcidss": {"value": true},
@@ -34,7 +35,8 @@ func TestProjectProfileReportPreference_marshall(t *testing.T) {
 		"show_gdpr": {"value": true},
 		"show_nist": {"value": true},
 		"show_sama": {"value": true},
-		"show_eucra": {"value": true}
+		"show_eucra": {"value": true},
+		"show_dora": {"value": true}
 	}`
 	testJSONMarshal(t, u, want)
 }
@@ -55,7 +57,8 @@ func TestProjectProfilesService_GetProjectProfileReportPreference(t *testing.T) 
 			"show_gdpr": {"value": false},
 			"show_nist": {"value": false},
 			"show_sama": {"value": false},
-			"show_eucra": {"value": false}
+			"show_eucra": {"value": false},
+			"show_dora": {"value": false}
 		}`)
 	})
 
@@ -71,6 +74,7 @@ func TestProjectProfilesService_GetProjectProfileReportPreference(t *testing.T) 
 		ShowNist:   RegulatoryPreference{Value: false},
 		ShowSama:   RegulatoryPreference{Value: false},
 		ShowEucra:  RegulatoryPreference{Value: false},
+		ShowDora:   RegulatoryPreference{Value: false},
 	}
 	if !reflect.DeepEqual(profileReportPreference, want) {
 		t.Errorf("ProjectProfiles.GetProjectProfileReportPreference returned %+v, want %+v",
