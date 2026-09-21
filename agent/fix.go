@@ -12,10 +12,8 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/toolrunner"
 )
 
-const fixSystemPrompt = "You are a security fix assistant. Given a finding and its remediation, read " +
-	"the target file and apply a SINGLE precise fix with the edit tool (str_replace): replace ONLY the " +
-	"vulnerable code with the secure version, keeping everything else byte-for-byte. old_string must be " +
-	"unique. Edit ONLY the specified file. If you cannot fix it confidently, make no edit."
+// fixSystemPrompt and fixUserPrompt live in instructions.go, which tailors them
+// to the project type (Gradle/Maven/Java/…) detected from the build files.
 
 // FixRequest describes the located file + finding to fix in place.
 type FixRequest struct {
@@ -23,6 +21,29 @@ type FixRequest struct {
 	Path        string
 	Finding     string
 	Remediation string
+	// DeveloperPrompt is KnoxIQ's guidance written for a human developer --
+	// more specific than the generic remediation prose when present.
+	DeveloperPrompt string
+	// Criteria are the checks the patch will be measured against, passed in so
+	// the fixer aims at them rather than discovering a miss afterwards.
+	Criteria []string
+	// ProjectProfile states what kind of project this is -- build system, AGP
+	// version, compileSdk, whether BuildConfig is generated -- read from the
+	// build files on disk.
+	//
+	// The fixer sees ONE file and cannot infer any of this from it. Handing it
+	// over up front is cheaper than letting the gate reject a patch that
+	// guessed wrong and then paying for a retry.
+	ProjectProfile string
+	// PriorViolation is the fact a previous attempt at this same file got wrong
+	// -- a build script it may not edit, XML it left unparseable, a resource or
+	// type that is not in the checkout. Set only on a retry, and only ever once.
+	//
+	// It is a fact about the repository, not a critique. The fixer has no
+	// compiler and can see only its one file, so "@xml/foo does not exist here"
+	// is information the prompt by itself could never supply -- which is why
+	// two repos given the same remediation and the same rule still diverged.
+	PriorViolation string
 }
 
 // FixResult is the outcome of a client-side agent fix. It is side-effect-free:
@@ -102,14 +123,6 @@ func buildFixTools(root, allowedPath string, edits *[]editRecord) ([]sdk.BetaToo
 		return nil, err
 	}
 	return append(tools, edit), nil
-}
-
-// fixUserPrompt renders the per-file fix instruction.
-func fixUserPrompt(req FixRequest) string {
-	return fmt.Sprintf(
-		"Target file (edit ONLY this): %s\nFinding: %s\n\nRemediation:\n%s\n\n"+
-			"Read the file, then apply the fix with a single precise edit (str_replace).",
-		req.Path, req.Finding, req.Remediation)
 }
 
 // buildDiff renders the recorded edits as a simple -old/+new diff.

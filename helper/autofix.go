@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -68,6 +69,9 @@ type filePatch struct {
 	Confidence float64
 	Applied    bool
 	Finding    string
+	// Formatting is cosmetic advice about the patch -- tabs in a space-indented
+	// file, say. Reported on the run and never enforced: see formatting.go.
+	Formatting string
 }
 
 // Outcome is the source-free result of a run — one or more fixed files.
@@ -244,7 +248,11 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	if err := fixservice.ValidateEndpoint(host); err != nil {
 		return Outcome{}, err
 	}
-	return fixSession{opts: opts, d: d, root: root, host: host, token: token, findings: findings}.run(ctx)
+	// Once per run, not once per finding: describeBuild walks the build files
+	// and the answer is identical for every analysis in the repository.
+	profile := describeBuild(root).String()
+	return fixSession{opts: opts, d: d, root: root, host: host, token: token,
+		findings: findings, profile: profile}.run(ctx)
 }
 
 // fixSession carries the resolved context for locating + fixing every finding
@@ -256,6 +264,9 @@ type fixSession struct {
 	host     string
 	token    string
 	findings []FindingInputs
+	// profile describes the build system this checkout uses, handed to the
+	// fixer up front because it cannot infer any of it from its one file.
+	profile string
 }
 
 // run locates and fixes each finding, then delivers every patch on one branch.
@@ -295,9 +306,16 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 			}
 			if res.Changed && res.PatchedContent != "" {
 				patched[p] = true
+				// Cosmetic only, and read from the file we already have. A
+				// failure to read it is not a reason to hold up a patch that
+				// passed the gate.
+				advice := ""
+				if before, err := os.ReadFile(filepath.Join(s.root, filepath.FromSlash(p))); err == nil {
+					advice = formattingAdvice(p, string(before), res.PatchedContent)
+				}
 				out.Patches = append(out.Patches, filePatch{
 					Path: p, Content: res.PatchedContent, Diff: res.UnifiedDiff,
-					Confidence: res.Confidence, Finding: in.Finding,
+					Confidence: res.Confidence, Finding: in.Finding, Formatting: advice,
 				})
 			}
 		}
@@ -326,13 +344,62 @@ func (s fixSession) locateAll(ctx context.Context, in FindingInputs) ([]string, 
 	return paths, nil
 }
 
-// produceFix generates the patch for one file, client-side via the agent's Edit
-// tool (--fix-mode agent — NO upload), or server-side via /v1/fix (default).
+// maxFixRetries is how many times a rejected patch is regenerated before the
+// file is abandoned. One retry: the gate tells the fixer the one fact it could
+// not see, and a second miss on the same fact is not a third-attempt problem.
+const maxFixRetries = 1
+
+// produceFix generates a patch for one file and holds it to the static gate,
+// retrying once with the violated fact before abandoning the file.
+//
+// The gate is relative, not absolute: verifyPatch compares the patch against
+// the original, so a repository that already fails a check is never blamed on
+// the patch that did not introduce it.
 func (s fixSession) produceFix(ctx context.Context, path string, in FindingInputs) (fixservice.Result, error) {
+	for attempt, violation := 0, ""; ; attempt++ {
+		res, err := s.attemptFix(ctx, path, in, violation)
+		if err != nil {
+			return res, err
+		}
+		// Nothing to check. An abstention is already the safe outcome -- the
+		// gate exists to turn a bad edit into one of these.
+		if !res.Changed || res.PatchedContent == "" {
+			return res, nil
+		}
+		// The original is what is on disk: the fixer restores the file before
+		// it returns, so the checkout still holds the pre-patch content. An
+		// unreadable file means no delta can be computed, and a check that
+		// cannot be computed must not reject.
+		original, readErr := os.ReadFile(filepath.Join(s.root, filepath.FromSlash(path)))
+		if readErr != nil {
+			return res, nil
+		}
+		v := verifyPatch(s.root, path, string(original), res.PatchedContent)
+		if v == nil {
+			return res, nil
+		}
+		if attempt >= maxFixRetries {
+			// Discard the patch rather than ship it. A reported gap is
+			// recoverable; a branch that does not compile is not.
+			fmt.Printf("   !! %s rejected (%s); no edit made\n", path, v.Rule)
+			return fixservice.Result{}, nil
+		}
+		fmt.Printf("   .. %s rejected (%s); retrying once\n", path, v.Rule)
+		violation = v.Detail
+	}
+}
+
+// attemptFix runs one fix turn, client-side via the agent's Edit tool
+// (--fix-mode agent — NO upload), or server-side via /v1/fix (default).
+// priorViolation is the fact the previous attempt got wrong, empty on the first.
+func (s fixSession) attemptFix(
+	ctx context.Context, path string, in FindingInputs, priorViolation string,
+) (fixservice.Result, error) {
 	if s.opts.FixMode == "agent" {
 		fr, err := s.d.agentFix(ctx, agent.Config{Host: s.host, Token: s.token},
 			agent.FixRequest{RepoRoot: s.root, Path: path,
-				Finding: in.Finding, Remediation: in.Remediation})
+				Finding: in.Finding, Remediation: in.Remediation,
+				ProjectProfile: s.profile, PriorViolation: priorViolation})
 		if err != nil {
 			return fixservice.Result{}, err
 		}
@@ -480,6 +547,9 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 		fmt.Printf("\n=== %s ===\n", p.Path)
 		if p.Confidence > 0 {
 			fmt.Printf("confidence: %.2f\n", p.Confidence)
+		}
+		if p.Formatting != "" {
+			fmt.Printf("formatting (not enforced): %s\n", p.Formatting)
 		}
 		fmt.Println(p.Diff)
 	}
