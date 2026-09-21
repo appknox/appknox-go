@@ -175,7 +175,8 @@ type AutofixRequest struct {
 	UpdatedOn    *time.Time `json:"updated_on,omitempty"`
 }
 
-// StartAutofix registers an autofix job for the file (PENDING) and enqueues it.
+// StartAutofix registers an autofix job for the file (PENDING) and enqueues
+// it. The CLI waits until Processing, then locates, fixes, and records the PR.
 func (s *KnoxIQService) StartAutofix(ctx context.Context, fileID int) (*AutofixRequest, *Response, error) {
 	u := fmt.Sprintf("api/knoxiq/file/%d/autofix", fileID)
 	req, err := s.client.NewRequest("POST", u, nil)

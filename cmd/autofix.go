@@ -5,20 +5,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// autofixCmd starts autofix for a file and waits until the PR is recorded.
+// autofixCmd registers an autofix job, then locates, fixes, and opens a PR.
 var autofixCmd = &cobra.Command{
 	Use:   "autofix",
-	Short: "Start autofix for a file and wait until the PR is raised.",
-	Long: `With --file-id, register an autofix job on Appknox and poll
-/api/knoxiq/file/{id}/autofix/status/ until the PR is recorded (Processed)
-or the job fails. CI stays in a waiting state for the same command:
+	Short: "Register autofix, wait until Processing, then fix on the checkout and open a PR.",
+	Long: `With --file-id, register an autofix job on Appknox and wait until it is
+Processing. Then locate and fix findings on the CI checkout (GITHUB_WORKSPACE),
+push a branch, and open a PR with GITHUB_TOKEN. Recording the PR marks the job
+Processed. Model turns go through Appknox (never a provider key):
 
   appknox autofix --file-id 118
 
---list-analyses still prints analyses for the file, then exits.
---dry-run and --finding keep the local locate/fix path (no wait).
+--list-analyses prints analyses for the file, then exits.
+--dry-run locates and generates the fix but does not register or push.
 
-APPKNOX_ACCESS_TOKEN is required. No provider key is needed here.`,
+APPKNOX_ACCESS_TOKEN is required.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		f := cmd.Flags()
 		opts := helper.AutofixOptions{}
@@ -42,7 +43,7 @@ func init() {
 	f.String("ref", "", "PR base / merge target; CI uses GITHUB_BASE_REF, else the push branch (GITHUB_REF)")
 	f.String("head-ref", "", "Feature branch this autofix belongs to (CI: GITHUB_HEAD_REF / GITHUB_REF). All file ids on this branch share one GitHub PR.")
 	f.String("repo-path", "", "Path to an already-checked-out repo (CI uses GITHUB_WORKSPACE if empty)")
-	f.Int("file-id", 0, "Appknox file id (start autofix and wait until the PR is raised)")
+	f.Int("file-id", 0, "Appknox file id (register, wait until Processing, then locate + fix on the CI checkout)")
 	f.String("finding", "", "Manual finding detail (when not using --file-id)")
 	f.String("class-hint", "", "Manual class/symbol hint from the finding (optional)")
 	f.String("github-token", "", "GitHub token for fetch + push (or env GITHUB_TOKEN)")
