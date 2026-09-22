@@ -223,13 +223,22 @@ func TestMemoizedAnalysesFor_CachesPerFileID(t *testing.T) {
 	require.Equal(t, []int{24, 118}, seen, "each distinct fileID is listed once, not re-listed")
 }
 
-// TestWithKnoxIQFetchers_FillsEachFieldIndependently is I3: the regression
-// test for dropping withKnoxIQFetchers' `d.fetch != nil && d.analysisIDs !=
-// nil` early return. A caller that stubs only ONE of the two fields must
-// still get the real implementation for the OTHER -- it must not be silently
-// withheld just because one field happened to already be set -- and the
-// caller's own stub must survive untouched.
-func TestWithKnoxIQFetchers_FillsEachFieldIndependently(t *testing.T) {
+// TestWithKnoxIQFetchers_FillsOnlyWhicheverFieldWasNil documents the
+// current contract of withKnoxIQFetchers: a caller that stubs only ONE of
+// autofixDeps' fetch/analysisIDs fields still gets the real implementation
+// for the OTHER, and the caller's own stub survives untouched.
+//
+// It is NOT a regression guard for I3 (the removed `d.fetch != nil &&
+// d.analysisIDs != nil { return d }` early return) and will NOT fail if
+// that early return is restored: both subtests below stub exactly one
+// field, so the early return's condition (both non-nil) is never true
+// either way, and this test cannot observe whether it is present. I3 was a
+// readability/trap fix -- the early return was redundant and its removal
+// changed no observable behaviour -- so there is nothing behavioural here
+// to assert a regression against. Do not read a future failure of this
+// test as evidence that I3 regressed; it can only fail if
+// withKnoxIQFetchers stops filling a nil field independently.
+func TestWithKnoxIQFetchers_FillsOnlyWhicheverFieldWasNil(t *testing.T) {
 	onlyAnalysisIDs := autofixDeps{
 		analysisIDs: func(context.Context, int, int) ([]int, error) { return []int{1}, nil },
 	}
