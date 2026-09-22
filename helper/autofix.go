@@ -31,7 +31,7 @@ type AutofixOptions struct {
 	RepoPath      string // already-checked-out repo (CI: GITHUB_WORKSPACE)
 	FileID        int    // Appknox file id (every fixable analysis on the file)
 	AnalysisID    int    // one analysis on the file; 0 = every fixable analysis
-	RiskThreshold int    // minimum computed risk to attempt; 0 = everything
+	RiskThreshold int    // minimum computed risk to attempt; runAutofix defaults an unset (<=0) value to 1 -- see the comment there. 0 means "everything" only when passed to locatableAnalysisIDs directly, as every test and health-score mode do.
 	Finding       string // manual finding detail (when not using file id)
 	ClassHint     string // manual class/symbol hint
 	GithubToken   string // GitHub token for the --repo fetch and branch push
@@ -235,10 +235,14 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	// An unset RiskThreshold defaults to 1 (any non-Passed finding), not 0
 	// (everything). locatableAnalysisIDs keeps analyses whose ComputedRisk is
 	// >= this threshold, and on a real file most analyses are Passed
-	// (ComputedRisk 0): measured on mfva file 24, 108 analyses total but only
-	// 24 with ComputedRisk > 0. Defaulting to 0 would ask KnoxIQ about all
-	// 108 instead of ~24, and the gateway has a real per-session call budget
-	// -- isGatewayBudgetExhausted exists because that budget gets exhausted.
+	// (ComputedRisk 0): measured on mfva file 24 (2026-09-21), 108 analyses
+	// total but only 24 with ComputedRisk > 0. Defaulting to 0 would ask
+	// KnoxIQ about all 108 instead of ~24, and the gateway has a real
+	// per-session call budget -- isGatewayBudgetExhausted exists because that
+	// budget gets exhausted. (locatableAnalysisIDs's own doc comment, in
+	// autofix_targets.go, cites a SEPARATE measurement on mfva file 358 from
+	// 2026-09-04 that happens to share this same 108-analyses total -- same
+	// app, same scanner, so that is expected and not a typo of this one.)
 	// This lives here, not inside locatableAnalysisIDs, so that function keeps
 	// treating 0 as "everything" for any caller that passes it a threshold
 	// directly (as every existing test does, and as health-score mode will).
@@ -283,31 +287,46 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 		targets: targets, profile: profile}.run(ctx)
 }
 
-// withKnoxIQFetchers fills in the real KnoxIQ-backed fetch and analysisIDs
-// implementations when the caller has not already supplied both (tests always
-// inject their own stubs for these, so this is a no-op for every test).
-//
-// Both closures share one per-run cache of each file's analyses, keyed by
-// fileID: fetch is called once per analysis target (up to ~18 on a real scan)
-// but AnalysesService has no GetByID, only ListByFile, so without this cache
-// every one of those calls would re-list the whole file. The cache is a local
-// variable, not a package-level one, so nothing leaks between runs or tests.
-func withKnoxIQFetchers(d autofixDeps) autofixDeps {
-	if d.fetch != nil && d.analysisIDs != nil {
-		return d
-	}
+// memoizedAnalysesFor wraps list in a per-call cache keyed by fileID, local to
+// the returned closure -- not a package-level variable, so nothing leaks
+// between runs or tests. This is the mechanism the fetch/analysisIDs
+// signature change exists for: fetch is called once per analysis target (up
+// to ~18 on a real scan) but AnalysesService has no GetByID, only ListByFile,
+// so without this cache every one of those calls would re-list the whole
+// file. Split out from withKnoxIQFetchers so the caching contract itself is
+// testable without a real Appknox client.
+func memoizedAnalysesFor(
+	list func(ctx context.Context, fileID int) ([]*appknox.Analysis, error),
+) func(context.Context, int) ([]*appknox.Analysis, error) {
 	cache := map[int][]*appknox.Analysis{}
-	analysesFor := func(ctx context.Context, fileID int) ([]*appknox.Analysis, error) {
+	return func(ctx context.Context, fileID int) ([]*appknox.Analysis, error) {
 		if cached, ok := cache[fileID]; ok {
 			return cached, nil
 		}
-		all, err := allAnalyses(ctx, getClient(), fileID)
+		all, err := list(ctx, fileID)
 		if err != nil {
 			return nil, err
 		}
 		cache[fileID] = all
 		return all, nil
 	}
+}
+
+// withKnoxIQFetchers fills in the real KnoxIQ-backed implementation of
+// whichever of fetch / analysisIDs the caller left nil, independently: a
+// caller that stubs only one of the two fields still gets the real,
+// network-calling implementation of the other -- it is not conditioned on
+// whether BOTH are already set. Every existing test supplies both, so this
+// is a no-op for the whole existing suite; a test that means to stub the run
+// end to end must still set both fields itself.
+//
+// Both real closures share one memoizedAnalysesFor cache of each file's
+// analyses, so a run considering N analyses lists the file once, not N times
+// -- see memoizedAnalysesFor.
+func withKnoxIQFetchers(d autofixDeps) autofixDeps {
+	analysesFor := memoizedAnalysesFor(func(ctx context.Context, fileID int) ([]*appknox.Analysis, error) {
+		return allAnalyses(ctx, getClient(), fileID)
+	})
 	if d.fetch == nil {
 		d.fetch = func(ctx context.Context, fileID, analysisID int) (FindingInputs, error) {
 			return fetchKnoxIQInputs(ctx, analysesFor, fileID, analysisID)
@@ -400,11 +419,24 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 	return s.deliver(ctx, out)
 }
 
-// locateAll locates the file for each class hint, returning the distinct paths.
+// locateAll locates the file for each class hint, returning the distinct
+// paths. A finding with NO class hints still gets exactly one locate pass,
+// with an empty ClassHint: manifest, network-config and permission findings
+// name no Lcom/...; class at all, so looping over an empty hint list would
+// mean they are never even looked for -- which is the class-descriptor
+// precondition creeping back in one layer below resolveTargets, silently
+// undoing the whole point of this port. The locate agent has grep and glob
+// over the checkout and can work from the finding text alone: "Application
+// Data Backup Allowed" leads it to AndroidManifest.xml without needing a
+// class at all.
 func (s fixSession) locateAll(ctx context.Context, in FindingInputs) ([]string, error) {
+	hints := in.ClassHints
+	if len(hints) == 0 {
+		hints = []string{""}
+	}
 	seen := map[string]bool{}
 	var paths []string
-	for _, hint := range in.ClassHints {
+	for _, hint := range hints {
 		p, err := s.d.locate(ctx, agent.Config{Host: s.host, Token: s.token},
 			agent.Request{RepoRoot: s.root, ClassHint: hint, Finding: in.Finding})
 		if err != nil {

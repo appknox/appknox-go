@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/appknox/appknox-go/agent"
+	"github.com/appknox/appknox-go/appknox"
 	"github.com/appknox/appknox-go/fixservice"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
@@ -178,6 +179,72 @@ func TestRunAutofix_PreservesAnExplicitRiskThreshold(t *testing.T) {
 	require.Equal(t, 3, gotThreshold)
 }
 
+// TestMemoizedAnalysesFor_ListsOncePerFileID is M2: the regression test for
+// the caching contract the whole fetch/analysisIDs signature change exists to
+// support. fetchKnoxIQInputs is called once per analysis target (up to ~18 on
+// a real scan), and AnalysesService has no GetByID, only ListByFile, so
+// without this cache every one of those calls would re-list the whole file.
+// This pins that N repeated lookups for the same fileID hit the underlying
+// list function exactly once.
+func TestMemoizedAnalysesFor_ListsOncePerFileID(t *testing.T) {
+	calls := 0
+	list := func(context.Context, int) ([]*appknox.Analysis, error) {
+		calls++
+		return []*appknox.Analysis{{ID: 1}, {ID: 2}, {ID: 3}}, nil
+	}
+	analysesFor := memoizedAnalysesFor(list)
+
+	const n = 5 // simulates N analyses on the same file, e.g. everyLocatableAnalysis's fetch loop
+	for i := 0; i < n; i++ {
+		_, err := analysesFor(context.Background(), 24)
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, calls, "N lookups for the same fileID must hit the underlying list exactly once")
+}
+
+// TestMemoizedAnalysesFor_CachesPerFileID guards against a cache keyed
+// wrong: two different fileIDs must each get their own underlying list call,
+// not share one.
+func TestMemoizedAnalysesFor_CachesPerFileID(t *testing.T) {
+	var seen []int
+	list := func(_ context.Context, fileID int) ([]*appknox.Analysis, error) {
+		seen = append(seen, fileID)
+		return nil, nil
+	}
+	analysesFor := memoizedAnalysesFor(list)
+
+	_, err := analysesFor(context.Background(), 24)
+	require.NoError(t, err)
+	_, err = analysesFor(context.Background(), 118)
+	require.NoError(t, err)
+	_, err = analysesFor(context.Background(), 24)
+	require.NoError(t, err)
+
+	require.Equal(t, []int{24, 118}, seen, "each distinct fileID is listed once, not re-listed")
+}
+
+// TestWithKnoxIQFetchers_FillsEachFieldIndependently is I3: the regression
+// test for dropping withKnoxIQFetchers' `d.fetch != nil && d.analysisIDs !=
+// nil` early return. A caller that stubs only ONE of the two fields must
+// still get the real implementation for the OTHER -- it must not be silently
+// withheld just because one field happened to already be set -- and the
+// caller's own stub must survive untouched.
+func TestWithKnoxIQFetchers_FillsEachFieldIndependently(t *testing.T) {
+	onlyAnalysisIDs := autofixDeps{
+		analysisIDs: func(context.Context, int, int) ([]int, error) { return []int{1}, nil },
+	}
+	filled := withKnoxIQFetchers(onlyAnalysisIDs)
+	require.NotNil(t, filled.fetch, "fetch must be filled in when only analysisIDs was stubbed")
+	require.NotNil(t, filled.analysisIDs, "the caller's own analysisIDs stub must survive")
+
+	onlyFetch := autofixDeps{
+		fetch: func(context.Context, int, int) (FindingInputs, error) { return FindingInputs{}, nil },
+	}
+	filled2 := withKnoxIQFetchers(onlyFetch)
+	require.NotNil(t, filled2.analysisIDs, "analysisIDs must be filled in when only fetch was stubbed")
+	require.NotNil(t, filled2.fetch, "the caller's own fetch stub must survive")
+}
+
 func TestRunAutofix_RequiresToken(t *testing.T) {
 	prev := viper.GetString("access-token")
 	t.Cleanup(func() { viper.Set("access-token", prev) })
@@ -273,6 +340,36 @@ func TestRun_EmptyRemediationNeverReachesTheFixer(t *testing.T) {
 	require.Empty(t, out.Patches)
 	require.False(t, agentFixCalled,
 		"the fixer must never be called for a target whose Remediation is empty")
+}
+
+// TestLocateAll_EmptyClassHintsStillLocatesOnce is the regression test for
+// C1: knoxIQInputs derives ClassHints with the same class-descriptor regex
+// the targeting layer was explicitly built to stop requiring, so a manifest /
+// network-config / permission finding routinely has ZERO class hints. Before
+// this fix, looping over in.ClassHints meant such a target made zero locate
+// calls and was silently dropped at the len(paths) == 0 guard in run() --
+// the class-descriptor precondition surviving one layer below resolveTargets,
+// undoing the whole point of the port. A hint-less finding must still get
+// exactly one locate attempt, with an empty ClassHint, so the locate agent
+// can work from the finding text alone.
+func TestLocateAll_EmptyClassHintsStillLocatesOnce(t *testing.T) {
+	var calls int
+	var gotHint string
+	s := fixSession{
+		d: autofixDeps{
+			locate: func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
+				calls++
+				gotHint = req.ClassHint
+				return "app/src/main/AndroidManifest.xml", nil
+			},
+		},
+	}
+	paths, err := s.locateAll(context.Background(),
+		FindingInputs{Finding: "Application Data Backup Allowed"})
+	require.NoError(t, err)
+	require.Equal(t, 1, calls, "a hint-less finding must still get exactly one locate call")
+	require.Equal(t, "", gotHint, "the hint-less pass must carry an empty ClassHint")
+	require.Equal(t, []string{"app/src/main/AndroidManifest.xml"}, paths)
 }
 
 func TestRunAutofix_FullFlow_PushesBranch(t *testing.T) {

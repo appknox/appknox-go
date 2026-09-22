@@ -90,7 +90,9 @@ func resolveTargets(ctx context.Context, opts AutofixOptions, d autofixDeps) ([]
 //
 // One analysis failing does not abandon the rest: a single unreachable or
 // malformed finding should not cost the developer every other fix in the scan.
-// Those are reported and the run continues.
+// Those are reported and the run continues -- UNLESS every fetch that ran
+// failed, in which case zero targets is not "nothing to fix", it is "we never
+// managed to ask": see the len(targets) == 0 handling below.
 func everyLocatableAnalysis(
 	ctx context.Context, opts AutofixOptions, d autofixDeps,
 ) ([]analysisTarget, error) {
@@ -106,10 +108,24 @@ func everyLocatableAnalysis(
 	fmt.Printf("Considering %d analyses on file %d\n", len(ids), opts.FileID)
 
 	targets := make([]analysisTarget, 0, len(ids))
+	failedFetches := 0
+	var lastFetchErr error
 	for _, id := range ids {
 		inputs, err := d.fetch(ctx, opts.FileID, id)
 		if err != nil {
+			failedFetches++
+			lastFetchErr = err
 			fmt.Printf("  analysis %d: skipped (%v)\n", id, err)
+			if isGatewayBudgetExhausted(err) {
+				// The gateway has stopped answering for this session; every
+				// remaining fetch would fail the identical way. Stop asking
+				// instead of logging ~18 identical failures -- whatever
+				// targets were already resolved are still good and still get
+				// attempted below.
+				fmt.Printf("  KnoxIQ gateway budget exhausted after %d/%d analyses; stopping\n",
+					failedFetches, len(ids))
+				break
+			}
 			continue
 		}
 		if inputs.Remediation == "" {
@@ -118,6 +134,16 @@ func everyLocatableAnalysis(
 		targets = append(targets, analysisTarget{AnalysisID: id, Inputs: inputs})
 	}
 	if len(targets) == 0 {
+		// A fetch failure and "KnoxIQ judged nothing fixable" must not read
+		// the same: if anything errored, we do not actually know the answer
+		// for those analyses, so this is NOT ErrNothingFixable -- it is
+		// whatever took KnoxIQ down, surfaced so a dead gateway or bad
+		// credential is never silently reported as a clean scan.
+		if lastFetchErr != nil {
+			return nil, fmt.Errorf(
+				"KnoxIQ fetch failed for %d/%d analyses on file %d, none fixable: %w",
+				failedFetches, len(ids), opts.FileID, lastFetchErr)
+		}
 		return nil, fmt.Errorf("KnoxIQ has nothing fixable on file %d: %w",
 			opts.FileID, ErrNothingFixable)
 	}
@@ -135,11 +161,14 @@ func everyLocatableAnalysis(
 //
 // It used to ALSO require the finding to name a first-party class descriptor,
 // on the reasoning that without one there is nothing to locate. That reasoning
-// was wrong, and expensively so: on mfva file 358, 108 analyses produced 2
-// candidates, and the 106 dropped included Critical and High findings. They
-// were not minor -- they were manifest, network-config and framework issues
-// whose finding text names no Lcom/...; class, so they were discarded before
-// KnoxIQ was even asked whether they were fixable.
+// was wrong, and expensively so: on mfva file 358 (2026-09-04), 108 analyses
+// produced 2 candidates, and the 106 dropped included Critical and High
+// findings. They were not minor -- they were manifest, network-config and
+// framework issues whose finding text names no Lcom/...; class, so they were
+// discarded before KnoxIQ was even asked whether they were fixable. (A
+// SEPARATE measurement on mfva file 24 from 2026-09-21, cited in runAutofix's
+// RiskThreshold-default comment in autofix.go, happens to share this same
+// 108-analyses total -- same app, same scanner -- it is not a typo of this one.)
 //
 // The locate agent has read_file, grep and glob over the checkout and can find
 // AndroidManifest.xml from a finding description perfectly well. A class hint
