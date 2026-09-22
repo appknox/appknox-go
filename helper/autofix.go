@@ -38,6 +38,16 @@ type AutofixOptions struct {
 	DryRun        bool   // locate + fix but do not push a branch
 	FixMode       string // "server" (default, /v1/fix) or "agent" (client-side Edit, no upload)
 	ListAnalyses  bool   // print the file's analyses + class hints, then exit
+
+	// Model overrides the model for BOTH turns. Empty keeps the agent layer's
+	// default rather than naming one here, so the default stays in exactly one
+	// place (agent.runnerParams).
+	Model string
+
+	// LocateModel overrides the LOCATE turn only, falling back to Model and
+	// then the default. Deliberately one-directional: a cheap model here cannot
+	// weaken the shipped patch, because the fix turn never reads this field.
+	LocateModel string
 }
 
 // autofixDeps are the injectable collaborators (seams for cost-free tests).
@@ -454,7 +464,11 @@ func (s fixSession) locateAll(ctx context.Context, in FindingInputs) ([]string, 
 	seen := map[string]bool{}
 	var paths []string
 	for _, hint := range hints {
-		p, err := s.d.locate(ctx, agent.Config{Host: s.host, Token: s.token},
+		// LocateModel first: locating is the cheaper question, so it is the
+		// turn worth running on a smaller model. Falls back to Model, then to
+		// the agent layer's own default.
+		p, err := s.d.locate(ctx, agent.Config{Host: s.host, Token: s.token,
+			Model: firstNonEmpty(s.opts.LocateModel, s.opts.Model)},
 			agent.Request{RepoRoot: s.root, ClassHint: hint, Finding: in.Finding})
 		if err != nil {
 			return nil, err
@@ -519,7 +533,9 @@ func (s fixSession) attemptFix(
 	ctx context.Context, path string, in FindingInputs, priorViolation string,
 ) (fixservice.Result, error) {
 	if s.opts.FixMode == "agent" {
-		fr, err := s.d.agentFix(ctx, agent.Config{Host: s.host, Token: s.token},
+		// Model only, never LocateModel: this turn writes the patch that ships.
+		fr, err := s.d.agentFix(ctx, agent.Config{Host: s.host, Token: s.token,
+			Model: s.opts.Model},
 			agent.FixRequest{RepoRoot: s.root, Path: path,
 				Finding: in.Finding, Remediation: in.Remediation,
 				ProjectProfile: s.profile, PriorViolation: priorViolation})
