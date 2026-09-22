@@ -283,8 +283,10 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	// Once per run, not once per finding: describeBuild walks the build files
 	// and the answer is identical for every analysis in the repository.
 	profile := describeBuild(root).String()
+	work := newWorkingTree(root)
+	defer func() { _ = work.restore() }()
 	return fixSession{opts: opts, d: d, root: root, host: host, token: token,
-		targets: targets, profile: profile}.run(ctx)
+		targets: targets, profile: profile, work: work}.run(ctx)
 }
 
 // memoizedAnalysesFor wraps list in a per-call cache keyed by fileID, local to
@@ -352,13 +354,15 @@ type fixSession struct {
 	// profile describes the build system this checkout uses, handed to the
 	// fixer up front because it cannot infer any of it from its one file.
 	profile string
+	// work is shared across analyses so two findings in the same file compose
+	// instead of overwriting each other.
+	work *workingTree
 }
 
 // run locates and fixes each finding, then delivers every patch on one branch.
 func (s fixSession) run(ctx context.Context) (Outcome, error) {
 	out := Outcome{}
 	located := map[string]bool{}
-	patched := map[string]bool{}
 	for _, t := range s.targets {
 		in := t.Inputs
 		paths, err := s.locateAll(ctx, in)
@@ -386,9 +390,6 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 			continue
 		}
 		for _, p := range paths {
-			if patched[p] {
-				continue
-			}
 			res, err := s.produceFix(ctx, p, in)
 			if err != nil {
 				if s.opts.FileID <= 0 {
@@ -398,13 +399,15 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 				continue
 			}
 			if res.Changed && res.PatchedContent != "" {
-				patched[p] = true
-				// Cosmetic only, and read from the file we already have. A
-				// failure to read it is not a reason to hold up a patch that
-				// passed the gate.
+				// Read the pre-patch content BEFORE applying, for the cosmetic
+				// advice below; after apply it would compare a file to itself.
+				before, readErr := readUnderRoot(s.root, p)
+				if err := s.work.apply(p, res.PatchedContent); err != nil {
+					return out, err
+				}
 				advice := ""
-				if before, err := os.ReadFile(filepath.Join(s.root, filepath.FromSlash(p))); err == nil {
-					advice = formattingAdvice(p, string(before), res.PatchedContent)
+				if readErr == nil {
+					advice = formattingAdvice(p, before, res.PatchedContent)
 				}
 				out.Patches = append(out.Patches, filePatch{
 					Path: p, Content: res.PatchedContent, Diff: res.UnifiedDiff,
@@ -413,6 +416,10 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 			}
 		}
 	}
+	// One file, one blob. Two analyses that patched the same file each appended
+	// a patch; the last holds both fixes because each was built on the previous
+	// one via the working tree. Shipping both would push the intermediate state.
+	out.Patches = lastPatchPerPath(out.Patches)
 	if len(out.Patches) == 0 || s.opts.DryRun {
 		return out, nil
 	}
@@ -762,4 +769,61 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// workingTree tracks edits made during a run so later analyses see earlier
+// fixes.
+//
+// Each analysis fixes a file starting from whatever is on disk. Without this,
+// two findings in one file would each be fixed against the ORIGINAL content and
+// the second push would silently clobber the first -- which is exactly what
+// happened on mfva PR #18, where a crypto fix was lost to a PRNG fix in the same
+// file.
+type workingTree struct {
+	root     string
+	original map[string]string // path -> content before we touched it
+}
+
+func newWorkingTree(root string) *workingTree {
+	return &workingTree{root: root, original: map[string]string{}}
+}
+
+// apply writes a patch to the tree, remembering the original content once.
+func (w *workingTree) apply(path, content string) error {
+	if _, seen := w.original[path]; !seen {
+		before, err := readUnderRoot(w.root, path)
+		if err != nil {
+			return err
+		}
+		w.original[path] = before
+	}
+	return applyPatch(w.root, path, content)
+}
+
+// restore puts every touched file back, for a dry run that must leave no trace.
+func (w *workingTree) restore() error {
+	for path, content := range w.original {
+		if err := applyPatch(w.root, path, content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// lastPatchPerPath keeps the final patch for each path, preserving first-seen
+// order so the pull request body still reads in the order fixes were made.
+func lastPatchPerPath(patches []filePatch) []filePatch {
+	latest := make(map[string]filePatch, len(patches))
+	var order []string
+	for _, p := range patches {
+		if _, seen := latest[p.Path]; !seen {
+			order = append(order, p.Path)
+		}
+		latest[p.Path] = p
+	}
+	out := make([]filePatch, 0, len(order))
+	for _, path := range order {
+		out = append(out, latest[path])
+	}
+	return out
 }
