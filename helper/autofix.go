@@ -284,6 +284,16 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	// and the answer is identical for every analysis in the repository.
 	profile := describeBuild(root).String()
 	work := newWorkingTree(root)
+	// Unconditional, not dry-run-only: this restores the developer's checkout
+	// to what it was found regardless of whether the run actually wrote
+	// anything, on the theory that leaving no trace on disk is correct
+	// hygiene and, in CI, the checkout is ephemeral anyway. It is safe only
+	// because nothing downstream of work.apply reads the patched files back
+	// off disk -- delivery and PR reporting both build their payloads from
+	// out.Patches in memory, and this defer does not fire until run() (and
+	// therefore delivery) has returned. Anything added later that needs the
+	// patched content after the loop must take it from out.Patches, not from
+	// the working tree, or it will read what this defer just erased.
 	defer func() { _ = work.restore() }()
 	return fixSession{opts: opts, d: d, root: root, host: host, token: token,
 		targets: targets, profile: profile, work: work}.run(ctx)
