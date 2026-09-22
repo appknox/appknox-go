@@ -20,11 +20,21 @@ var (
 	}
 )
 
-// FindingInputs are the source-free locate + fix inputs derived from an analysis.
+// FindingInputs are the source-free locate + fix inputs for one analysis.
 type FindingInputs struct {
 	Finding     string   // short vulnerability summary
 	ClassHints  []string // all first-party classes the finding references (locate targets)
-	Remediation string   // source-free remediation guidance (KnoxIQ)
+	Remediation string   // KnoxIQ's per-finding remediation instruction
+
+	// Criteria are KnoxIQ's verification assertions for checking a patch.
+	//
+	// ALWAYS EMPTY against the deployed KnoxIQ -- see the TODO on
+	// appknox.KnoxIQRemediation.Verification. Empty means "could not check",
+	// never "passed". Do not build a gate on this until it is populated.
+	Criteria []string
+
+	// DeveloperPrompt is KnoxIQ's own wording for the fix, passed through.
+	DeveloperPrompt string
 }
 
 // stripHTML removes tags for source-free remediation text.
@@ -85,8 +95,19 @@ func findingsText(a *appknox.Analysis) string {
 	return b.String()
 }
 
-// remediationText assembles source-free remediation guidance (KnoxIQ) — never
-// the client's source, only finding metadata + secure/insecure code references.
+// remediationText assembles guidance from the VULNERABILITY-TYPE record --
+// generic secure/insecure reference code for the class of issue.
+//
+// This is NOT KnoxIQ's per-finding remediation, despite what this comment used
+// to claim and what the "(KnoxIQ)" labels below still say to the model. The
+// fields read here (v.Name, v.Description, v.Compliant, v.NonCompliant) come
+// from appknox.Vulnerability and are byte-identical for a given vulnerability
+// id across every app ever scanned. Measured on file 24 (2026-09-21): compliant
+// is populated for all 24 risky types, up to 3.2KB -- so this is substantial
+// guidance, just not app-specific.
+//
+// KnoxIQ's per-finding remediation is knoxIQInputs in knoxiq_remediation.go.
+// This function remains the fallback for --finding (manual) runs only.
 func remediationText(a *appknox.Analysis, v *appknox.Vulnerability) string {
 	parts := []string{"Vulnerability: " + v.Name}
 	if len(a.Cwe) > 0 {
