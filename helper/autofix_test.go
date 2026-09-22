@@ -139,6 +139,45 @@ func TestRunAutofix_KnoxIQCompleted_Continues(t *testing.T) {
 	require.Len(t, out.Patches, 1)
 }
 
+// TestRunAutofix_DefaultsRiskThresholdToOne is the regression test for the
+// RiskThreshold default. locatableAnalysisIDs keeps analyses with
+// ComputedRisk >= riskThreshold, and AutofixOptions.RiskThreshold's zero
+// value is 0 ("everything", Passed analyses included) -- on a real file most
+// analyses ARE Passed, so an unset threshold would multiply KnoxIQ round
+// trips roughly 4-5x against a gateway with a real per-session call budget.
+// runAutofix must turn an unset (<=0) RiskThreshold into 1 before it reaches
+// d.analysisIDs.
+func TestRunAutofix_DefaultsRiskThresholdToOne(t *testing.T) {
+	root, rel := repoWithFile(t, "orig\n")
+	var gotThreshold int
+	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
+	d.analysisIDs = func(_ context.Context, _, riskThreshold int) ([]int, error) {
+		gotThreshold = riskThreshold
+		return []int{1}, nil
+	}
+	_, err := runAutofix(context.Background(), appknoxOpts(t, root), d)
+	require.NoError(t, err)
+	require.Equal(t, 1, gotThreshold)
+}
+
+// TestRunAutofix_PreservesAnExplicitRiskThreshold guards the other half of
+// the same fix: the default must not clobber a threshold the caller actually
+// set (a future --risk-threshold flag, or health-score mode).
+func TestRunAutofix_PreservesAnExplicitRiskThreshold(t *testing.T) {
+	root, rel := repoWithFile(t, "orig\n")
+	var gotThreshold int
+	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
+	d.analysisIDs = func(_ context.Context, _, riskThreshold int) ([]int, error) {
+		gotThreshold = riskThreshold
+		return []int{1}, nil
+	}
+	opts := appknoxOpts(t, root)
+	opts.RiskThreshold = 3
+	_, err := runAutofix(context.Background(), opts, d)
+	require.NoError(t, err)
+	require.Equal(t, 3, gotThreshold)
+}
+
 func TestRunAutofix_RequiresToken(t *testing.T) {
 	prev := viper.GetString("access-token")
 	t.Cleanup(func() { viper.Set("access-token", prev) })
@@ -198,6 +237,42 @@ func TestRunAutofix_LocateOnly_WhenNoRemediation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{rel}, out.Located)
 	require.Empty(t, out.Patches) // no remediation → no fix
+}
+
+// TestRun_EmptyRemediationNeverReachesTheFixer is the regression test for the
+// `|| in.Remediation == ""` guard in fixSession.run. That guard looks
+// redundant on the automatic --file-id path (everyLocatableAnalysis already
+// filters empty Remediation before a target exists), but resolveTargets does
+// NOT guarantee it for a manual --finding target (Remediation is never set at
+// all) or a --file-id + --analysis-id target (whatever d.fetch returned,
+// unfiltered). Deleting the guard again must fail THIS test even though every
+// --file-id-only test above would keep passing.
+func TestRun_EmptyRemediationNeverReachesTheFixer(t *testing.T) {
+	root, rel := repoWithFile(t, "orig\n")
+	agentFixCalled := false
+	d := autofixDeps{
+		locate: func(context.Context, agent.Config, agent.Request) (string, error) { return rel, nil },
+		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+			agentFixCalled = true
+			return agent.FixResult{Changed: true, PatchedContent: "must never be produced\n"}, nil
+		},
+	}
+	s := fixSession{
+		opts: AutofixOptions{FixMode: "agent", FileID: 1},
+		d:    d,
+		root: root,
+		targets: []analysisTarget{
+			{AnalysisID: 1, Inputs: FindingInputs{
+				Finding: "no remediation", ClassHints: []string{"Main"}, Remediation: "",
+			}},
+		},
+	}
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{rel}, out.Located, "an empty-Remediation target is still located and reported")
+	require.Empty(t, out.Patches)
+	require.False(t, agentFixCalled,
+		"the fixer must never be called for a target whose Remediation is empty")
 }
 
 func TestRunAutofix_FullFlow_PushesBranch(t *testing.T) {

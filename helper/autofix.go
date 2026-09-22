@@ -232,6 +232,26 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 		}
 	}
 	opts = applyCIDefaults(opts)
+	// An unset RiskThreshold defaults to 1 (any non-Passed finding), not 0
+	// (everything). locatableAnalysisIDs keeps analyses whose ComputedRisk is
+	// >= this threshold, and on a real file most analyses are Passed
+	// (ComputedRisk 0): measured on mfva file 24, 108 analyses total but only
+	// 24 with ComputedRisk > 0. Defaulting to 0 would ask KnoxIQ about all
+	// 108 instead of ~24, and the gateway has a real per-session call budget
+	// -- isGatewayBudgetExhausted exists because that budget gets exhausted.
+	// This lives here, not inside locatableAnalysisIDs, so that function keeps
+	// treating 0 as "everything" for any caller that passes it a threshold
+	// directly (as every existing test does, and as health-score mode will).
+	// AutofixOptions.RiskThreshold has no way today to distinguish "the caller
+	// left this unset" from "the caller explicitly asked for 0" -- both are
+	// the field's zero value -- so this default only applies to the CLI's own
+	// AutofixOptions before anything downstream sees it; a future
+	// --risk-threshold flag that wants 0 to mean "everything" will need its
+	// own explicit signal (e.g. a flag-was-set bool) rather than relying on
+	// the zero value.
+	if opts.RiskThreshold <= 0 {
+		opts.RiskThreshold = 1
+	}
 	token := viper.GetString("access-token")
 	if token == "" {
 		return Outcome{}, errors.New("autofix needs an Appknox access token (--access-token or APPKNOX_ACCESS_TOKEN)")
@@ -336,7 +356,14 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 				out.Located = append(out.Located, p)
 			}
 		}
-		if len(paths) == 0 {
+		// in.Remediation == "" is NOT dead: resolveTargets only guarantees it
+		// non-empty on the automatic --file-id path (everyLocatableAnalysis
+		// filters it there). A manual --finding target never sets Remediation
+		// at all, and --file-id + --analysis-id passes through whatever
+		// d.fetch returned, unfiltered -- both can reach here empty. A fix
+		// built on no instruction is worse than no fix, so this must hold for
+		// every path, not just the one where it happens to be redundant.
+		if len(paths) == 0 || in.Remediation == "" {
 			continue
 		}
 		for _, p := range paths {

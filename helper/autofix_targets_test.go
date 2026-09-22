@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/appknox/appknox-go/appknox"
 )
 
 // stubDeps builds autofixDeps whose analysisIDs and fetch are canned.
@@ -111,6 +113,27 @@ func TestResolveTargets_ManualFindingNeedsNoLookup(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Inputs.Finding != "Weak PRNG" {
 		t.Fatalf("want the manual finding passed straight through, got %v", got)
+	}
+}
+
+// TestLocatableAnalysisIDs_ExcludesPassedAnalyses is the regression test for
+// the RiskThreshold default (runAutofix now sends 1, not 0, when the caller
+// left it unset): a Passed analysis (ComputedRisk 0) must be excluded under
+// that default, while anything at or above it is kept.
+func TestLocatableAnalysisIDs_ExcludesPassedAnalyses(t *testing.T) {
+	analyses := []*appknox.Analysis{
+		{ID: 101, ComputedRisk: 0}, // Passed -- excluded under the default (threshold 1)
+		{ID: 102, ComputedRisk: 1}, // Low -- included
+		{ID: 103, ComputedRisk: 3}, // Critical -- included
+	}
+	analysesFor := func(context.Context, int) ([]*appknox.Analysis, error) { return analyses, nil }
+
+	ids, err := locatableAnalysisIDs(context.Background(), analysesFor, 24, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || ids[0] != 102 || ids[1] != 103 {
+		t.Fatalf("want [102 103] (ComputedRisk 0 excluded), got %v", ids)
 	}
 }
 
