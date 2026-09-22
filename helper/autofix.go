@@ -25,23 +25,26 @@ var (
 
 // AutofixOptions carries the flags for the client-side autofix flow.
 type AutofixOptions struct {
-	Repo         string // GitHub owner/name from CI (GITHUB_REPOSITORY)
-	Ref          string // PR base / merge target; empty = repo default branch
-	HeadRef      string // feature branch this autofix belongs to (CI: GITHUB_HEAD_REF / GITHUB_REF)
-	RepoPath     string // already-checked-out repo (CI: GITHUB_WORKSPACE)
-	FileID       int    // Appknox file id (every fixable analysis on the file)
-	Finding      string // manual finding detail (when not using file id)
-	ClassHint    string // manual class/symbol hint
-	GithubToken  string // GitHub token for the --repo fetch and branch push
-	DryRun       bool   // locate + fix but do not push a branch
-	FixMode      string // "server" (default, /v1/fix) or "agent" (client-side Edit, no upload)
-	ListAnalyses bool   // print the file's analyses + class hints, then exit
+	Repo          string // GitHub owner/name from CI (GITHUB_REPOSITORY)
+	Ref           string // PR base / merge target; empty = repo default branch
+	HeadRef       string // feature branch this autofix belongs to (CI: GITHUB_HEAD_REF / GITHUB_REF)
+	RepoPath      string // already-checked-out repo (CI: GITHUB_WORKSPACE)
+	FileID        int    // Appknox file id (every fixable analysis on the file)
+	AnalysisID    int    // one analysis on the file; 0 = every fixable analysis
+	RiskThreshold int    // minimum computed risk to attempt; 0 = everything
+	Finding       string // manual finding detail (when not using file id)
+	ClassHint     string // manual class/symbol hint
+	GithubToken   string // GitHub token for the --repo fetch and branch push
+	DryRun        bool   // locate + fix but do not push a branch
+	FixMode       string // "server" (default, /v1/fix) or "agent" (client-side Edit, no upload)
+	ListAnalyses  bool   // print the file's analyses + class hints, then exit
 }
 
 // autofixDeps are the injectable collaborators (seams for cost-free tests).
 type autofixDeps struct {
 	locate      func(ctx context.Context, cfg agent.Config, req agent.Request) (string, error)
-	fetch       func(ctx context.Context, fileID int) ([]FindingInputs, error)
+	fetch       func(ctx context.Context, fileID, analysisID int) (FindingInputs, error)
+	analysisIDs func(ctx context.Context, fileID, riskThreshold int) ([]int, error)
 	submit      func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
 	agentFix    func(ctx context.Context, cfg agent.Config, req agent.FixRequest) (agent.FixResult, error)
 	deliver     func(ctx context.Context, opts AutofixOptions, patches []filePatch) (Delivery, error)
@@ -49,10 +52,14 @@ type autofixDeps struct {
 	knoxiqReady func(ctx context.Context, fileID int) error
 }
 
+// defaultDeps wires every real collaborator except fetch and analysisIDs,
+// which runAutofix fills in via withKnoxIQFetchers so they can share one
+// per-run analysis cache. Leaving them nil here (rather than pointing them at
+// package-level funcs) is what lets withKnoxIQFetchers tell "caller supplied
+// a stub" apart from "use the real thing".
 func defaultDeps() autofixDeps {
 	return autofixDeps{
 		locate:      agent.LocateFile,
-		fetch:       fetchAppknoxInputs,
 		submit:      fixservice.SubmitAndAwait,
 		agentFix:    agent.FixFile,
 		deliver:     deliverBranch,
@@ -229,7 +236,8 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	if token == "" {
 		return Outcome{}, errors.New("autofix needs an Appknox access token (--access-token or APPKNOX_ACCESS_TOKEN)")
 	}
-	findings, err := resolveInputs(ctx, opts, d.fetch)
+	d = withKnoxIQFetchers(d)
+	targets, err := resolveTargets(ctx, opts, d)
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -252,18 +260,56 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	// and the answer is identical for every analysis in the repository.
 	profile := describeBuild(root).String()
 	return fixSession{opts: opts, d: d, root: root, host: host, token: token,
-		findings: findings, profile: profile}.run(ctx)
+		targets: targets, profile: profile}.run(ctx)
 }
 
-// fixSession carries the resolved context for locating + fixing every finding
+// withKnoxIQFetchers fills in the real KnoxIQ-backed fetch and analysisIDs
+// implementations when the caller has not already supplied both (tests always
+// inject their own stubs for these, so this is a no-op for every test).
+//
+// Both closures share one per-run cache of each file's analyses, keyed by
+// fileID: fetch is called once per analysis target (up to ~18 on a real scan)
+// but AnalysesService has no GetByID, only ListByFile, so without this cache
+// every one of those calls would re-list the whole file. The cache is a local
+// variable, not a package-level one, so nothing leaks between runs or tests.
+func withKnoxIQFetchers(d autofixDeps) autofixDeps {
+	if d.fetch != nil && d.analysisIDs != nil {
+		return d
+	}
+	cache := map[int][]*appknox.Analysis{}
+	analysesFor := func(ctx context.Context, fileID int) ([]*appknox.Analysis, error) {
+		if cached, ok := cache[fileID]; ok {
+			return cached, nil
+		}
+		all, err := allAnalyses(ctx, getClient(), fileID)
+		if err != nil {
+			return nil, err
+		}
+		cache[fileID] = all
+		return all, nil
+	}
+	if d.fetch == nil {
+		d.fetch = func(ctx context.Context, fileID, analysisID int) (FindingInputs, error) {
+			return fetchKnoxIQInputs(ctx, analysesFor, fileID, analysisID)
+		}
+	}
+	if d.analysisIDs == nil {
+		d.analysisIDs = func(ctx context.Context, fileID, riskThreshold int) ([]int, error) {
+			return locatableAnalysisIDs(ctx, analysesFor, fileID, riskThreshold)
+		}
+	}
+	return d
+}
+
+// fixSession carries the resolved context for locating + fixing every target
 // on a file (or one manual --finding).
 type fixSession struct {
-	opts     AutofixOptions
-	d        autofixDeps
-	root     string
-	host     string
-	token    string
-	findings []FindingInputs
+	opts    AutofixOptions
+	d       autofixDeps
+	root    string
+	host    string
+	token   string
+	targets []analysisTarget
 	// profile describes the build system this checkout uses, handed to the
 	// fixer up front because it cannot infer any of it from its one file.
 	profile string
@@ -274,7 +320,8 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 	out := Outcome{}
 	located := map[string]bool{}
 	patched := map[string]bool{}
-	for _, in := range s.findings {
+	for _, t := range s.targets {
+		in := t.Inputs
 		paths, err := s.locateAll(ctx, in)
 		if err != nil {
 			if s.opts.FileID <= 0 {
@@ -289,7 +336,7 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 				out.Located = append(out.Located, p)
 			}
 		}
-		if len(paths) == 0 || in.Remediation == "" {
+		if len(paths) == 0 {
 			continue
 		}
 		for _, p := range paths {
@@ -433,20 +480,6 @@ func (s fixSession) deliver(ctx context.Context, out Outcome) (Outcome, error) {
 	return out, nil
 }
 
-// resolveInputs derives finding/hint/remediation from Appknox ids, or the flags.
-func resolveInputs(
-	ctx context.Context, opts AutofixOptions,
-	fetch func(context.Context, int) ([]FindingInputs, error),
-) ([]FindingInputs, error) {
-	if opts.FileID > 0 {
-		return fetch(ctx, opts.FileID)
-	}
-	if opts.Finding == "" {
-		return nil, errors.New("provide --file-id, or --finding")
-	}
-	return []FindingInputs{{Finding: opts.Finding, ClassHints: []string{opts.ClassHint}}}, nil
-}
-
 // resolveRepoRoot returns the repo root and a cleanup func: a local checkout
 // (--repo-path or GITHUB_WORKSPACE), or a freshly fetched GitHub tarball.
 func resolveRepoRoot(ctx context.Context, opts AutofixOptions) (string, func(), error) {
@@ -466,28 +499,54 @@ func resolveRepoRoot(ctx context.Context, opts AutofixOptions) (string, func(), 
 	})
 }
 
-// fetchAppknoxInputs pulls every analysis + vulnerability (KnoxIQ) for the file
-// and derives source-free finding/hint/remediation. Analyses without class hints
-// or remediation are omitted.
-func fetchAppknoxInputs(ctx context.Context, fileID int) ([]FindingInputs, error) {
-	client := getClient()
-	all, err := allAnalyses(ctx, client, fileID)
+// fetchKnoxIQInputs resolves one analysis into locate + fix inputs.
+//
+// The vulnerability record supplies only the human-readable name; the
+// remediation itself is KnoxIQ's. An empty Remediation (nil error) means
+// KnoxIQ was reached and judged nothing fixable here -- the caller drops the
+// analysis. An error means KnoxIQ was UNREACHABLE, and the caller must not
+// substitute metadata-derived guidance (deriveFindingInputs/remediationText).
+//
+// AnalysesService has no GetByID (see appknox/analyses.go), only ListByFile,
+// so the analysis is looked up in whatever analysesFor returns -- the real
+// caller (withKnoxIQFetchers) passes a memoized listing shared across every
+// analysis target in the run.
+func fetchKnoxIQInputs(
+	ctx context.Context,
+	analysesFor func(context.Context, int) ([]*appknox.Analysis, error),
+	fileID, analysisID int,
+) (FindingInputs, error) {
+	all, err := analysesFor(ctx, fileID)
 	if err != nil {
-		return nil, err
+		return FindingInputs{}, err
 	}
-	var out []FindingInputs
+	analysis := findAnalysisByID(all, analysisID)
+	if analysis == nil {
+		return FindingInputs{}, fmt.Errorf("analysis %d not found on file %d", analysisID, fileID)
+	}
+	client := getClient()
+	vuln, _, err := client.Vulnerabilities.GetByID(ctx, analysis.VulnerabilityID)
+	if err != nil {
+		return FindingInputs{}, err
+	}
+	findings, err := fixableKnoxIQFindings(ctx, client, analysisID)
+	if err != nil {
+		return FindingInputs{}, err
+	}
+	if len(findings) == 0 {
+		return FindingInputs{}, nil
+	}
+	return knoxIQInputs(findings, vuln.Name), nil
+}
+
+// findAnalysisByID returns the analysis with the given id, or nil.
+func findAnalysisByID(all []*appknox.Analysis, id int) *appknox.Analysis {
 	for _, a := range all {
-		vuln, _, err := client.Vulnerabilities.GetByID(ctx, a.VulnerabilityID)
-		if err != nil {
-			return nil, err
+		if a.ID == id {
+			return a
 		}
-		in := deriveFindingInputs(a, vuln)
-		if len(in.ClassHints) == 0 || in.Remediation == "" {
-			continue
-		}
-		out = append(out, in)
 	}
-	return out, nil
+	return nil
 }
 
 // allAnalyses fetches every analysis for a file (count, then the full list).

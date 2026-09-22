@@ -48,31 +48,13 @@ func TestResolveRepoRoot_RequiresRepoOrPath(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestResolveInputs_FromFlags(t *testing.T) {
-	called := false
-	fetch := func(context.Context, int) ([]FindingInputs, error) { called = true; return nil, nil }
-	in, err := resolveInputs(context.Background(),
-		AutofixOptions{Finding: "weak PRNG", ClassHint: "Main"}, fetch)
-	require.NoError(t, err)
-	require.Equal(t, "weak PRNG", in[0].Finding)
-	require.Equal(t, []string{"Main"}, in[0].ClassHints)
-	require.False(t, called) // flags path must not hit Appknox
-}
-
-func TestResolveInputs_FromAppknoxIDs(t *testing.T) {
-	fetch := func(_ context.Context, f int) ([]FindingInputs, error) {
-		require.Equal(t, 118, f)
-		return []FindingInputs{{Finding: "Derived Crypto Keys", Remediation: "derive securely"}}, nil
-	}
-	in, err := resolveInputs(context.Background(), AutofixOptions{FileID: 118}, fetch)
-	require.NoError(t, err)
-	require.Equal(t, "derive securely", in[0].Remediation)
-}
-
-func TestResolveInputs_RequiresSomething(t *testing.T) {
-	_, err := resolveInputs(context.Background(), AutofixOptions{}, nil)
-	require.Error(t, err)
-}
+// resolveInputs / fetchAppknoxInputs were replaced by resolveTargets / the
+// KnoxIQ-backed fetch. Their old coverage now lives in
+// helper/autofix_targets_test.go:
+//   - "flags path must not hit Appknox"  -> TestResolveTargets_ManualFindingNeedsNoLookup
+//   - "FileID path derives from Appknox" -> TestResolveTargets_KeepsOnlyAnalysesKnoxIQCanFix,
+//     TestResolveTargets_SingleAnalysisMode
+//   - "requires FileID or Finding"       -> TestResolveTargets_RequiresFileIDOrFinding
 
 func TestListAnalyses_RequiresFileID(t *testing.T) {
 	require.Error(t, listAnalyses(0))
@@ -89,10 +71,14 @@ func repoWithFile(t *testing.T, body string) (string, string) {
 }
 
 // deps builds a stub set: locate returns a fixed path, fix returns res, etc.
+// analysisIDs reports a single analysis (id 1); fetch returns in for it
+// regardless of which analysis id it is asked about, mirroring the single
+// FindingInputs a real single-analysis file used to produce.
 func deps(path string, res fixservice.Result, in FindingInputs) autofixDeps {
 	return autofixDeps{
-		locate: func(context.Context, agent.Config, agent.Request) (string, error) { return path, nil },
-		fetch:  func(context.Context, int) ([]FindingInputs, error) { return []FindingInputs{in}, nil },
+		locate:      func(context.Context, agent.Config, agent.Request) (string, error) { return path, nil },
+		analysisIDs: func(context.Context, int, int) ([]int, error) { return []int{1}, nil },
+		fetch:       func(context.Context, int, int) (FindingInputs, error) { return in, nil },
 		submit: func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
 			return res, nil
 		},
@@ -128,9 +114,9 @@ func TestRunAutofix_KnoxIQNotCompleted_StopsBeforeFetch(t *testing.T) {
 	d.knoxiqReady = func(context.Context, int) error {
 		return errors.New("knoxiq is not completed for file 1 (sast=Pending, dast=Disabled)")
 	}
-	d.fetch = func(context.Context, int) ([]FindingInputs, error) {
+	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
 		fetched = true
-		return nil, nil
+		return FindingInputs{}, nil
 	}
 	_, err := runAutofix(context.Background(), appknoxOpts(t, t.TempDir()), d)
 	require.Error(t, err)
@@ -238,9 +224,9 @@ func TestRunAutofix_MultiClass_FixesEachLocatedFile(t *testing.T) {
 	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
 		return pathFor[req.ClassHint], nil // each class → its own file
 	}
-	d.fetch = func(context.Context, int) ([]FindingInputs, error) {
-		return []FindingInputs{{Finding: "Derived Crypto Keys",
-			ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}}, nil
+	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
+		return FindingInputs{Finding: "Derived Crypto Keys",
+			ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}, nil
 	}
 	out, err := runAutofix(context.Background(), appknoxOpts(t, root), d)
 	require.NoError(t, err)
@@ -264,8 +250,8 @@ func TestRunAutofix_MultiClass_PushBranch_OneBranch(t *testing.T) {
 	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
 		return map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java"}[req.ClassHint], nil
 	}
-	d.fetch = func(context.Context, int) ([]FindingInputs, error) {
-		return []FindingInputs{{Finding: "Multi", ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}}, nil
+	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
+		return FindingInputs{Finding: "Multi", ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}, nil
 	}
 	d.deliver = func(_ context.Context, _ AutofixOptions, patches []filePatch) (Delivery, error) {
 		delivered = patches // all files pushed together in one call
@@ -394,11 +380,12 @@ func TestRunAutofix_FileID_SkipsFailedFinding(t *testing.T) {
 	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
 		return map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java"}[req.ClassHint], nil
 	}
-	d.fetch = func(context.Context, int) ([]FindingInputs, error) {
-		return []FindingInputs{
-			{Finding: "Bad", ClassHints: []string{"com/x/A"}, Remediation: "fix"},
-			{Finding: "Good", ClassHints: []string{"com/x/B"}, Remediation: "fix"},
-		}, nil
+	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{1, 2}, nil }
+	d.fetch = func(_ context.Context, _, analysisID int) (FindingInputs, error) {
+		if analysisID == 1 {
+			return FindingInputs{Finding: "Bad", ClassHints: []string{"com/x/A"}, Remediation: "fix"}, nil
+		}
+		return FindingInputs{Finding: "Good", ClassHints: []string{"com/x/B"}, Remediation: "fix"}, nil
 	}
 	d.submit = func(_ context.Context, _ fixservice.Config, req fixservice.Request) (fixservice.Result, error) {
 		if req.Finding == "Bad" {
