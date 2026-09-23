@@ -297,5 +297,13 @@ func (s *KnoxIQService) ListByAnalysis(ctx context.Context, analysisID int) ([]*
 	if err := s.getWithRetry(ctx, url, &response); err != nil {
 		return nil, fmt.Errorf("knoxiq: listing findings for analysis %d: %w", analysisID, err)
 	}
+	// One page only (see knoxiqPageLimit) -- deliberately NOT paginated here.
+	// Silently returning a partial result is worse than returning it loudly:
+	// say so, so a caller attempting a fix from a truncated finding set knows
+	// why it may be incomplete, rather than assuming this was everything.
+	if response.Count > len(response.Results) {
+		fmt.Printf("knoxiq: analysis %d has %d finding(s), only %d fetched (no pagination)\n",
+			analysisID, response.Count, len(response.Results))
+	}
 	return response.Results, nil
 }
