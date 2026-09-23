@@ -49,7 +49,7 @@ func init() {
 	f.String("finding", "", "Manual finding detail (when not using --file-id)")
 	f.String("class-hint", "", "Manual class/symbol hint from the finding (optional)")
 	f.String("github-token", "", "GitHub token for fetch + push (or env GITHUB_TOKEN)")
-	f.String("model", "", "Model for both turns (blank = the agent default). Sets the model that WRITES the patch")
+	f.String("model", "", "Model for both turns under --fix-mode agent (blank = the agent default); ignored by --fix-mode server, which takes no model override")
 	f.String("locate-model", "", "Model for the locate turn only; falls back to --model. A cheaper model here does not weaken the patch")
 	f.Bool("dry-run", false, "Locate + generate the fix but do not push a branch")
 	f.String("fix-mode", "agent", "How to generate the fix: 'agent' (default — LLM Edit tool via the agent SDK, no file upload) or 'server' (/v1/fix single-shot, uploads the file)")

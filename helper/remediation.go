@@ -107,7 +107,13 @@ func findingsText(a *appknox.Analysis) string {
 // guidance, just not app-specific.
 //
 // KnoxIQ's per-finding remediation is knoxIQInputs in knoxiq_remediation.go.
-// This function remains the fallback for --finding (manual) runs only.
+//
+// This function is currently UNUSED in production: its only caller is
+// deriveFindingInputs, which nothing calls either -- resolveTargets's manual
+// --finding path (autofix_targets.go) builds FindingInputs directly and never
+// derives a Remediation at all, so a manual run today ships with an empty
+// one. Kept rather than deleted (see final-fix-findings.md's DEFERRED list);
+// do not read this comment as evidence it is wired in.
 func remediationText(a *appknox.Analysis, v *appknox.Vulnerability) string {
 	parts := []string{"Vulnerability: " + v.Name}
 	if len(a.Cwe) > 0 {

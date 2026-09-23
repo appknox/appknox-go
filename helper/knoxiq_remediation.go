@@ -129,8 +129,12 @@ func fixableKnoxIQFindings(
 // X is gone"). Checking a patch against instructions passes by coincidence of
 // wording, and a gate that is right by accident is not a gate.
 //
-// Empty Criteria therefore means "could not check", never "nothing to check",
-// and the run says so rather than delivering an unverified patch.
+// Empty Criteria therefore means "could not check", never "nothing to check".
+// But nothing in this branch enforces that distinction: there is no
+// verification gate here. Criteria only reaches the fixer as guidance folded
+// into the fix prompt (see attemptFix in autofix.go and fixUserPrompt in
+// agent/instructions.go), and a patch ships whether or not any Criteria were
+// present, let alone met.
 func knoxIQInputs(findings []*appknox.KnoxIQFinding, vulnerabilityName string) FindingInputs {
 	var instructions, criteria, developerPrompts []string
 	seenHint := map[string]bool{}
