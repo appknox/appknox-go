@@ -127,27 +127,47 @@ func fixParams(cfg Config, req FixRequest) sdk.BetaToolRunnerParams {
 	return runnerParamsWithBudget(cfg, fixSystemPrompt, fixUserPrompt(req), defaultFixMaxTokens)
 }
 
+// maxDeclineReasonLen bounds how much of the model's own text this prints. An
+// abstaining model can write at length, and this is a log line, not a report.
+const maxDeclineReasonLen = 500
+
 // declineReason explains an empty-handed fix turn.
 //
 // A truncated or iteration-capped run leaves a final message with no text at
 // all. Reporting that as silence would make it look like the model chose to
 // abstain, when in fact it never got to finish -- two problems with opposite
 // fixes, and for a while they were indistinguishable in the logs.
+//
+// BetaStopReasonMaxTokens is checked BEFORE any text, not after: a run that
+// got cut off by the token budget commonly leaves a text preamble it started
+// before running out (e.g. "I'll start by reading the file..."), and that
+// preamble is not the model's considered explanation for declining -- it is
+// mid-thought. Checking text first would report it as if it were, hiding the
+// real, mechanical cause (the budget, not a decision) behind words that
+// sound like one.
 func declineReason(final *sdk.BetaMessage) string {
 	if final == nil {
 		return "the fixer returned no final message"
 	}
-	if text := strings.TrimSpace(extractText(final)); text != "" {
-		return text
-	}
-	switch final.StopReason {
-	case sdk.BetaStopReasonMaxTokens:
+	if final.StopReason == sdk.BetaStopReasonMaxTokens {
 		return "the reply hit the output-token limit before the edit completed; " +
 			"the fix was too large for the budget, not declined"
-	case sdk.BetaStopReasonRefusal:
+	}
+	if text := strings.TrimSpace(extractText(final)); text != "" {
+		return boundDeclineReason(text)
+	}
+	if final.StopReason == sdk.BetaStopReasonRefusal {
 		return "the model refused the request"
 	}
 	return ""
+}
+
+// boundDeclineReason caps the printed length of the model's own words.
+func boundDeclineReason(text string) string {
+	if len(text) <= maxDeclineReasonLen {
+		return text
+	}
+	return text[:maxDeclineReasonLen] + "… [truncated]"
 }
 
 // buildFixTools = read-only Read/Grep/Glob + the edit tool (restricted to allowedPath).

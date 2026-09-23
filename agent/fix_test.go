@@ -136,6 +136,33 @@ func TestDeclineReason_NilMessage(t *testing.T) {
 	require.NotEmpty(t, declineReason(nil))
 }
 
+// M1: a truncated reply commonly leaves a text preamble it started before
+// running out of budget (e.g. "I'll start by reading the file..."). Reporting
+// that preamble as the model's own considered reason -- the bug before this
+// fix -- hides the real, mechanical cause. BetaStopReasonMaxTokens must win
+// even when text is present.
+func TestDeclineReason_MaxTokensWinsOverATextPreamble(t *testing.T) {
+	msg := &sdk.BetaMessage{
+		StopReason: sdk.BetaStopReasonMaxTokens,
+		Content:    []sdk.BetaContentBlockUnion{{Type: "text", Text: "I'll start by reading the file and then"}},
+	}
+	got := declineReason(msg)
+	require.Contains(t, got, "output-token limit")
+	require.NotContains(t, got, "I'll start by reading the file",
+		"a mid-thought preamble must never be reported as the model's considered reason")
+}
+
+// M1: the printed reason must be bounded, not an unbounded dump of whatever
+// the model wrote.
+func TestDeclineReason_BoundsLength(t *testing.T) {
+	msg := &sdk.BetaMessage{
+		StopReason: sdk.BetaStopReasonEndTurn,
+		Content:    []sdk.BetaContentBlockUnion{{Type: "text", Text: strings.Repeat("x", 5000)}},
+	}
+	got := declineReason(msg)
+	require.Less(t, len(got), 5000, "an unbounded model reply must be capped, not printed in full")
+}
+
 func TestBuildDiff(t *testing.T) {
 	d := buildDiff([]editRecord{{Path: "A.java", Old: "old", New: "new"}})
 	require.Contains(t, d, "--- A.java")
