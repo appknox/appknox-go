@@ -158,7 +158,13 @@ CONTAINED - add nothing, delete nothing, restructure nothing else.
   itself an instance of the vulnerability - a no-op verifier or trust manager, a
   hardcoded credential, an unsafe query builder, a now-stale cached security
   verdict - delete it too, because dead vulnerable code is still reported by the
-  scanner that raised the finding. The control flow enclosing the defect
+  scanner that raised the finding. Likewise when the call IS the finding - a
+  logging call (Log.d, Log.i, Log.e, ...) raised as application logging: the
+  scanner flags the call itself, not its message, so rewording or redacting its
+  arguments leaves the finding in place. For each flagged site, remove the call
+  - the whole statement - and nothing around it. This overrides MINIMAL's "never
+  delete it" and the verbatim-string rule below for those calls only. The
+  control flow enclosing the defect
   - loops, conditionals, counters, and the bookkeeping that runs after them -
   stays as it is, even if it now looks redundant or single-iteration. Add no
   statement the remediation did not ask for: no new logging, counters, comments,

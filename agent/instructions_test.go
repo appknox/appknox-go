@@ -65,6 +65,22 @@ func TestFixSystemPrompt_deletesOrphansThatAreThemselvesTheVulnerability(t *test
 	}
 }
 
+// aibom-android PRs #5-#9: every fixer "redacted" MainActivity's four Log.d
+// calls by rewording their constant messages, and the rescan still flagged all
+// of them. sherlock's static logging analyzer (analyzers/android/static/
+// logging.py) reports ANY android.util.Log call in the app's own package whose
+// tag and message are constants -- the call is the finding, not its text. v2
+// deleted the calls and they cleared. MINIMAL ("never delete it") and CONTAINED
+// ("reproduce verbatim every ... log") pushed the fixer into rewording, so the
+// prompt must carve the flagged call out of both.
+func TestFixSystemPrompt_removesACallThatIsItselfTheFinding(t *testing.T) {
+	for _, want := range []string{"the call IS the finding", "rewording", "remove the call"} {
+		if !strings.Contains(fixSystemPrompt, want) {
+			t.Errorf("system prompt should say a flagged call is removed, not reworded: %q", want)
+		}
+	}
+}
+
 // KnoxIQ's Derived Crypto Keys remediation says "introduce a new utility class,
 // SecureCryptoManager, into your project" and then calls it. The fixer read that
 // as needing a new FILE, which it cannot create, so it declined the site and the
