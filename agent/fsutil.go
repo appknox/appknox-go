@@ -34,6 +34,24 @@ func skipDir(name string) bool {
 	return skipDirs[name] || (len(name) > 1 && strings.HasPrefix(name, "."))
 }
 
+// isNestedRepo reports whether dir is a repository in its own right, and so a
+// different codebase from the one being fixed.
+//
+// CI puts the CLI beside the app: mfva and aibom-android both check appknox-go
+// out into the workspace via actions/checkout with `path: appknox-go`. On
+// aibom-android run 35772387479 that cost real fixes -- locate answered
+// "Disabled SSL CA Validation" with appknox-go/appknox/appknox.go, and a grep
+// for credential patterns matched only appknox-go's own test files.
+//
+// The marker is .git: a directory in a normal clone, a FILE in a worktree or
+// submodule checkout. Either means a separate repository, so Lstat covers both
+// without following a link. Keying on that rather than on a directory name
+// keeps this correct for any nested checkout, not only this one.
+func isNestedRepo(dir string) bool {
+	_, err := os.Lstat(filepath.Join(dir, ".git"))
+	return err == nil
+}
+
 // isSource reports whether a path has a recognised source extension.
 func isSource(rel string) bool {
 	return sourceSuffixes[strings.ToLower(filepath.Ext(rel))]
@@ -50,7 +68,9 @@ func walkSourceFiles(root string, fn func(rel, abs string) error) {
 			return nil // unreadable entry: skip, never abort the whole walk
 		}
 		if d.IsDir() {
-			if abs != root && skipDir(d.Name()) {
+			// The root is exempt from both checks: it carries .git itself in
+			// any real checkout, and pruning it would empty the walk.
+			if abs != root && (skipDir(d.Name()) || isNestedRepo(abs)) {
 				return filepath.SkipDir
 			}
 			return nil
