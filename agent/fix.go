@@ -105,9 +105,49 @@ func sdkFix(ctx context.Context, cfg Config, req FixRequest, edits *[]editRecord
 		return err
 	}
 	client := newAutofixSDK(cfg)
-	runner := client.Beta.Messages.NewToolRunner(tools, runnerParams(cfg, fixSystemPrompt, fixUserPrompt(req)))
-	_, err = runner.RunToCompletion(ctx)
-	return err
+	runner := client.Beta.Messages.NewToolRunner(tools, fixParams(cfg, req))
+	final, err := runner.RunToCompletion(ctx)
+	if err != nil {
+		return err
+	}
+	// A run that recorded an edit succeeded; nothing left to explain. It is the
+	// empty-handed run that has to say WHY, because "no edit" reaches the caller
+	// as a clean skip and reads exactly like the model judging the file safe.
+	if len(*edits) == 0 {
+		if reason := declineReason(final); reason != "" {
+			fmt.Printf("  fixer made no edit to %s: %s\n", req.Path, reason)
+		}
+	}
+	return nil
+}
+
+// fixParams builds the Tool Runner params for the FIX pass, on the fix turn's
+// own output-token budget rather than the locate turn's.
+func fixParams(cfg Config, req FixRequest) sdk.BetaToolRunnerParams {
+	return runnerParamsWithBudget(cfg, fixSystemPrompt, fixUserPrompt(req), defaultFixMaxTokens)
+}
+
+// declineReason explains an empty-handed fix turn.
+//
+// A truncated or iteration-capped run leaves a final message with no text at
+// all. Reporting that as silence would make it look like the model chose to
+// abstain, when in fact it never got to finish -- two problems with opposite
+// fixes, and for a while they were indistinguishable in the logs.
+func declineReason(final *sdk.BetaMessage) string {
+	if final == nil {
+		return "the fixer returned no final message"
+	}
+	if text := strings.TrimSpace(extractText(final)); text != "" {
+		return text
+	}
+	switch final.StopReason {
+	case sdk.BetaStopReasonMaxTokens:
+		return "the reply hit the output-token limit before the edit completed; " +
+			"the fix was too large for the budget, not declined"
+	case sdk.BetaStopReasonRefusal:
+		return "the model refused the request"
+	}
+	return ""
 }
 
 // buildFixTools = read-only Read/Grep/Glob + the edit tool (restricted to allowedPath).

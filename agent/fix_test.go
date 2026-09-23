@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -74,6 +75,65 @@ func TestBuildFixTools_HasEditPlusReadOnly(t *testing.T) {
 	tools, err := buildFixTools(t.TempDir(), "app/Main.java", &edits)
 	require.NoError(t, err)
 	require.Len(t, tools, 4) // read_file, grep, glob, edit
+}
+
+// A locate turn answers with one path; a fix turn emits an edit tool call whose
+// old_string and new_string carry real code. autofix-v2 sized them separately
+// (1024 / 16384); the Mycroft-gateway port collapsed runnerParamsWithBudget
+// into runnerParams and put BOTH turns on 1024.
+//
+// Nothing in helper/ or cmd/ sets Config.MaxTokens, so that default is what
+// every real run gets. A fix that does not fit truncates mid-tool-use: no edit
+// completes, the final message carries no text, and the run reports "no patch"
+// -- indistinguishable from the model judging the code already safe. That is
+// the shape of aibom-android's 0-of-11 result, where seven findings were
+// attempted and not one produced a patch.
+func TestFixParams_GetsTheLargerBudget(t *testing.T) {
+	p := fixParams(Config{}, FixRequest{Finding: "weak prng", Remediation: "use SecureRandom"})
+	require.Equal(t, int64(defaultFixMaxTokens), p.MaxTokens,
+		"the fix turn writes code and must not inherit the locate turn's one-path budget")
+}
+
+// The two budgets must stay distinct: if they are ever equal again the collapse
+// has come back, and this assertion is the only thing that says so.
+func TestFixBudget_IsLargerThanLocateBudget(t *testing.T) {
+	require.Greater(t, int64(defaultFixMaxTokens), int64(defaultMaxTokens))
+}
+
+// The per-turn numbers are fallbacks, not overrides: an explicit
+// Config.MaxTokens still wins.
+func TestFixParams_ExplicitMaxTokensStillWins(t *testing.T) {
+	p := fixParams(Config{MaxTokens: 77}, FixRequest{})
+	require.Equal(t, int64(77), p.MaxTokens)
+}
+
+// Truncation is not abstention. When the runner stops on max_tokens having
+// written no edit, the caller must be told the budget ran out rather than
+// handed a silent "no change" it would report as a clean skip.
+func TestDeclineReason_NamesTruncationRatherThanSilence(t *testing.T) {
+	require.Contains(t,
+		declineReason(&sdk.BetaMessage{StopReason: sdk.BetaStopReasonMaxTokens}),
+		"output-token limit")
+}
+
+func TestDeclineReason_NamesRefusal(t *testing.T) {
+	require.Contains(t,
+		declineReason(&sdk.BetaMessage{StopReason: sdk.BetaStopReasonRefusal}),
+		"refused")
+}
+
+// A model that finished normally and explained itself is a real abstention; its
+// own words are the reason and must not be overwritten by a guess.
+func TestDeclineReason_PrefersTheModelsOwnWords(t *testing.T) {
+	msg := &sdk.BetaMessage{
+		StopReason: sdk.BetaStopReasonEndTurn,
+		Content:    []sdk.BetaContentBlockUnion{{Type: "text", Text: "this file is already safe"}},
+	}
+	require.Equal(t, "this file is already safe", declineReason(msg))
+}
+
+func TestDeclineReason_NilMessage(t *testing.T) {
+	require.NotEmpty(t, declineReason(nil))
 }
 
 func TestBuildDiff(t *testing.T) {
