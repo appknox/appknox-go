@@ -276,6 +276,28 @@ func TestVerifyPatchRejectsManifestMergeConflict(t *testing.T) {
 	require.Contains(t, v.Detail, "app/src/amazon/AndroidManifest.xml")
 }
 
+// aibom-android runs 35820530274 and 35825717963: CI builds the app BEFORE
+// autofix in the same job, so Gradle's merged copy of the manifest sits under
+// app/build/intermediates still saying allowBackup="true". That is build
+// output, not a flavour manifest in the merge -- the correct fix to the source
+// manifest must stand, and the fixer must not be told to abandon it.
+func TestVerifyPatchIgnoresBuildOutputManifests(t *testing.T) {
+	buildCopy := `<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application android:allowBackup="true"/>
+</manifest>
+`
+	root := writeRepo(t, map[string]string{
+		"app/src/main/AndroidManifest.xml": "<manifest/>\n",
+		"app/build/intermediates/bundle_manifest/debug/processApplicationManifestDebugForBundle/AndroidManifest.xml": buildCopy,
+		"app/.gradle/cache/AndroidManifest.xml": buildCopy,
+	})
+	patched := `<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application android:allowBackup="false"/>
+</manifest>
+`
+	require.Nil(t, verifyPatch(root, "app/src/main/AndroidManifest.xml", "<manifest/>\n", patched))
+}
+
 func TestVerifyPatchAllowsSoleManifest(t *testing.T) {
 	root := writeRepo(t, map[string]string{"app/src/main/AndroidManifest.xml": "<manifest/>\n"})
 	patched := `<manifest xmlns:android="http://schemas.android.com/apk/res/android">

@@ -52,6 +52,16 @@ func isNestedRepo(dir string) bool {
 	return err == nil
 }
 
+// PruneDir reports whether a walk rooted at root should skip the directory at
+// abs: build output, vendored or VCS directories, and nested checkouts. Shared
+// with the patch gate in helper so that what counts as "the project" is decided
+// in one place -- a gate that walks build/ judges Gradle output as if it were
+// source. The root itself is never pruned: it carries .git in any real
+// checkout, and pruning it would empty the walk.
+func PruneDir(root, abs string) bool {
+	return abs != root && (skipDir(filepath.Base(abs)) || isNestedRepo(abs))
+}
+
 // isSource reports whether a path has a recognised source extension.
 func isSource(rel string) bool {
 	return sourceSuffixes[strings.ToLower(filepath.Ext(rel))]
@@ -68,9 +78,7 @@ func walkSourceFiles(root string, fn func(rel, abs string) error) {
 			return nil // unreadable entry: skip, never abort the whole walk
 		}
 		if d.IsDir() {
-			// The root is exempt from both checks: it carries .git itself in
-			// any real checkout, and pruning it would empty the walk.
-			if abs != root && (skipDir(d.Name()) || isNestedRepo(abs)) {
+			if PruneDir(root, abs) {
 				return filepath.SkipDir
 			}
 			return nil

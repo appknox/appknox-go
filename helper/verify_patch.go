@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/appknox/appknox-go/agent"
 )
 
 // Static checks run against a produced patch BEFORE it is applied.
@@ -409,10 +411,21 @@ func checkSiblingManifests(root, path, original, patched string) *patchViolation
 
 // findManifestConflict returns the first attribute another manifest also sets,
 // and the manifest that sets it.
+//
+// Build output is pruned: CI builds the app before autofix in the same job, so
+// app/build/intermediates holds Gradle's merged copy of the ORIGINAL manifest.
+// Counting it rejected aibom-android's correct allowBackup="false" fix as a
+// merge conflict (runs 35820530274, 35825717963).
 func findManifestConflict(root, path string, attrs map[string]bool) (string, string) {
 	var conflict, other string
 	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() || conflict != "" {
+		if err != nil || info == nil || conflict != "" {
+			return nil
+		}
+		if info.IsDir() {
+			if agent.PruneDir(root, p) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if filepath.Base(p) != "AndroidManifest.xml" || sameFile(p, root, path) {
