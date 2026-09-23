@@ -56,7 +56,7 @@ func TestExtractTarGz_StripsTopDirAndWritesFiles(t *testing.T) {
 
 	body, err := os.ReadFile(filepath.Join(root, "app/Main.java"))
 	require.NoError(t, err)
-	require.Contains(t, string(body), "Random")     // top dir stripped
+	require.Contains(t, string(body), "Random") // top dir stripped
 	require.FileExists(t, filepath.Join(root, "README.md"))
 }
 
@@ -79,7 +79,7 @@ func TestExtractTarGz_TraversalStaysContained(t *testing.T) {
 		{name: top + "ok.go", typ: tar.TypeReg, body: "ok"},
 	})
 	require.NoError(t, extractTarGz(bytes.NewReader(data), root, defaultMaxBytes))
-	require.NoFileExists(t, outside)             // never escaped root
+	require.NoFileExists(t, outside) // never escaped root
 	require.FileExists(t, filepath.Join(root, "ok.go"))
 }
 
@@ -94,10 +94,10 @@ func TestExtractTarGz_SizeCapExceeded(t *testing.T) {
 
 func TestStripTopDir(t *testing.T) {
 	require.Equal(t, "app/Main.java", stripTopDir("acme-repo-abc/app/Main.java"))
-	require.Equal(t, "", stripTopDir("acme-repo-abc/"))               // top dir itself
-	require.Equal(t, "", stripTopDir("acme-repo-abc"))               // bare top, no child
+	require.Equal(t, "", stripTopDir("acme-repo-abc/"))                 // top dir itself
+	require.Equal(t, "", stripTopDir("acme-repo-abc"))                  // bare top, no child
 	require.Equal(t, "Main.java", stripTopDir("acme/sub/../Main.java")) // interior .. collapses
-	require.Equal(t, "", stripTopDir("acme/../../evil.txt"))          // escape neutralised -> dropped
+	require.Equal(t, "", stripTopDir("acme/../../evil.txt"))            // escape neutralised -> dropped
 }
 
 func TestSafeJoin(t *testing.T) {
