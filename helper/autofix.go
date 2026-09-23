@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/appknox/appknox-go/fixservice"
 	"github.com/appknox/appknox-go/ghfetch"
+	"github.com/pmezard/go-difflib/difflib"
 	"github.com/spf13/viper"
 )
 
@@ -36,7 +36,7 @@ type AutofixOptions struct {
 	ClassHint     string // manual class/symbol hint
 	GithubToken   string // GitHub token for the --repo fetch and branch push
 	DryRun        bool   // locate + fix but do not push a branch
-	FixMode       string // "server" (default, /v1/fix) or "agent" (client-side Edit, no upload)
+	FixMode       string // "agent" (the cmd/autofix.go flag default: client-side Edit, no upload) or "server" (/v1/fix, uploads the file)
 	ListAnalyses  bool   // print the file's analyses + class hints, then exit
 
 	// Model overrides the model for BOTH turns. Empty keeps the agent layer's
@@ -99,6 +99,16 @@ type Outcome struct {
 	CommitSHA string      // git commit SHA of the pushed branch
 	Branch    string      // pushed branch name
 	PRCreated bool        // true when GitHub opened a new PR this run
+
+	// Truncated explains why the run stopped before attempting every target,
+	// and is empty when it did not.
+	//
+	// The gateway budget is per SESSION and one run is one session, so a large
+	// scan can exhaust it partway through. Discarding the fixes already
+	// produced would waste every model call the run had already spent and
+	// leave the developer with nothing to review, so the work already done is
+	// kept and delivered, and this field labels the result as partial.
+	Truncated string
 }
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
@@ -128,7 +138,22 @@ func ProcessAutofix(opts AutofixOptions) {
 		}
 	}
 	out, err := runAutofix(context.Background(), opts, defaultDeps())
-	if err != nil {
+	nothingToFix, fail := autofixExit(err)
+	if nothingToFix {
+		// A clean scan, an app whose findings are all third-party, or one
+		// KnoxIQ declined to remediate are all successful runs that happen to
+		// produce no patch. Returning here, without touching the Mycroft job
+		// any further, matches baseline c32941e: that build never called
+		// runAutofix's now-removed equivalent with an error at all on a clean
+		// fetch, so the job it had already moved to Processing (via
+		// processAutofixWait above) was simply left there -- printJobResult
+		// only ever ran when out.BranchURL was non-empty. See
+		// final-fix-report.md (I1) for the baseline read that established
+		// this.
+		fmt.Printf("Nothing to fix: %v\n", err)
+		return
+	}
+	if fail {
 		PrintError(err)
 		os.Exit(1)
 	}
@@ -136,6 +161,22 @@ func ProcessAutofix(opts AutofixOptions) {
 	if opts.FileID > 0 && !opts.DryRun && out.BranchURL != "" {
 		printJobResult(opts.FileID, out)
 	}
+}
+
+// autofixExit classifies the result of runAutofix for ProcessAutofix's exit
+// decision, factored out of ProcessAutofix so the clean-scan/outage split is
+// testable without os.Exit.
+//
+// ErrNothingFixable is a real, successful answer -- a clean scan, or one
+// where KnoxIQ judged nothing worth fixing -- and must not read as a failure
+// (nothingToFix true, fail false). Any other non-nil error is a genuine
+// outage (an unreachable KnoxIQ, a rejected credential, a missing repo) and
+// must exit 1 (fail true). A nil error is neither.
+func autofixExit(err error) (nothingToFix, fail bool) {
+	if errors.Is(err, ErrNothingFixable) {
+		return true, false
+	}
+	return false, err != nil
 }
 
 func processAutofixWait(ctx context.Context, fileID int) (alreadyDone bool, err error) {
@@ -304,7 +345,15 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	// therefore delivery) has returned. Anything added later that needs the
 	// patched content after the loop must take it from out.Patches, not from
 	// the working tree, or it will read what this defer just erased.
-	defer func() { _ = work.restore() }()
+	defer func() {
+		// Printed, not swallowed: a failed restore leaves the developer's own
+		// checkout patched with no on-screen sign of it, and that is worse
+		// than the run failing outright. It must not fail the run itself --
+		// the fix was already delivered (or reported) by the time this runs.
+		if err := work.restore(); err != nil {
+			fmt.Printf("autofix: failed to restore the working tree to its original state: %v\n", err)
+		}
+	}()
 	return fixSession{opts: opts, d: d, root: root, host: host, token: token,
 		targets: targets, profile: profile, work: work}.run(ctx)
 }
@@ -380,13 +429,27 @@ type fixSession struct {
 }
 
 // run locates and fixes each finding, then delivers every patch on one branch.
+//
+// A locate or fix call that fails because the gateway's per-SESSION model-call
+// budget is exhausted (isGatewayBudgetExhausted) is not an ordinary failure:
+// every remaining target would fail the identical way, so the run stops
+// attempting further targets rather than logging N identical failures, but it
+// does NOT discard what was already produced -- see Outcome.Truncated. This is
+// the guard the fetch loop in autofix_targets.go already has for the KnoxIQ
+// GETs; this is the same guard for the two calls that actually go through the
+// gateway (locate and fix).
 func (s fixSession) run(ctx context.Context) (Outcome, error) {
 	out := Outcome{}
 	located := map[string]bool{}
-	for _, t := range s.targets {
+targetLoop:
+	for i, t := range s.targets {
 		in := t.Inputs
 		paths, err := s.locateAll(ctx, in)
 		if err != nil {
+			if isGatewayBudgetExhausted(err) {
+				s.truncate(&out, i, err)
+				break targetLoop
+			}
 			if s.opts.FileID <= 0 {
 				return Outcome{}, err
 			}
@@ -412,6 +475,10 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 		for _, p := range paths {
 			res, err := s.produceFix(ctx, p, in)
 			if err != nil {
+				if isGatewayBudgetExhausted(err) {
+					s.truncate(&out, i, err)
+					break targetLoop
+				}
 				if s.opts.FileID <= 0 {
 					return out, err
 				}
@@ -439,11 +506,39 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 	// One file, one blob. Two analyses that patched the same file each appended
 	// a patch; the last holds both fixes because each was built on the previous
 	// one via the working tree. Shipping both would push the intermediate state.
-	out.Patches = lastPatchPerPath(out.Patches)
+	// lastPatchPerPath is handed s.work.original so it can recompute Finding
+	// and Diff across the ORIGINAL content when it collapses more than one
+	// patch on the same path -- see its own doc comment. s.work is nil in a
+	// handful of narrow unit tests that never reach a patch (e.g.
+	// TestRun_EmptyRemediationNeverReachesTheFixer); guard rather than
+	// dereference, since a nil map read is safe and out.Patches is empty then
+	// anyway.
+	var original map[string]string
+	if s.work != nil {
+		original = s.work.original
+	}
+	out.Patches = lastPatchPerPath(out.Patches, original)
 	if len(out.Patches) == 0 || s.opts.DryRun {
 		return out, nil
 	}
 	return s.deliver(ctx, out)
+}
+
+// truncate records why the run is stopping before every target was attempted,
+// and prints an unmissable warning. i is the index of the target being
+// attempted when cause fired, so i targets were already fully attempted
+// (successfully or not) before it.
+//
+// Exit-code decision: a truncated run that still delivers patches exits 0 --
+// the work done is good, and this Truncated warning (surfaced again in
+// printOutcome) is the signal that something was cut short, not a failure
+// that should paint the CI run red. See final-fix-report.md (I3).
+func (s fixSession) truncate(out *Outcome, i int, cause error) {
+	out.Truncated = fmt.Sprintf(
+		"KnoxIQ gateway budget exhausted after %d/%d target(s); the remaining %d were not attempted (%v). "+
+			"Re-run to continue from here; the patch(es) already produced are still delivered.",
+		i, len(s.targets), len(s.targets)-i, cause)
+	fmt.Printf("\n!! %s\n", out.Truncated)
 }
 
 // locateAll locates the file for each class hint, returning the distinct
@@ -507,11 +602,11 @@ func (s fixSession) produceFix(ctx context.Context, path string, in FindingInput
 		// it returns, so the checkout still holds the pre-patch content. An
 		// unreadable file means no delta can be computed, and a check that
 		// cannot be computed must not reject.
-		original, readErr := os.ReadFile(filepath.Join(s.root, filepath.FromSlash(path)))
+		original, readErr := readUnderRoot(s.root, path)
 		if readErr != nil {
 			return res, nil
 		}
-		v := verifyPatch(s.root, path, string(original), res.PatchedContent)
+		v := verifyPatch(s.root, path, original, res.PatchedContent)
 		if v == nil {
 			return res, nil
 		}
@@ -538,6 +633,11 @@ func (s fixSession) attemptFix(
 			Model: s.opts.Model},
 			agent.FixRequest{RepoRoot: s.root, Path: path,
 				Finding: in.Finding, Remediation: in.Remediation,
+				// KnoxIQ's own developer-facing wording and its verification
+				// criteria, so the fixer aims at them instead of only the
+				// generic Remediation prose -- see agent/instructions.go's
+				// fixUserPrompt, which renders both when present.
+				DeveloperPrompt: in.DeveloperPrompt, Criteria: in.Criteria,
 				ProjectProfile: s.profile, PriorViolation: priorViolation})
 		if err != nil {
 			return fixservice.Result{}, err
@@ -685,6 +785,11 @@ func analysisMarker(n int) string {
 
 // printOutcome renders the run result (one or more files) to stdout.
 func printOutcome(opts AutofixOptions, out Outcome) {
+	// Printed first: a partial run is the single most important thing to know
+	// about the result, and it explains a finding count lower than the scan's.
+	if out.Truncated != "" {
+		fmt.Printf("PARTIAL RUN: %s\n", out.Truncated)
+	}
 	if len(out.Located) == 0 {
 		fmt.Println("No source file located for this finding (advisory only).")
 		return
@@ -836,20 +941,74 @@ func (w *workingTree) restore() error {
 	return nil
 }
 
-// lastPatchPerPath keeps the final patch for each path, preserving first-seen
-// order so the pull request body still reads in the order fixes were made.
-func lastPatchPerPath(patches []filePatch) []filePatch {
+// lastPatchPerPath keeps one patch per path, preserving first-seen order so
+// the pull request body still reads in the order fixes were made.
+//
+// The kept filePatch's Content is always the LAST patch's -- that is correct,
+// since the final content already carries every earlier fix to that path via
+// the working tree. But naively keeping the last patch's own Finding and Diff
+// too would under-report every earlier finding that also touched the path:
+// its Diff would cover only the last turn's edit, and its Finding would name
+// only the last finding. So when MORE THAN ONE patch touches a path, this
+// merges every patch's Finding name (deduplicated, first-seen order) and
+// recomputes the Diff from the path's ORIGINAL content -- before this run
+// touched it at all -- to the FINAL content, never from an intermediate
+// state. A path with only one patch is untouched by this: its Finding and
+// Diff already correctly describe that one patch.
+//
+// original is s.work.original -- the content read the first time each path
+// was touched THIS run, i.e. before any of this run's own fixes.
+func lastPatchPerPath(patches []filePatch, original map[string]string) []filePatch {
 	latest := make(map[string]filePatch, len(patches))
+	findingSeen := map[string]map[string]bool{}
+	findingOrder := map[string][]string{}
 	var order []string
 	for _, p := range patches {
 		if _, seen := latest[p.Path]; !seen {
 			order = append(order, p.Path)
+			findingSeen[p.Path] = map[string]bool{}
 		}
 		latest[p.Path] = p
+		if p.Finding != "" && !findingSeen[p.Path][p.Finding] {
+			findingSeen[p.Path][p.Finding] = true
+			findingOrder[p.Path] = append(findingOrder[p.Path], p.Finding)
+		}
 	}
 	out := make([]filePatch, 0, len(order))
 	for _, path := range order {
-		out = append(out, latest[path])
+		out = append(out, collapsedPatch(latest[path], findingOrder[path], original[path]))
 	}
 	return out
+}
+
+// collapsedPatch merges names (every distinct Finding seen for p.Path) and
+// before (the path's original content, "" and absent are indistinguishable
+// here, but an empty original is never a valid pre-patch state for a file
+// that was actually touched) into p when more than one patch touched the
+// path. A single-patch path is returned unchanged.
+func collapsedPatch(p filePatch, names []string, before string) filePatch {
+	if len(names) <= 1 {
+		return p
+	}
+	p.Finding = strings.Join(names, "; ")
+	if before != "" {
+		if d := unifiedDiff(p.Path, before, p.Content); d != "" {
+			p.Diff = d
+		}
+	}
+	return p
+}
+
+// unifiedDiff renders a standard unified diff between two whole-file
+// contents. Used only by collapsedPatch, where the diff must span the path's
+// ORIGINAL content to its FINAL content rather than an intermediate state.
+func unifiedDiff(path, before, after string) string {
+	text, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
+		A: difflib.SplitLines(before), B: difflib.SplitLines(after),
+		FromFile: path, ToFile: path, Context: 3,
+	})
+	if err != nil {
+		return ""
+	}
+	return text
 }

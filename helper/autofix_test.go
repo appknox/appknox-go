@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -708,4 +709,213 @@ func TestAwaitAutofix_StartError(t *testing.T) {
 func TestPrAction(t *testing.T) {
 	require.Equal(t, "Created PR", prAction(true))
 	require.Equal(t, "Updated PR", prAction(false))
+}
+
+// I1: autofixExit is the factored-out exit decision ProcessAutofix defers to,
+// added because ProcessAutofix's own os.Exit made the clean-scan/outage split
+// impossible to assert directly. These three cases are the whole point of
+// ErrNothingFixable: a clean scan must not fail, but an outage still must.
+func TestAutofixExit_NothingFixableIsNotAFailure(t *testing.T) {
+	err := fmt.Errorf("no analysis on file 24 meets the risk threshold: %w", ErrNothingFixable)
+	nothingToFix, fail := autofixExit(err)
+	require.True(t, nothingToFix, "a clean scan must be reported as nothing-to-fix")
+	require.False(t, fail, "a clean scan must NOT exit 1")
+}
+
+func TestAutofixExit_OutageIsAFailure(t *testing.T) {
+	nothingToFix, fail := autofixExit(errors.New("knoxiq fetch failed for 2/2 analyses on file 24, none fixable: knoxiq unreachable: 503"))
+	require.False(t, nothingToFix, "a KnoxIQ outage must not be mistaken for a clean scan")
+	require.True(t, fail, "a KnoxIQ outage must still exit 1")
+}
+
+func TestAutofixExit_NilErrorIsClean(t *testing.T) {
+	nothingToFix, fail := autofixExit(nil)
+	require.False(t, nothingToFix)
+	require.False(t, fail)
+}
+
+// I3: a locate or fix call hitting the gateway's exhausted per-session budget
+// must stop the run, keep the patches already produced, set Truncated, and
+// (critically) not fail the run -- err is nil so ProcessAutofix exits 0.
+func TestRunAutofix_FixBudgetExhausted_TruncatesButKeepsEarlierPatches(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "app"), 0o755))
+	for _, rel := range []string{"app/A.java", "app/B.java", "app/C.java"} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte("orig\n"), 0o644))
+	}
+	pathFor := map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java", "com/x/C": "app/C.java"}
+	d := deps("", fixservice.Result{}, FindingInputs{})
+	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
+		return pathFor[req.ClassHint], nil
+	}
+	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{1, 2, 3}, nil }
+	d.fetch = func(_ context.Context, _, analysisID int) (FindingInputs, error) {
+		return FindingInputs{
+			Finding:     fmt.Sprintf("finding-%d", analysisID),
+			ClassHints:  []string{fmt.Sprintf("com/x/%c", 'A'+analysisID-1)},
+			Remediation: "fix",
+		}, nil
+	}
+	var attempted []string
+	d.submit = func(_ context.Context, _ fixservice.Config, req fixservice.Request) (fixservice.Result, error) {
+		attempted = append(attempted, req.Finding)
+		if req.Finding == "finding-2" {
+			return fixservice.Result{}, errors.New("429 session call budget exhausted")
+		}
+		return fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, nil
+	}
+	opts := appknoxOpts(t, root)
+	opts.DryRun = true // no deliver stub needed; the assertions are about Outcome
+	out, err := runAutofix(context.Background(), opts, d)
+	require.NoError(t, err, "a truncated run with patches already produced must not fail")
+	require.NotEmpty(t, out.Truncated, "Truncated must be set")
+	require.Len(t, out.Patches, 1, "only the target attempted before the exhaustion produced a patch")
+	require.Equal(t, "app/A.java", out.Patches[0].Path)
+	require.Equal(t, []string{"finding-1", "finding-2"}, attempted,
+		"the exhausted target is attempted once, then no further targets are attempted")
+}
+
+// I3 (locate side): the same guard on the locate call, not just the fix call.
+func TestRunAutofix_LocateBudgetExhausted_Truncates(t *testing.T) {
+	root, rel := repoWithFile(t, "orig\n")
+	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, FindingInputs{})
+	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{1, 2}, nil }
+	d.fetch = func(_ context.Context, _, analysisID int) (FindingInputs, error) {
+		return FindingInputs{Finding: fmt.Sprintf("finding-%d", analysisID),
+			ClassHints: []string{"com/x/C"}, Remediation: "fix"}, nil
+	}
+	var locateCalls int
+	d.locate = func(context.Context, agent.Config, agent.Request) (string, error) {
+		locateCalls++
+		if locateCalls == 1 {
+			return rel, nil
+		}
+		return "", errors.New("403 invalid credential")
+	}
+	opts := appknoxOpts(t, root)
+	opts.DryRun = true
+	out, err := runAutofix(context.Background(), opts, d)
+	require.NoError(t, err)
+	require.NotEmpty(t, out.Truncated)
+	require.Len(t, out.Patches, 1, "the patch located before the exhaustion is kept")
+	require.Equal(t, 2, locateCalls, "the loop stops right after the exhausted locate call")
+}
+
+// I4: two findings that both patch the same file must both be named in the
+// collapsed patch, and its diff must cover both edits -- not just the last.
+func TestRunAutofix_TwoFindingsSameFile_CollapsedPatchNamesBothAndDiffsBoth(t *testing.T) {
+	root, rel := repoWithFile(t, "line1\nline2\n")
+	d := autofixDeps{
+		locate:      func(context.Context, agent.Config, agent.Request) (string, error) { return rel, nil },
+		analysisIDs: func(context.Context, int, int) ([]int, error) { return []int{1, 2}, nil },
+		fetch: func(_ context.Context, _, analysisID int) (FindingInputs, error) {
+			if analysisID == 1 {
+				return FindingInputs{Finding: "Finding A", Remediation: "fix a"}, nil
+			}
+			return FindingInputs{Finding: "Finding B", Remediation: "fix b"}, nil
+		},
+		submit: func(_ context.Context, _ fixservice.Config, req fixservice.Request) (fixservice.Result, error) {
+			if req.Finding == "Finding A" {
+				return fixservice.Result{Changed: true, PatchedContent: "line1-fixedA\nline2\n"}, nil
+			}
+			return fixservice.Result{Changed: true, PatchedContent: "line1-fixedA\nline2-fixedB\n"}, nil
+		},
+	}
+	opts := appknoxOpts(t, root)
+	opts.DryRun = true
+	out, err := runAutofix(context.Background(), opts, d)
+	require.NoError(t, err)
+	require.Len(t, out.Patches, 1, "one file, one collapsed patch")
+	p := out.Patches[0]
+	require.Contains(t, p.Finding, "Finding A")
+	require.Contains(t, p.Finding, "Finding B")
+	require.Contains(t, p.Diff, "fixedA", "the diff must show the FIRST finding's edit too")
+	require.Contains(t, p.Diff, "fixedB", "the diff must show the second finding's edit")
+	require.Equal(t, "line1-fixedA\nline2-fixedB\n", p.Content, "content is unaffected by this fix")
+}
+
+// M3: produceFix must read the pre-patch original through readUnderRoot --
+// the same path-guard every other read in this package uses -- not a bare
+// os.ReadFile(filepath.Join(root, path)), which a maliciously located path
+// could use to escape the checkout root (CWE-22). This plants a real file
+// OUTSIDE root that the old bare os.ReadFile(filepath.Join(...)) would have
+// happily read; readUnderRoot's safeDest must refuse the escape instead, so
+// verification is skipped (cannot be computed) rather than run against
+// someone else's file.
+func TestProduceFix_OriginalReadIsPathGuarded(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "checkout")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(parent, "secret.txt"), []byte("SECRET"), 0o644))
+
+	s := fixSession{
+		opts: AutofixOptions{FixMode: "agent"},
+		root: root,
+		d: autofixDeps{
+			agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+				return agent.FixResult{Changed: true, PatchedContent: "patched\n"}, nil
+			},
+		},
+	}
+	res, err := s.produceFix(context.Background(), "../secret.txt", FindingInputs{Remediation: "r"})
+	require.NoError(t, err)
+	require.Equal(t, "patched\n", res.PatchedContent,
+		"the patch still ships because the original could not be read (safeDest refused the escape); "+
+			"a bare os.ReadFile(filepath.Join(...)) would have read secret.txt instead")
+}
+
+// M2: runAutofix's unconditional defer restores the working tree; a failure
+// there must be printed, never silently swallowed, and must NOT fail an
+// otherwise successful run -- the fix is already delivered by the time the
+// defer runs.
+func TestRunAutofix_RestoreFailure_IsPrintedNotSwallowed(t *testing.T) {
+	root, rel := repoWithFile(t, "orig\n")
+	abs := filepath.Join(root, filepath.FromSlash(rel))
+	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
+	d.deliver = func(_ context.Context, _ AutofixOptions, patches []filePatch) (Delivery, error) {
+		// Make the patched file unwritable so the unconditional restore in
+		// runAutofix's defer -- which fires AFTER this stub returns -- fails.
+		require.NoError(t, os.Chmod(abs, 0o444))
+		t.Cleanup(func() { _ = os.Chmod(abs, 0o644) })
+		return Delivery{URL: "https://github.com/appknox/mfva/pull/1"}, nil
+	}
+	opts := appknoxOpts(t, root)
+	opts.Repo = "appknox/mfva"
+
+	var out Outcome
+	var err error
+	output := captureOutput(func() {
+		out, err = runAutofix(context.Background(), opts, d)
+	})
+	require.NoError(t, err, "a restore failure must not fail an otherwise successful run")
+	require.Contains(t, out.BranchURL, "/pull/")
+	require.Contains(t, output, "restore", "the restore failure must be printed, not swallowed")
+}
+
+// I2: DeveloperPrompt and Criteria must reach the agent fix turn, in the
+// style of captureModels in autofix_model_test.go.
+func TestAttemptFix_ForwardsDeveloperPromptAndCriteria(t *testing.T) {
+	root, rel := repoWithFile(t, "orig\n")
+	var gotReq agent.FixRequest
+	s := fixSession{
+		opts: AutofixOptions{FixMode: "agent", FileID: 1},
+		root: root,
+		work: newWorkingTree(root),
+		d: autofixDeps{
+			agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
+				gotReq = req
+				return agent.FixResult{Changed: true, PatchedContent: "fixed\n"}, nil
+			},
+		},
+	}
+	in := FindingInputs{
+		Finding:         "Weak PRNG",
+		Remediation:     "use SecureRandom",
+		DeveloperPrompt: "Replace Random with SecureRandom in the constructor.",
+		Criteria:        []string{"no java.util.Random import remains"},
+	}
+	_, err := s.produceFix(context.Background(), rel, in)
+	require.NoError(t, err)
+	require.Equal(t, in.DeveloperPrompt, gotReq.DeveloperPrompt)
+	require.Equal(t, in.Criteria, gotReq.Criteria)
 }
