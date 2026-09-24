@@ -30,6 +30,8 @@ Available Commands:
 
 
 Flags:
+      --access-key-id string       Appknox Service Account Access Key ID
+      --access-key-secret string   Appknox Service Account Access Key Secret
   -a, --access-token string   Appknox Access Token
   -h, --help                  help for appknox
       --host string           Appknox Server (default "https://api.appknox.com/")
@@ -59,7 +61,15 @@ curl -L https://github.com/appknox/appknox-go/releases/download/latest/appknox-`
 
 ### Authentication
 
-CLI requires an access_token to interact with Appknox API.
+The CLI supports two independent ways to authenticate:
+
+- A **Personal Access Token (PAT)**, tied to your individual Appknox user account.
+- A **Service Account**, a credential managed independently of any single user, intended for CI/CD pipelines and other automated usage.
+
+Use exactly one of the two. Do not configure both a Personal Access Token and a Service Account at the same time, and do not leave both unset — either results in the CLI exiting with an error before making any request.
+
+#### Personal Access Token
+
 To initialize the token to use any of the available commands
 please run the following command:
 
@@ -130,6 +140,62 @@ Email:      abc@abc.com
 
 Note that this method will not set the access_token permanently which means that
 each time you run a command you have to pass the flag `access-token`.
+
+#### Service Account
+
+A Service Account is created by an organization owner or admin from the Appknox
+dashboard, and must have CLI access enabled on it before it can be used with
+`appknox-go`. Ask an organization owner to create one for you and provide the
+resulting Access Key ID and Access Key Secret.
+
+A Service Account is set up with one of two access levels:
+
+| Access level | What it can do |
+|---|---|
+| **Owner** (full access) | Can act on every project in the organization. |
+| **Member** (restricted access) | Can only act on the specific projects it has been granted access to. Uploading a package for a project it has not been granted access to is rejected. Uploading a package under a brand-new package name may require an organization owner's approval before it proceeds, depending on how the Service Account is configured. |
+
+Configure the CLI with the key pair using environment variables:
+
+#### For Linux & macOS platform
+```
+export APPKNOX_ACCESS_KEY_ID=<access_key_id>
+export APPKNOX_ACCESS_KEY_SECRET=<access_key_secret>
+```
+
+#### For windows platform
+```
+$Env:APPKNOX_ACCESS_KEY_ID="<access_key_id>"
+$Env:APPKNOX_ACCESS_KEY_SECRET="<access_key_secret>"
+```
+
+or command flags:
+
+#### For Linux & macOS platform
+```
+$ appknox whoami --access-key-id <access_key_id> --access-key-secret <access_key_secret>
+```
+
+#### For windows platform
+```
+PATH> .\appknox whoami --access-key-id <access_key_id> --access-key-secret <access_key_secret>
+```
+
+As with the Personal Access Token, passing the flags does not persist the credentials —
+each command invocation must include them, or the environment variables must be set.
+
+For CI/CD in on-premise installations, change the Appknox host value the same way as
+with a Personal Access Token:
+
+#### For Linux & macOS platform
+```
+export APPKNOX_API_HOST=https://customdomain.onpremisecompany.com/
+```
+
+#### For windows platform
+```
+$Env:APPKNOX_API_HOST="https://customdomain.onpremisecompany.com/"
+```
 
 ## Data fetch & actions
 
