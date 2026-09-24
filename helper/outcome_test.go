@@ -89,6 +89,23 @@ func TestFormatOutcomeLine(t *testing.T) {
 		"SKIPPED  -    x"))
 }
 
+// TestFormatOutcomeLine_TitleDistinguishesSiblings is F2: sibling findings of
+// the same analysis shared identical vulnerability id and analysis name, so
+// two lines for the same analysis were indistinguishable. The KnoxIQ finding
+// title, when present, is appended after a " / ".
+func TestFormatOutcomeLine_TitleDistinguishesSiblings(t *testing.T) {
+	line := formatOutcomeLine(findingOutcome{VulnerabilityID: 17, Finding: "Application Logs",
+		Title: "Logs in com.x.A", Status: statusFixed, Detail: "a/A.java"})
+	require.Contains(t, line, "Application Logs / Logs in com.x.A")
+
+	// Empty title: print exactly what is printed today.
+	require.Equal(t,
+		formatOutcomeLine(findingOutcome{VulnerabilityID: 17, Finding: "Application Logs",
+			Status: statusFixed, Detail: "a/A.java"}),
+		formatOutcomeLine(findingOutcome{VulnerabilityID: 17, Finding: "Application Logs",
+			Title: "", Status: statusFixed, Detail: "a/A.java"}))
+}
+
 func TestCallTally(t *testing.T) {
 	var c callTally
 	require.False(t, c.allFailed(), "no calls is not all-failed")

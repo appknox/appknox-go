@@ -33,13 +33,20 @@ type targetContext struct {
 // exhaustion (the caller truncates), a working-tree write failure, or any
 // call error on the manual --finding path, which has always failed fast.
 // Every other miss is recorded in the outcome, and the run moves on.
-func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit) (unitResult, error) {
-	reply, err := s.locateUnit(ctx, in, u)
-	if err != nil {
-		return s.locateFailed(in, err)
+//
+// The outcome's Title is always stamped with u.Title on the way out (spec
+// 3.4 / F2), whichever branch below produced it, so sibling findings of the
+// same analysis -- which otherwise share an identical vulnerability id and
+// analysis name -- can be told apart on their outcome line.
+func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit) (res unitResult, err error) {
+	defer func() { res.outcome.Title = u.Title }()
+
+	reply, locateErr := s.locateUnit(ctx, in, u)
+	if locateErr != nil {
+		return s.locateFailed(in, locateErr)
 	}
 	accepted, rejected := validateTargets(s.root, reply.Targets)
-	res := unitResult{located: targetPaths(accepted)}
+	res = unitResult{located: targetPaths(accepted)}
 	results := rejectionResults(rejected)
 	notes := notFoundNotes(reply.NotFound)
 	if s.opts.LocateOnly {
@@ -53,14 +60,14 @@ func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit
 		return res, nil
 	}
 	for _, t := range accepted {
-		tr, patch, err := s.fixOne(ctx, in, u, t, accepted)
+		tr, patch, fixErr := s.fixOne(ctx, in, u, t, accepted)
 		results = append(results, tr)
 		if patch != nil {
 			res.patches = append(res.patches, *patch)
 		}
-		if err != nil {
+		if fixErr != nil {
 			res.outcome = summarizeFinding(in.VulnerabilityID, in.Finding, results, notes)
-			return res, err
+			return res, fixErr
 		}
 	}
 	res.outcome = summarizeFinding(in.VulnerabilityID, in.Finding, results, notes)

@@ -38,8 +38,14 @@ type targetResult struct {
 type findingOutcome struct {
 	VulnerabilityID int
 	Finding         string
-	Status          string
-	Detail          string
+	// Title is the KnoxIQ finding's own title (FindingUnit.Title), printed
+	// after Finding so sibling findings of the same analysis -- which share
+	// the same VulnerabilityID and Finding name -- can be told apart. Empty
+	// on lines that are not about one specific KnoxIQ finding (an analysis-
+	// level skip, or the manual --finding path).
+	Title  string
+	Status string
+	Detail string
 }
 
 // summarizeFinding turns a finding's target results into its line. A
@@ -114,12 +120,19 @@ func notFoundNotes(names []string) []string {
 }
 
 // formatOutcomeLine renders one line: status, vulnerability id, name, detail.
+// The name is "<Finding> / <Title>" when a title is present, keeping the rest
+// of the line format unchanged; with no title it is exactly what always
+// printed.
 func formatOutcomeLine(o findingOutcome) string {
 	id := "-"
 	if o.VulnerabilityID > 0 {
 		id = strconv.Itoa(o.VulnerabilityID)
 	}
-	return fmt.Sprintf("%-8s %-4s %-34s %s", o.Status, id, o.Finding, o.Detail)
+	name := o.Finding
+	if o.Title != "" {
+		name = name + " / " + o.Title
+	}
+	return fmt.Sprintf("%-8s %-4s %-34s %s", o.Status, id, name, o.Detail)
 }
 
 // printOutcomeLines prints the run's outcome block.
