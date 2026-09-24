@@ -1,16 +1,14 @@
-// Package agent runs a native, read-only file-location agent inside the CLI.
+// Package agent runs native, read-only LLM agents inside the CLI.
 //
 // The model plans and calls local read-only tools (read_file, grep, glob) over
-// the checked-out repository and returns the single source file to fix. Only the
-// model turns leave the machine, and they are routed through Mycroft
+// the checked-out repository. Each agent (locate, fix) operates independently,
+// planing the next file and edits based on vulnerability context.
+// Only the model turns leave the machine, routed through Mycroft
 // ({APPKNOX_API_HOST}/api/knoxiq/autofix/ + a PAT, never a provider key).
 // Mycroft forwards to Sherrinford, which injects the server-held provider key.
 package agent
 
 import (
-	"context"
-	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -52,6 +50,7 @@ func newAutofixSDK(cfg Config) sdk.Client {
 
 const (
 	// defaultMaxTokens sizes a LOCATE turn, which answers with a single path.
+	// Kept for agent/fix_test.go invariant check.
 	defaultMaxTokens = 1024
 	// defaultFixMaxTokens sizes a FIX turn, which is a different job entirely.
 	//
@@ -74,78 +73,18 @@ const (
 	defaultMaxIterations = 15
 )
 
-const locateSystemPrompt = "You are a security code-locating assistant. A SAST scan flagged a " +
-	"vulnerability in a repository checked out on disk. Use the read_file, grep and glob tools " +
-	"(read-only) to find the SINGLE source file that contains the flagged class/symbol and the " +
-	"vulnerable code. Never edit anything. When found, reply with ONLY the repository-relative " +
-	"path of that file and nothing else. If you cannot confidently identify it, reply with exactly NONE."
-
 // Config uses the same Mycroft API host as every other CLI command.
 type Config struct {
 	Host          string // APPKNOX_API_HOST; messages go to {Host}/api/knoxiq/autofix/
 	Token         string // Appknox PAT presented to Mycroft (not a provider key)
 	Model         string // optional; defaults to Claude Sonnet
-	MaxTokens     int64  // optional; defaults to defaultMaxTokens
+	MaxTokens     int64  // optional; each turn has its own default (locate: defaultTargetsMaxTokens, fix: defaultFixMaxTokens)
 	MaxIterations int    // optional; defaults to defaultMaxIterations
 }
 
-// Request describes what to locate in the checkout.
-type Request struct {
-	RepoRoot  string // absolute or relative path to the checked-out repo
-	ClassHint string // class/symbol hint parsed from the finding
-	Finding   string // raw finding detail
-}
-
-// locateRunner runs the LLM tool-use loop and returns the model's final text.
-// It is a seam so the pure locate/validate logic can be tested without network.
-type locateRunner func(ctx context.Context, cfg Config, req Request) (string, error)
-
-// LocateFile returns the repository-relative path of the file to fix, or "" when
-// the agent abstains (the caller then falls back to a deterministic locate).
-func LocateFile(ctx context.Context, cfg Config, req Request) (string, error) {
-	return locateWith(ctx, cfg, req, sdkLocate)
-}
-
-// locateWith runs the given runner, then validates its answer against the disk.
-func locateWith(ctx context.Context, cfg Config, req Request, run locateRunner) (string, error) {
-	text, err := run(ctx, cfg, req)
-	if err != nil {
-		return "", err
-	}
-	return extractLocatedPath(text, req.RepoRoot), nil
-}
-
-// sdkLocate drives the model tool-runner through Mycroft autofix.
-func sdkLocate(ctx context.Context, cfg Config, req Request) (string, error) {
-	if cfg.Host == "" || cfg.Token == "" {
-		return "", errors.New("agent: Host and Token are required to reach Mycroft")
-	}
-	tools, err := buildLocateTools(req.RepoRoot)
-	if err != nil {
-		return "", err
-	}
-	client := newAutofixSDK(cfg)
-	runner := client.Beta.Messages.NewToolRunner(tools, locateParams(cfg, req))
-	final, err := runner.RunToCompletion(ctx)
-	if err != nil {
-		return "", err
-	}
-	return extractText(final), nil
-}
-
-// locateParams builds the Tool Runner params for the locate pass.
-func locateParams(cfg Config, req Request) sdk.BetaToolRunnerParams {
-	return runnerParams(cfg, locateSystemPrompt, locateUserPrompt(req))
-}
-
-// runnerParams builds Tool Runner params with cfg's model/token/iteration
-// defaults and the given system + user prompts, sized for a LOCATE turn.
-func runnerParams(cfg Config, system, user string) sdk.BetaToolRunnerParams {
-	return runnerParamsWithBudget(cfg, system, user, defaultMaxTokens)
-}
-
-// runnerParamsWithBudget is runnerParams with an explicit output-token budget,
-// so a locate turn and a fix turn are not forced to share one number. An
+// runnerParamsWithBudget builds Tool Runner params with cfg's model/token/iteration
+// defaults and the given system + user prompts, with an explicit output-token budget.
+// This allows different turns (locate vs fix) to have different budgets. An
 // explicit cfg.MaxTokens still wins.
 func runnerParamsWithBudget(cfg Config, system, user string, fallbackMaxTokens int64) sdk.BetaToolRunnerParams {
 	model := cfg.Model
@@ -169,14 +108,4 @@ func runnerParamsWithBudget(cfg Config, system, user string, fallbackMaxTokens i
 		},
 		MaxIterations: maxIter,
 	}
-}
-
-// locateUserPrompt renders the per-finding instruction.
-func locateUserPrompt(req Request) string {
-	return fmt.Sprintf(
-		"Vulnerable class/symbol (from the scan): %s\nScan finding detail: %s\n\n"+
-			"Find the one source file to fix and reply with only its repository-relative path "+
-			"(e.g. app/src/main/java/com/appknox/mfva/MainActivity.java), or exactly NONE.",
-		req.ClassHint, req.Finding,
-	)
 }
