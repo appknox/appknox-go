@@ -97,7 +97,7 @@ func TestFixParams_GetsTheLargerBudget(t *testing.T) {
 // The two budgets must stay distinct: if they are ever equal again the collapse
 // has come back, and this assertion is the only thing that says so.
 func TestFixBudget_IsLargerThanLocateBudget(t *testing.T) {
-	require.Greater(t, int64(defaultFixMaxTokens), int64(defaultMaxTokens))
+	require.Greater(t, int64(defaultFixMaxTokens), int64(defaultTargetsMaxTokens))
 }
 
 // The per-turn numbers are fallbacks, not overrides: an explicit

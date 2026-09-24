@@ -49,9 +49,6 @@ func newAutofixSDK(cfg Config) sdk.Client {
 }
 
 const (
-	// defaultMaxTokens sizes a LOCATE turn, which answers with a single path.
-	// Kept for agent/fix_test.go invariant check.
-	defaultMaxTokens = 1024
 	// defaultFixMaxTokens sizes a FIX turn, which is a different job entirely.
 	//
 	// A fix turn emits the edit tool call, and old_string plus new_string carry
