@@ -71,6 +71,38 @@ func TestValidateTargets_AcceptsAndOrdersManifestResSource(t *testing.T) {
 	}, accepted)
 }
 
+// TestValidateTargets_PruneCheckIsCaseInsensitive is F3: agent.PruneDir's own
+// component check is exact-case, so a differently-cased build directory
+// (seen from a compiled app that does not preserve the checkout's casing)
+// slipped the prune check.
+func TestValidateTargets_PruneCheckIsCaseInsensitive(t *testing.T) {
+	root := targetRepo(t)
+	writeSource(t, root, "app/Build/intermediates/AndroidManifest.xml", "x\n")
+	accepted, rejected := validateTargets(root, []agent.Target{
+		{Path: "app/Build/intermediates/AndroidManifest.xml", Why: "w"},
+	})
+	require.Empty(t, accepted)
+	require.Equal(t, []rejection{{Path: "app/Build/intermediates/AndroidManifest.xml", Reason: reasonGenerated}}, rejected)
+}
+
+// TestValidateTargets_PruneCheckFollowsSymlinkedDirectory is F3's other half:
+// the check ran on the path the agent sent, not on the path safeDest actually
+// resolves, so a symlinked directory that lands inside build/ was never
+// caught.
+func TestValidateTargets_PruneCheckFollowsSymlinkedDirectory(t *testing.T) {
+	root := targetRepo(t)
+	writeSource(t, root, "build/generated/AndroidManifest.xml", "x\n")
+	require.NoError(t, os.Symlink(
+		filepath.Join(root, "build/generated"),
+		filepath.Join(root, "app/link")))
+
+	accepted, rejected := validateTargets(root, []agent.Target{
+		{Path: "app/link/AndroidManifest.xml", Why: "w"},
+	})
+	require.Empty(t, accepted)
+	require.Equal(t, []rejection{{Path: "app/link/AndroidManifest.xml", Reason: reasonGenerated}}, rejected)
+}
+
 func TestValidateTargets_MergesDuplicateWhy(t *testing.T) {
 	root := targetRepo(t)
 	accepted, rejected := validateTargets(root, []agent.Target{

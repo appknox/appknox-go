@@ -57,7 +57,8 @@ func checkTarget(root, raw string) (string, string) {
 	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
 		return "", reasonInvalidPath
 	}
-	if _, err := safeDest(root, rel); err != nil {
+	dest, err := safeDest(root, rel)
+	if err != nil {
 		return "", reasonInvalidPath
 	}
 	// Lstat, not Stat: a symlinked leaf is refused rather than followed.
@@ -65,7 +66,7 @@ func checkTarget(root, raw string) (string, string) {
 	if err != nil || !info.Mode().IsRegular() {
 		return "", reasonInvalidPath
 	}
-	if prunedComponent(root, rel) {
+	if prunedComponent(root, dest) {
 		return "", reasonGenerated
 	}
 	if buildFileRE.MatchString(rel) {
@@ -77,12 +78,32 @@ func checkTarget(root, raw string) (string, string) {
 	return rel, ""
 }
 
-// prunedComponent reports whether any directory on rel's path is one the
-// locate tools never walk: build output, vendored code, hidden directories,
-// nested repositories.
-func prunedComponent(root, rel string) bool {
+// prunedComponent reports whether any directory on the path safeDest actually
+// resolved (dest) is one the locate tools never walk: build output, vendored
+// code, hidden directories, nested repositories. Using the RESOLVED path,
+// rather than the one the agent sent, catches a symlinked directory that
+// lands inside a pruned directory even when its own name gives no hint.
+// Component names are also compared case-insensitively: agent.PruneDir's own
+// check is exact-case, and a compiled app's finding text does not promise to
+// preserve the checkout's casing.
+func prunedComponent(root, dest string) bool {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	resolvedRoot := resolveDeepest(absRoot)
+	rel, err := filepath.Rel(resolvedRoot, dest)
+	if err != nil {
+		return false
+	}
+	rel = filepath.ToSlash(rel)
 	for dir := path.Dir(rel); dir != "."; dir = path.Dir(dir) {
-		if agent.PruneDir(root, filepath.Join(root, filepath.FromSlash(dir))) {
+		abs := filepath.Join(resolvedRoot, filepath.FromSlash(dir))
+		if agent.PruneDir(resolvedRoot, abs) {
+			return true
+		}
+		lowerAbs := filepath.Join(filepath.Dir(abs), strings.ToLower(filepath.Base(abs)))
+		if agent.PruneDir(resolvedRoot, lowerAbs) {
 			return true
 		}
 	}
