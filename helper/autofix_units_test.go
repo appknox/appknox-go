@@ -404,3 +404,59 @@ func TestRunUnit_NeedsNewFileSkipsInLocateOnlyToo(t *testing.T) {
 	require.Equal(t, statusSkipped, out.Findings[0].Status)
 	require.True(t, strings.HasPrefix(out.Findings[0].Detail, reasonNeedsNewFile))
 }
+
+// TestRunUnit_NeedsNewFileFalseClaimDoesNotSkipTheFinding is the live defect:
+// on mfva, the locate model (Haiku) listed app/proguard-rules.pro and
+// app/build.gradle under needs_new_file for an "Application Logs" finding,
+// even though both already exist in the repo. The claim must be validated
+// against the checkout, not trusted, so the in-scope Java target is still
+// fixed and only the false claim is noted on the outcome line.
+func TestRunUnit_NeedsNewFileFalseClaimDoesNotSkipTheFinding(t *testing.T) {
+	root, rel := repoWithFile(t, javaBody)
+	writeSource(t, root, "app/build.gradle", "plugins { }\n")
+	fixed := false
+	d := autofixDeps{
+		locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+			return agent.TargetReply{
+				Targets:      []agent.Target{{Path: rel, Why: "remove the log"}},
+				NeedsNewFile: []string{"app/build.gradle: enable minify"},
+			}, nil
+		},
+		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+			fixed = true
+			return agent.FixResult{Changed: true, PatchedContent: "class A { }\n"}, nil
+		},
+	}
+	s := dryAgentSession(root, d,
+		analysisTarget{AnalysisID: 1, Inputs: oneClass("Application Logs", "remove the log")})
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.True(t, fixed, "the in-scope Java target must still get its fix call")
+	require.Len(t, out.Findings, 1)
+	require.Equal(t, statusFixed, out.Findings[0].Status)
+	require.Contains(t, out.Findings[0].Detail, "not new: app/build.gradle")
+}
+
+// TestRunUnit_NeedsNewFileFalseClaimIsTargetsInLocateOnly is the same defect
+// in --locate-only mode: the line must be TARGETS, not SKIPPED, since the
+// false needs_new_file claim never should have blocked the finding.
+func TestRunUnit_NeedsNewFileFalseClaimIsTargetsInLocateOnly(t *testing.T) {
+	root, rel := repoWithFile(t, javaBody)
+	writeSource(t, root, "app/build.gradle", "plugins { }\n")
+	d := autofixDeps{
+		locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+			return agent.TargetReply{
+				Targets:      []agent.Target{{Path: rel, Why: "remove the log"}},
+				NeedsNewFile: []string{"app/build.gradle: enable minify"},
+			}, nil
+		},
+	}
+	s := fixSession{opts: AutofixOptions{FixMode: "agent", FileID: 1, LocateOnly: true},
+		d: d, root: root, work: newWorkingTree(root),
+		targets: []analysisTarget{{AnalysisID: 1, Inputs: oneClass("Application Logs", "remove the log")}}}
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out.Findings, 1)
+	require.Equal(t, statusTargets, out.Findings[0].Status)
+	require.Contains(t, out.Findings[0].Detail, "not new: app/build.gradle")
+}

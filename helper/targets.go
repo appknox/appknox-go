@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -149,4 +150,81 @@ func orderTargets(targets []agent.Target) []agent.Target {
 		return targetRank(out[i].Path) < targetRank(out[j].Path)
 	})
 	return out
+}
+
+// genuinelyNew checks a locate turn's needs_new_file entries against the
+// checkout instead of trusting them: the agent decides what a remediation
+// needs, but code verifies the claim before a whole finding is skipped on it
+// (mfva's live miss: Haiku listed app/proguard-rules.pro and app/build.gradle
+// under needs_new_file for an "Application Logs" finding, even though both
+// already existed). An entry is NOT new when its name already exists in the
+// repo either way: as a literal repo-relative path, or by its base name
+// anywhere else in the tree. Everything else is reported genuinely new. The
+// repo is walked at most once per call, and only when entries is non-empty.
+func genuinelyNew(root string, entries []string) (newOnes []string, notNew []string) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	names := make([]string, len(entries))
+	wantBase := map[string]bool{}
+	for i, e := range entries {
+		names[i] = needsNewFileName(e)
+		wantBase[filepath.Base(names[i])] = true
+	}
+	foundBase := findBaseNames(root, wantBase)
+	for i, e := range entries {
+		if existsAsPath(root, names[i]) || foundBase[filepath.Base(names[i])] {
+			notNew = append(notNew, e)
+			continue
+		}
+		newOnes = append(newOnes, e)
+	}
+	return newOnes, notNew
+}
+
+// needsNewFileName extracts the file or class name from a needs_new_file
+// entry ("<name>: <why>", the shape the locate prompt asks for). An entry
+// with no ": " is used whole, trimmed.
+func needsNewFileName(entry string) string {
+	if i := strings.Index(entry, ": "); i >= 0 {
+		return strings.TrimSpace(entry[:i])
+	}
+	return strings.TrimSpace(entry)
+}
+
+// existsAsPath reports whether name, taken as a literal repo-relative path,
+// is a regular file on disk. Symlinks are not followed (os.Lstat).
+func existsAsPath(root, name string) bool {
+	if name == "" || filepath.IsAbs(name) {
+		return false
+	}
+	dest, err := safeDest(root, name)
+	if err != nil {
+		return false
+	}
+	info, err := os.Lstat(dest)
+	return err == nil && info.Mode().IsRegular()
+}
+
+// findBaseNames walks root once, pruning the same directories validation
+// prunes (agent.PruneDir), and returns which of wanted's base names exist as
+// a regular file anywhere in the tree.
+func findBaseNames(root string, wanted map[string]bool) map[string]bool {
+	found := map[string]bool{}
+	_ = filepath.WalkDir(root, func(abs string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // unreadable entry: skip, never abort the whole walk
+		}
+		if d.IsDir() {
+			if agent.PruneDir(root, abs) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type().IsRegular() && wanted[d.Name()] {
+			found[d.Name()] = true
+		}
+		return nil
+	})
+	return found
 }

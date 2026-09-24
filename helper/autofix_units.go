@@ -46,25 +46,37 @@ func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit
 	if locateErr != nil {
 		return s.locateFailed(in, locateErr)
 	}
+	var extraNotes []string
 	if len(reply.NeedsNewFile) > 0 {
-		// The remediation needs a file that does not exist yet (new-file
-		// support is out of scope); fixing the rest of the targets would
-		// still leave the finding referring to a class or resource that is
-		// not there, breaking the PR build. Skip the whole finding: no
-		// validation, no fix calls, no patches. Applies in --locate-only
-		// too, so the line is SKIPPED there, never TARGETS.
-		res = unitResult{outcome: findingOutcome{
-			VulnerabilityID: in.VulnerabilityID,
-			Finding:         in.Finding,
-			Status:          statusSkipped,
-			Detail:          reasonNeedsNewFile + ": " + strings.Join(reply.NeedsNewFile, "; "),
-		}}
-		return res, nil
+		// The locate model's claim is never trusted as-is: code validates it
+		// against the checkout before a whole finding is skipped on it (a
+		// live miss on mfva had Haiku list app/proguard-rules.pro and
+		// app/build.gradle under needs_new_file for an "Application Logs"
+		// finding, even though both already existed).
+		newOnes, notNew := genuinelyNew(s.root, reply.NeedsNewFile)
+		if len(newOnes) > 0 {
+			// At least one claim holds: fixing the rest of the targets would
+			// still leave the finding referring to a class or resource that
+			// is not there, breaking the PR build. Skip the whole finding:
+			// no validation, no fix calls, no patches. Applies in
+			// --locate-only too, so the line is SKIPPED there, never
+			// TARGETS.
+			res = unitResult{outcome: findingOutcome{
+				VulnerabilityID: in.VulnerabilityID,
+				Finding:         in.Finding,
+				Status:          statusSkipped,
+				Detail:          reasonNeedsNewFile + ": " + strings.Join(newOnes, "; "),
+			}}
+			return res, nil
+		}
+		// Every claim was false: carry on with normal validation, locate-only
+		// output and fixing, but keep the false claim visible on the line.
+		extraNotes = notNewNotes(notNew)
 	}
 	accepted, rejected := validateTargets(s.root, reply.Targets)
 	res = unitResult{located: targetPaths(accepted)}
 	results := rejectionResults(rejected)
-	notes := notFoundNotes(reply.NotFound)
+	notes := append(notFoundNotes(reply.NotFound), extraNotes...)
 	if s.opts.LocateOnly {
 		res.outcome = locatedOutcome(in, accepted, results, notes)
 		return res, nil

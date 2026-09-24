@@ -45,6 +45,17 @@ func TestTargetsSystemPrompt_DemandsJSONAndNamesCompiledForms(t *testing.T) {
 	}
 }
 
+// TestTargetsSystemPrompt_NeverListsAnExistingFileAsNew is stage A/fix2: the
+// live defect was the locate model claiming build.gradle and
+// proguard-rules.pro needed creating when both already existed. Code now
+// validates the claim (helper.genuinelyNew), but the prompt itself must also
+// tell the model not to make the claim in the first place.
+func TestTargetsSystemPrompt_NeverListsAnExistingFileAsNew(t *testing.T) {
+	for _, want := range []string{"never new", "proguard-rules.pro"} {
+		require.Contains(t, targetsSystemPrompt, want)
+	}
+}
+
 func TestParseTargetReply_Valid(t *testing.T) {
 	r, err := parseTargetReply(`{"targets":[{"path":"app/src/main/AndroidManifest.xml","why":"exported=false"}],"not_found":[]}`)
 	require.NoError(t, err)

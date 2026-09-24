@@ -65,7 +65,7 @@ KnoxIQ worked from the compiled app, not from this source, so it names things in
 
 Framework and library classes are NOT targets: android.*, androidx.*, java.*, javax.*, kotlin.*, okhttp3.*, and widgets such as LinearLayout are not the app's code. If KnoxIQ names something you cannot find in this repository, list it under not_found instead of guessing. Never list build files (build.gradle, settings.gradle, gradle.properties, proguard-rules.pro) or anything under a build/ directory.
 
-Some remediations require CREATING a file that does not exist in this repository yet, for example a new class (SecureBaseActivity, a custom InputMethodService), a new resource (res/xml/network_security_config.xml) or a new config file. Search for it first. If the remediation needs such a file and it is not in the repository, list it under needs_new_file as "<file or class>: <what the remediation creates it for>". Do not put it under not_found. List the existing files as targets as usual.
+Some remediations require CREATING a file that does not exist in this repository yet, for example a new class (SecureBaseActivity, a custom InputMethodService), a new resource (res/xml/network_security_config.xml) or a new config file. Search for it first. If the remediation needs such a file and it is not in the repository, list it under needs_new_file as "<file or class>: <what the remediation creates it for>". Do not put it under not_found. List the existing files as targets as usual. A file that already exists in the repository is never new: do not list it under needs_new_file. Build files (build.gradle, proguard-rules.pro) are never targets or new files.
 
 Confirm every file with grep or glob before listing it.
 

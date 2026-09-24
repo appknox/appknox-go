@@ -115,3 +115,40 @@ func TestValidateTargets_MergesDuplicateWhy(t *testing.T) {
 		Why:  "exported=false on A; exported=false on B",
 	}}, accepted)
 }
+
+// TestGenuinelyNew_ValidatesEachClaim is stage A/fix2: a locate model's
+// needs_new_file claim is never trusted as-is (mfva's live miss: Haiku listed
+// app/proguard-rules.pro and app/build.gradle -- both already in the repo --
+// under needs_new_file for an "Application Logs" finding). Each entry is
+// checked two ways: as a literal repo-relative path, and by its base name
+// anywhere else in the tree (skipping the directories validation prunes), so
+// only a genuinely absent file survives.
+func TestGenuinelyNew_ValidatesEachClaim(t *testing.T) {
+	root := targetRepo(t)
+	writeSource(t, root, "somewhere/else/Existing.java", "x\n")
+	writeSource(t, root, "app/build/generated/Ghost.java", "x\n")
+
+	newOnes, notNew := genuinelyNew(root, []string{
+		"app/build.gradle.kts: enable minify",    // (a) exists at the literal path
+		"Existing.java: referenced elsewhere",    // (b) exists by base name elsewhere in the tree
+		"SecureBaseActivity.java: base class",    // (c) genuinely absent
+		"Ghost.java: found only in build output", // (d) exists only under a pruned build/ dir
+	})
+	require.Equal(t, []string{
+		"SecureBaseActivity.java: base class",
+		"Ghost.java: found only in build output",
+	}, newOnes, "(c) and (d) are genuinely new")
+	require.Equal(t, []string{
+		"app/build.gradle.kts: enable minify",
+		"Existing.java: referenced elsewhere",
+	}, notNew, "(a) and (b) already exist")
+}
+
+// TestGenuinelyNew_NoEntriesSkipsTheWalk is the "at most once, only when
+// entries is non-empty" requirement: an empty claim must not touch the
+// filesystem.
+func TestGenuinelyNew_NoEntriesSkipsTheWalk(t *testing.T) {
+	newOnes, notNew := genuinelyNew("/does/not/exist", nil)
+	require.Empty(t, newOnes)
+	require.Empty(t, notNew)
+}

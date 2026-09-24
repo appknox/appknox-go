@@ -166,6 +166,18 @@ func notFoundNotes(names []string) []string {
 	return out
 }
 
+// notNewNotes renders needs_new_file entries the repo disproved -- the agent
+// claimed a file was new but genuinelyNew found it already exists -- the same
+// way notFoundNotes renders not_found entries, so the false claim stays
+// visible on the outcome line even though it did not skip the finding.
+func notNewNotes(entries []string) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, "not new: "+needsNewFileName(e)+" already exists in repo")
+	}
+	return out
+}
+
 // formatOutcomeLine renders one line: status, vulnerability id, name, detail.
 // The name is "<Finding> / <Title>" when a title is present, keeping the rest
 // of the line format unchanged; with no title it is exactly what always
