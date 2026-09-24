@@ -262,6 +262,72 @@ func TestResolveTargets_RequiresFileIDOrFinding(t *testing.T) {
 	}
 }
 
+// TestEveryLocatableAnalysis_ReportsCountBelowRiskThreshold covers the
+// autofix side of the shared severity policy: with RiskThreshold 4
+// (critical) and three analyses at risk 1, 2 and 4, only the risk-4 analysis
+// must reach locate (i.e. be fetched and attempted), and the run must print
+// how many were dropped and under which threshold name.
+func TestEveryLocatableAnalysis_ReportsCountBelowRiskThreshold(t *testing.T) {
+	risks := map[int]int{1: 1, 2: 2, 3: 4}
+	var fetched []int
+	d := autofixDeps{
+		analysisIDs: func(_ context.Context, _ int, threshold int) ([]int, error) {
+			var ids []int
+			for _, id := range []int{1, 2, 3} {
+				if risks[id] >= threshold {
+					ids = append(ids, id)
+				}
+			}
+			return ids, nil
+		},
+		fetch: func(_ context.Context, _, id int) (FindingInputs, error) {
+			fetched = append(fetched, id)
+			return FindingInputs{Finding: fmt.Sprintf("v%d", id), Remediation: "fix"}, nil
+		},
+	}
+
+	var got []analysisTarget
+	printed := captureOutput(func() {
+		var err error
+		got, err = resolveTargets(context.Background(), AutofixOptions{FileID: 24, RiskThreshold: 4}, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	if len(fetched) != 1 || fetched[0] != 3 {
+		t.Fatalf("want only the risk-4 analysis (id 3) fetched, got %v", fetched)
+	}
+	if len(got) != 1 || got[0].AnalysisID != 3 {
+		t.Fatalf("want only analysis 3 as a target, got %v", got)
+	}
+	if !strings.Contains(printed, "2 analysis(es) below risk threshold critical: not attempted") {
+		t.Fatalf("want the below-threshold summary line, got:\n%s", printed)
+	}
+}
+
+// TestEveryLocatableAnalysis_NoSummaryLineWhenNothingIsBelowThreshold
+// guards the "print it only when k > 0" rule.
+func TestEveryLocatableAnalysis_NoSummaryLineWhenNothingIsBelowThreshold(t *testing.T) {
+	d := autofixDeps{
+		analysisIDs: func(context.Context, int, int) ([]int, error) { return []int{1, 2}, nil },
+		fetch: func(_ context.Context, _, id int) (FindingInputs, error) {
+			return FindingInputs{Finding: fmt.Sprintf("v%d", id), Remediation: "fix"}, nil
+		},
+	}
+
+	printed := captureOutput(func() {
+		_, err := resolveTargets(context.Background(), AutofixOptions{FileID: 24, RiskThreshold: 1}, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	if strings.Contains(printed, "below risk threshold") {
+		t.Fatalf("must not print a below-threshold line when nothing was dropped, got:\n%s", printed)
+	}
+}
+
 func TestIsGatewayBudgetExhausted(t *testing.T) {
 	for _, tc := range []struct {
 		err  error

@@ -100,12 +100,32 @@ func everyLocatableAnalysis(
 	if err != nil {
 		return nil, err
 	}
+	// A second call to the SAME analysisIDs seam, this time with threshold 0
+	// ("everything"), to learn how many were dropped by the real threshold.
+	// In the real wiring (withKnoxIQFetchers) both calls share
+	// memoizedAnalysesFor's per-fileID cache, so this is not a second
+	// Appknox API call -- just a second pass over the analyses list already
+	// fetched above. opts.RiskThreshold is already >0 here (runAutofix
+	// normalizes an unset value to 1 before resolveTargets is called), so
+	// this second call is never redundant with the first.
+	below := 0
+	if opts.RiskThreshold > 0 {
+		allIDs, err := d.analysisIDs(ctx, opts.FileID, 0)
+		if err != nil {
+			return nil, err
+		}
+		below = len(allIDs) - len(ids)
+	}
 	if len(ids) == 0 {
 		return nil, fmt.Errorf(
 			"no analysis on file %d meets the risk threshold: %w",
 			opts.FileID, ErrNothingFixable)
 	}
 	fmt.Printf("Considering %d analyses on file %d\n", len(ids), opts.FileID)
+	if below > 0 {
+		fmt.Printf("%d analysis(es) below risk threshold %s: not attempted\n",
+			below, riskThresholdName(opts.RiskThreshold))
+	}
 
 	targets := make([]analysisTarget, 0, len(ids))
 	fixable := 0
@@ -158,13 +178,34 @@ func everyLocatableAnalysis(
 	return targets, nil
 }
 
+// riskThresholdName maps a RiskThreshold level (1-4) back to the name the
+// --risk-threshold flag accepts (low, medium, high, critical), for the
+// below-threshold summary line in everyLocatableAnalysis. Any other value
+// (including the unset zero value, which callers normalize before it gets
+// here -- see runAutofix) reads as "low", the lowest real gate.
+func riskThresholdName(threshold int) string {
+	switch threshold {
+	case 2:
+		return "medium"
+	case 3:
+		return "high"
+	case 4:
+		return "critical"
+	default:
+		return "low"
+	}
+}
+
 // locatableAnalysisIDs returns the analyses on a file worth attempting.
 //
-// ONE filter: computed risk must meet the configured threshold. Autofix reuses
-// the severity policy the customer already sets on cicheck rather than
-// introducing a second one just for remediation -- nobody should have to
-// configure "which vulnerabilities matter" twice. A threshold of 0 (Passed)
-// means everything, which is what health-score mode wants.
+// ONE filter: computed risk must meet the configured threshold. Autofix
+// takes the SAME --risk-threshold flag as cicheck (cmd/autofix.go registers
+// it with cmd/cicheck.go's own parseRiskThreshold, and cmd/cicheck.go also
+// records whichever value it used so a later autofix run on the same file id
+// can inherit it) rather than introducing a second policy just for
+// remediation -- nobody should have to configure "which vulnerabilities
+// matter" twice. A threshold of 0 (Passed) means everything, which is what
+// health-score mode wants.
 //
 // It used to ALSO require the finding to name a first-party class descriptor,
 // on the reasoning that without one there is nothing to locate. That reasoning

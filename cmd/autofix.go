@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/appknox/appknox-go/helper"
 	"github.com/spf13/cobra"
 )
@@ -20,6 +23,9 @@ Processed. Model turns go through Appknox (never a provider key):
 --dry-run locates and generates the fix but does not register or push.
 --locate-only prints the files each KnoxIQ finding would touch, then exits.
 
+--risk-threshold defaults to the threshold cicheck used for the same file id
+(then APPKNOX_RISK_THRESHOLD, then low); pass it only to override.
+
 APPKNOX_ACCESS_TOKEN is required.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		f := cmd.Flags()
@@ -37,6 +43,15 @@ APPKNOX_ACCESS_TOKEN is required.`,
 		opts.FixMode, _ = f.GetString("fix-mode")
 		opts.ListAnalyses, _ = f.GetBool("list-analyses")
 		opts.LocateOnly, _ = f.GetBool("locate-only")
+
+		level, name, source, err := autofixRiskThreshold(cmd, opts.FileID)
+		if err != nil {
+			helper.PrintError(err)
+			os.Exit(1)
+		}
+		opts.RiskThreshold = level
+		fmt.Printf("Risk threshold: %s (%s)\n", name, source)
+
 		helper.ProcessAutofix(opts)
 	},
 }
@@ -57,4 +72,6 @@ func init() {
 	f.String("fix-mode", "agent", "How to generate the fix: 'agent' (default — LLM Edit tool via the agent SDK, no file upload) or 'server' (/v1/fix single-shot, uploads the file)")
 	f.Bool("list-analyses", false, "List the file's analyses + derived class hints, then exit (needs --file-id)")
 	f.Bool("locate-only", false, "Locate and validate targets per KnoxIQ finding, print them, then exit: no fix, no job registration, no push")
+	f.StringP(
+		flagRiskThreshold, "r", "low", "Risk threshold to fail the command. Available options: low, medium, high, critical")
 }

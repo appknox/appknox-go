@@ -151,15 +151,21 @@ func TestRunAutofix_KnoxIQCompleted_Continues(t *testing.T) {
 // d.analysisIDs.
 func TestRunAutofix_DefaultsRiskThresholdToOne(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
-	var gotThreshold int
+	// everyLocatableAnalysis calls analysisIDs a second time, with threshold
+	// 0, to learn how many analyses the real threshold dropped (for its
+	// below-threshold summary line) -- so this fake records every threshold
+	// it is asked about, and this test asserts the FIRST one, which is the
+	// one runAutofix's default actually produced.
+	var gotThresholds []int
 	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
 	d.analysisIDs = func(_ context.Context, _, riskThreshold int) ([]int, error) {
-		gotThreshold = riskThreshold
+		gotThresholds = append(gotThresholds, riskThreshold)
 		return []int{1}, nil
 	}
 	_, err := runAutofix(context.Background(), appknoxOpts(t, root), d)
 	require.NoError(t, err)
-	require.Equal(t, 1, gotThreshold)
+	require.NotEmpty(t, gotThresholds)
+	require.Equal(t, 1, gotThresholds[0])
 }
 
 // TestRunAutofix_PreservesAnExplicitRiskThreshold guards the other half of
@@ -167,17 +173,20 @@ func TestRunAutofix_DefaultsRiskThresholdToOne(t *testing.T) {
 // set (a future --risk-threshold flag, or health-score mode).
 func TestRunAutofix_PreservesAnExplicitRiskThreshold(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
-	var gotThreshold int
+	// See TestRunAutofix_DefaultsRiskThresholdToOne for why this records
+	// every threshold seen instead of just the last.
+	var gotThresholds []int
 	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
 	d.analysisIDs = func(_ context.Context, _, riskThreshold int) ([]int, error) {
-		gotThreshold = riskThreshold
+		gotThresholds = append(gotThresholds, riskThreshold)
 		return []int{1}, nil
 	}
 	opts := appknoxOpts(t, root)
 	opts.RiskThreshold = 3
 	_, err := runAutofix(context.Background(), opts, d)
 	require.NoError(t, err)
-	require.Equal(t, 3, gotThreshold)
+	require.NotEmpty(t, gotThresholds)
+	require.Equal(t, 3, gotThresholds[0])
 }
 
 // TestMemoizedAnalysesFor_ListsOncePerFileID is M2: the regression test for
