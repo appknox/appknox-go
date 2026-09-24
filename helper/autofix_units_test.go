@@ -92,6 +92,40 @@ func TestRun_OneAnalysisThreeFindingsThreeFilesGivesThreeCalls(t *testing.T) {
 	}
 }
 
+// TestRun_TwoFindingsInOneAnalysisSameFile_ComposeOnDisk is F5: two KnoxIQ
+// findings of the same analysis both locate to the same file. The delivered
+// blob for that path must contain both fixes -- the second fix call reads
+// the working tree AFTER the first one's patch is applied, so a fake that
+// simulates "I read the file with the first fix already in it" proves the
+// two calls run in sequence on shared state, not independently. No code
+// change is expected for this item; it exercises the existing fan-out.
+func TestRun_TwoFindingsInOneAnalysisSameFile_ComposeOnDisk(t *testing.T) {
+	root, rel := repoWithFile(t, "line1\nline2\n")
+	units := []FindingUnit{
+		{Title: "Finding A", Remediation: "fix a"},
+		{Title: "Finding B", Remediation: "fix b"},
+	}
+	d := autofixDeps{
+		locateTargets: targetsAt(rel),
+		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
+			if req.Remediation == "fix a" {
+				return agent.FixResult{Changed: true, PatchedContent: "line1-fixedA\nline2\n"}, nil
+			}
+			// "fix b" is built on top of fix a's own output -- exactly what a
+			// real agent would see reading the file after the first call
+			// applied its patch to the working tree.
+			return agent.FixResult{Changed: true, PatchedContent: "line1-fixedA\nline2-fixedB\n"}, nil
+		},
+	}
+	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
+		Finding: "Application Logs", VulnerabilityID: 17, Remediation: "all", Units: units}})
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out.Patches, 1, "one file, one delivered blob even across two findings in one analysis")
+	require.Equal(t, "line1-fixedA\nline2-fixedB\n", out.Patches[0].Content,
+		"the second fix must be built on content the first fix already patched")
+}
+
 func TestRun_FansOutManifestThenResThenSource(t *testing.T) {
 	root := t.TempDir()
 	manifest := "app/src/main/AndroidManifest.xml"
