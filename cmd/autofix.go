@@ -18,6 +18,7 @@ Processed. Model turns go through Appknox (never a provider key):
 
 --list-analyses prints analyses for the file, then exits.
 --dry-run locates and generates the fix but does not register or push.
+--locate-only prints the files each KnoxIQ finding would touch, then exits.
 
 APPKNOX_ACCESS_TOKEN is required.`,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -35,6 +36,7 @@ APPKNOX_ACCESS_TOKEN is required.`,
 		opts.DryRun, _ = f.GetBool("dry-run")
 		opts.FixMode, _ = f.GetString("fix-mode")
 		opts.ListAnalyses, _ = f.GetBool("list-analyses")
+		opts.LocateOnly, _ = f.GetBool("locate-only")
 		helper.ProcessAutofix(opts)
 	},
 }
@@ -54,4 +56,5 @@ func init() {
 	f.Bool("dry-run", false, "Locate + generate the fix but do not push a branch")
 	f.String("fix-mode", "agent", "How to generate the fix: 'agent' (default — LLM Edit tool via the agent SDK, no file upload) or 'server' (/v1/fix single-shot, uploads the file)")
 	f.Bool("list-analyses", false, "List the file's analyses + derived class hints, then exit (needs --file-id)")
+	f.Bool("locate-only", false, "Locate and validate targets per KnoxIQ finding, print them, then exit: no fix, no job registration, no push")
 }

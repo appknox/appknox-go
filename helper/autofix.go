@@ -39,6 +39,11 @@ type AutofixOptions struct {
 	FixMode       string // "agent" (the cmd/autofix.go flag default: client-side Edit, no upload) or "server" (/v1/fix, uploads the file)
 	ListAnalyses  bool   // print the file's analyses + class hints, then exit
 
+	// LocateOnly runs targeting and validation, prints each finding's
+	// validated targets as TARGETS lines, and stops: no fix call, no job
+	// registration, no delivery. Used to measure locate accuracy (spec 3.6).
+	LocateOnly bool
+
 	// Model overrides the model for BOTH turns. Empty keeps the agent layer's
 	// default rather than naming one here, so the default stays in exactly one
 	// place (agent.runnerParams).
@@ -131,7 +136,7 @@ func ProcessAutofix(opts AutofixOptions) {
 	// --file-id registers the job and waits until Processing, then locates,
 	// fixes, and opens the PR. Waiting for Processed here deadlocks: that
 	// status is written only after this CLI records the PR.
-	if opts.FileID > 0 && !opts.DryRun {
+	if opts.FileID > 0 && !opts.DryRun && !opts.LocateOnly {
 		done, err := processAutofixWait(context.Background(), opts.FileID)
 		if err != nil {
 			PrintError(err)

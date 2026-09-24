@@ -42,6 +42,10 @@ func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit
 	res := unitResult{located: targetPaths(accepted)}
 	results := rejectionResults(rejected)
 	notes := notFoundNotes(reply.NotFound)
+	if s.opts.LocateOnly {
+		res.outcome = locatedOutcome(in, accepted, results, notes)
+		return res, nil
+	}
 	if u.Remediation == "" {
 		// A fix built on no instruction is worse than no fix.
 		res.outcome = summarizeFinding(in.VulnerabilityID, in.Finding, results,

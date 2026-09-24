@@ -214,3 +214,35 @@ func TestRun_AllDeclinedExitsZero(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, statusSkipped, out.Findings[0].Status)
 }
+
+func TestRun_LocateOnlyMakesNoFixCallsAndNoDelivery(t *testing.T) {
+	root, rel := repoWithFile(t, javaBody)
+	fixed := false
+	d := autofixDeps{
+		locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+			return agent.TargetReply{
+				Targets:  []agent.Target{{Path: rel, Why: "weak PRNG here"}, {Path: "app/build.gradle"}},
+				NotFound: []string{"java.util.Random: framework"},
+			}, nil
+		},
+		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+			fixed = true
+			return agent.FixResult{Changed: true, PatchedContent: "x"}, nil
+		},
+		deliver: func(context.Context, AutofixOptions, []filePatch) (Delivery, error) {
+			t.Fatal("locate-only must not deliver")
+			return Delivery{}, nil
+		},
+	}
+	s := fixSession{opts: AutofixOptions{FixMode: "agent", FileID: 1, LocateOnly: true},
+		d: d, root: root, work: newWorkingTree(root),
+		targets: []analysisTarget{{AnalysisID: 1, Inputs: oneClass("Weak PRNG", "use SecureRandom")}}}
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.False(t, fixed)
+	require.Empty(t, out.Patches)
+	require.Equal(t, []string{rel}, out.Located)
+	require.Equal(t, statusTargets, out.Findings[0].Status)
+	require.Equal(t, rel+" (weak PRNG here); app/build.gradle rejected: invalid path; "+
+		"not found in repo: java.util.Random: framework (likely third-party)", out.Findings[0].Detail)
+}
