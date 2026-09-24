@@ -2,7 +2,7 @@
 //
 // The model plans and calls local read-only tools (read_file, grep, glob) over
 // the checked-out repository. Each agent (locate, fix) operates independently,
-// planing the next file and edits based on vulnerability context.
+// planning the next file and edits based on vulnerability context.
 // Only the model turns leave the machine, routed through Mycroft
 // ({APPKNOX_API_HOST}/api/knoxiq/autofix/ + a PAT, never a provider key).
 // Mycroft forwards to Sherrinford, which injects the server-held provider key.
