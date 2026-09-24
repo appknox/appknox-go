@@ -34,6 +34,11 @@ type Client struct {
 	// AccessToken used interact with Appknox API.
 	AccessToken string
 
+	// authHeader is the fully-formed Authorization header value, computed
+	// once at construction time (NewClient or NewClientWithServiceAccount)
+	// so NewRequest never needs to know which credential type is in use.
+	authHeader string
+
 	// Reuse a single struct instead of allocating one for each service on the heap.
 	common service
 
@@ -75,8 +80,29 @@ type Client struct {
 	KnoxIQ *KnoxIQService
 }
 
-// NewClient returns a new appknox API client.
+// NewClient returns a new appknox API client authenticated with a Personal
+// Access Token, sent as "Authorization: Token <accessToken>".
 func NewClient(accessToken string) (*Client, error) {
+	if accessToken == "" {
+		return nil, errors.New("access token can't be empty")
+	}
+	return newClientWithAuthHeader(fmt.Sprintf("Token %s", accessToken), accessToken)
+}
+
+// NewClientWithServiceAccount returns a new appknox API client authenticated
+// with a service account access key / secret pair, sent as
+// "Authorization: Bearer <accessKeyID>:<secretAccessKey>".
+func NewClientWithServiceAccount(accessKeyID, secretAccessKey string) (*Client, error) {
+	if accessKeyID == "" || secretAccessKey == "" {
+		return nil, errors.New("access key id and access key secret can't be empty")
+	}
+	authHeader := fmt.Sprintf("Bearer %s:%s", accessKeyID, secretAccessKey)
+	return newClientWithAuthHeader(authHeader, "")
+}
+
+// newClientWithAuthHeader builds a Client with a precomputed Authorization
+// header value, so NewRequest never needs to branch on credential type.
+func newClientWithAuthHeader(authHeader, accessToken string) (*Client, error) {
 	baseEndpoint, err := url.Parse(DefaultAPIHost)
 	if err != nil {
 		return nil, err
@@ -86,15 +112,12 @@ func NewClient(accessToken string) (*Client, error) {
 		baseEndpoint.Path += "/"
 	}
 
-	if accessToken == "" {
-		return nil, errors.New("access token can't be empty")
-	}
-
 	httpClient := &http.Client{}
 	c := &Client{
 		client:      httpClient,
 		BaseURL:     baseEndpoint,
 		AccessToken: accessToken,
+		authHeader:  authHeader,
 	}
 	c.common.client = c
 	c.Me = (*MeService)(&c.common)
@@ -172,8 +195,7 @@ func (c *Client) NewRequest(method, urlStr string, body interface{}) (*http.Requ
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("User-Agent", c.GetUserAgent())
-	authorization := fmt.Sprintf("Token %s", c.AccessToken)
-	req.Header.Set("Authorization", authorization)
+	req.Header.Set("Authorization", c.authHeader)
 	return req, nil
 }
 
