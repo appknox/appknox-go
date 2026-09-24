@@ -21,6 +21,9 @@ func targetRepo(t *testing.T) string {
 		"app/build/intermediates/merged_manifest/AndroidManifest.xml",
 		"app/.cache/Hidden.java",
 		"app/build.gradle.kts",
+		"build.gradle",
+		"app/proguard-rules.pro",
+		"proguard-rules.pro",
 		"app/lint-baseline.xml",
 		"app/src/main/assets/config.json",
 	} {
@@ -43,7 +46,8 @@ func TestValidateTargets_RejectsEachReason(t *testing.T) {
 		"app/src/main/java/com/x/Link.java":    reasonInvalidPath, // a symlink
 		"app/build/intermediates/merged_manifest/AndroidManifest.xml": reasonGenerated,
 		"app/.cache/Hidden.java":          reasonGenerated,
-		"app/build.gradle.kts":            reasonBuildFile,
+		"build.gradle":                    reasonBuildFile, // the root script, not a module's
+		"proguard-rules.pro":              reasonBuildFile, // the root one; a module's is a target
 		"app/lint-baseline.xml":           reasonUnsupported,
 		"app/src/main/assets/config.json": reasonUnsupported,
 	}
@@ -52,6 +56,20 @@ func TestValidateTargets_RejectsEachReason(t *testing.T) {
 		require.Empty(t, accepted, path)
 		require.Equal(t, []rejection{{Path: path, Reason: want}}, rejected, path)
 	}
+}
+
+// A module build script is a target (mfva 37: drop jedis from app/build.gradle)
+// and goes LAST, after the source that used the dependency has been fixed.
+func TestValidateTargets_AcceptsModuleBuildScriptLast(t *testing.T) {
+	root := targetRepo(t)
+	accepted, rejected := validateTargets(root, []agent.Target{
+		{Path: "app/build.gradle.kts", Why: "drop dependency"},
+		{Path: "app/src/main/java/com/x/Main.java", Why: "src"},
+		{Path: "app/src/main/AndroidManifest.xml", Why: "manifest"},
+	})
+	require.Empty(t, rejected)
+	require.Equal(t, []string{"app/src/main/AndroidManifest.xml", "app/src/main/java/com/x/Main.java",
+		"app/build.gradle.kts"}, targetPaths(accepted))
 }
 
 func TestValidateTargets_AcceptsAndOrdersManifestResSource(t *testing.T) {

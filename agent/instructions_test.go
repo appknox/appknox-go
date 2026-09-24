@@ -89,13 +89,25 @@ func TestFixSystemPrompt_removesACallThatIsItselfTheFinding(t *testing.T) {
 // finding never cleared on rescan. Java allows a second non-public top-level
 // class -- or a nested one -- in the file it already has, so this is an edit.
 func TestFixSystemPrompt_addsAPrescribedHelperClassToTheSameFile(t *testing.T) {
-	for _, want := range []string{"BY NAME", "nested static class", "not a file"} {
+	for _, want := range []string{"BY NAME", "nested static class", "already created it: read it and call it"} {
 		if !strings.Contains(fixSystemPrompt, want) {
-			t.Errorf("system prompt should allow a named helper class in the same file: %q", want)
+			t.Errorf("system prompt should nest a named helper unless a NEW file carries it: %q", want)
 		}
 	}
-	if !strings.Contains(fixSystemPrompt, "You cannot create files") {
-		t.Error("the fixer has no create tool; the prompt must say so rather than let it assume")
+	if !strings.Contains(fixSystemPrompt, "You create a file only when the target file is marked NEW") {
+		t.Error("create_file exists only for NEW targets; the prompt must say so rather than let it assume")
+	}
+}
+
+func TestFixUserPrompt_NewFileTargetAndOtherFiles(t *testing.T) {
+	p := fixUserPrompt(FixRequest{Path: "app/src/main/res/xml/network_security_config.xml", Create: true})
+	if !strings.Contains(p, "NEW - create it with create_file") {
+		t.Errorf("a new-file target must say so: %s", p)
+	}
+	p = fixUserPrompt(FixRequest{Path: "app/src/main/AndroidManifest.xml",
+		OtherFiles: []Target{{Path: "app/src/main/res/xml/network_security_config.xml", Why: "nsc", New: true}}})
+	if !strings.Contains(p, "network_security_config.xml [NEW file, created before this call]") {
+		t.Errorf("a new sibling file must be marked: %s", p)
 	}
 }
 
@@ -226,4 +238,14 @@ func TestFixUserPrompt_NoTargetContextNoBlocks(t *testing.T) {
 	p := fixUserPrompt(FixRequest{Path: "a/A.java", Finding: "f", Remediation: "r"})
 	require.NotContains(t, p, "Why this file")
 	require.NotContains(t, p, "Other files in this remediation")
+}
+
+// mfva 17: a rules file is appended to, never rewritten; the gate
+// (checkRulesFileEdit) enforces the same list.
+func TestFixSystemPrompt_rulesFileOnlyGainsRules(t *testing.T) {
+	for _, want := range []string{"proguard-rules.pro) only ever gains rules", "-assumenosideeffects", "never add -include"} {
+		if !strings.Contains(fixSystemPrompt, want) {
+			t.Errorf("system prompt should bound rules-file edits: %q", want)
+		}
+	}
 }

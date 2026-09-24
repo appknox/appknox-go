@@ -27,6 +27,11 @@ const (
 	// targets would still leave a dangling reference, so the whole finding
 	// is skipped instead of half-applied.
 	reasonNeedsNewFile = "needs a new file (not supported)"
+
+	// reasonThirdPartyNoSource is a third-party finding's SKIPPED reason when
+	// no file in this repository carries its fix: the code to change is the
+	// library's own, which the customer cannot patch.
+	reasonThirdPartyNoSource = "third-party: no source in this repository to change"
 )
 
 // ErrAllCallsFailed marks a run in which every locate and fix call failed at
@@ -39,6 +44,7 @@ type targetResult struct {
 	Path    string
 	Patched bool
 	Reason  string // why there is no patch; empty when Patched
+	New     bool   // the target was a file this unit creates
 }
 
 // findingOutcome is one printed outcome line.
@@ -88,7 +94,11 @@ func summarizeFinding(vulnID int, finding string, results []targetResult, notes 
 func locatedOutcome(in FindingInputs, accepted []agent.Target, results []targetResult, notes []string) findingOutcome {
 	parts := make([]string, 0, len(accepted)+len(results)+len(notes))
 	for _, t := range accepted {
-		parts = append(parts, fmt.Sprintf("%s (%s)", t.Path, t.Why))
+		mark := ""
+		if t.New {
+			mark = " [new]"
+		}
+		parts = append(parts, fmt.Sprintf("%s%s (%s)", t.Path, mark, t.Why))
 	}
 	for _, r := range results {
 		parts = append(parts, r.Path+" "+r.Reason)

@@ -81,7 +81,10 @@ func (v patchViolation) Error() string { return v.Rule + ": " + v.Detail }
 // Cheapest check first, and stops at the first violation: the fixer gets one
 // retry, so one precise fact beats a list it has to triage.
 func verifyPatch(root, path, original, patched string) *patchViolation {
-	if v := checkEditablePath(path); v != nil {
+	if v := checkEditablePath(root, path); v != nil {
+		return v
+	}
+	if v := checkNewFilePackage(path, original, patched); v != nil {
 		return v
 	}
 	// Whole-file, and the two that must be: a file either closes its structure
@@ -102,6 +105,15 @@ func verifyPatch(root, path, original, patched string) *patchViolation {
 		return v
 	}
 	if v := checkBuildConfigUsage(root, original, patched); v != nil {
+		return v
+	}
+	if v := checkBuildScriptEdit(path, original, patched); v != nil {
+		return v
+	}
+	if v := checkRemovedDependency(root, path, original, patched); v != nil {
+		return v
+	}
+	if v := checkRulesFileEdit(path, original, patched); v != nil {
 		return v
 	}
 	// Last: the only check that opens a file outside the repository, and the
@@ -127,9 +139,12 @@ func introduced(re *regexp.Regexp, original, patched string) [][]string {
 	return out
 }
 
-// checkEditablePath rejects build scripts, which SCOPE places out of bounds.
-func checkEditablePath(path string) *patchViolation {
-	if !buildFileRE.MatchString(filepath.ToSlash(path)) {
+// checkEditablePath rejects build scripts, which SCOPE places out of bounds --
+// except a module's own build.gradle(.kts), whose edits checkBuildScriptEdit
+// and checkRemovedDependency bound instead (see build_script.go), and its
+// proguard-rules.pro, bounded by checkRulesFileEdit (see rules_file.go).
+func checkEditablePath(root, path string) *patchViolation {
+	if !buildFileRE.MatchString(filepath.ToSlash(path)) || editableBuildFile(root, path) {
 		return nil
 	}
 	return &patchViolation{
@@ -182,7 +197,7 @@ func checkXMLWellFormed(path, content string) *patchViolation {
 // rule.
 func checkBraceBalance(path, original, patched string) *patchViolation {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".java", ".kt":
+	case ".java", ".kt", ".gradle", ".kts":
 	default:
 		return nil
 	}
@@ -268,10 +283,11 @@ func skipQuoted(src string, i int) int {
 
 // checkResourceRefs rejects a NEWLY ADDED reference to a resource not on disk.
 //
-// The fixer cannot create files, so a remediation whose first step is "create
-// res/xml/network_security_config.xml" leaves it able to perform only the
-// second -- pointing the manifest at a file never written. That is an AAPT
-// error, and it broke kgb_messenger and playstore-auth identically.
+// A remediation whose first step is "create res/xml/network_security_config.xml"
+// can otherwise leave the manifest pointing at a file never written -- an AAPT
+// error that broke kgb_messenger and playstore-auth identically. A file this
+// remediation creates is on disk before the manifest's call (new files run
+// first), so it passes here; one that was never created does not.
 func checkResourceRefs(root, path, original, patched string) *patchViolation {
 	for _, m := range introduced(resourceRefRE, original, patched) {
 		kind, name := m[1], m[2]
@@ -281,8 +297,8 @@ func checkResourceRefs(root, path, original, patched string) *patchViolation {
 		return &patchViolation{
 			Rule: "missing-resource",
 			Detail: fmt.Sprintf("%s adds a reference to @%s/%s, but no res/%s/%s.* exists "+
-				"in this repository and you cannot create files. Achieve the fix without "+
-				"it (a manifest attribute often has an equivalent), or make no edit.",
+				"in this repository, and nothing in this remediation creates it. Achieve the "+
+				"fix without it (a manifest attribute often has an equivalent), or make no edit.",
 				path, kind, name, kind, name),
 		}
 	}

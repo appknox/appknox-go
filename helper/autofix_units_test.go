@@ -188,6 +188,9 @@ func TestRun_OutcomeLinesCoverEveryStatus(t *testing.T) {
 				return agent.FixResult{}, nil
 			case layout:
 				return agent.FixResult{Changed: true, PatchedContent: "<LinearLayout><!-- fixed --></LinearLayout>\n"}, nil
+			case "app/build.gradle.kts":
+				return agent.FixResult{Changed: true, PatchedContent: "plugins { }\n" +
+					"android { buildTypes { getByName(\"release\") { isMinifyEnabled = true } } }\n"}, nil
 			}
 			return agent.FixResult{Changed: true, PatchedContent: "<manifest><application/><!-- fixed --></manifest>\n"}, nil
 		},
@@ -213,11 +216,10 @@ func TestRun_OutcomeLinesCoverEveryStatus(t *testing.T) {
 	require.Equal(t, statusSkipped, got["notfound"].Status)
 	require.Contains(t, got["notfound"].Detail, "android.util.Log")
 	require.Equal(t, "locate: unparseable reply", got["unparseable"].Detail)
-	require.Equal(t, "app/build.gradle.kts rejected: build file (not supported)", got["build"].Detail)
+	require.Equal(t, statusFixed, got["build"].Status, "a module build script is a target now")
 	require.Equal(t, findingOutcome{VulnerabilityID: 120, Finding: "Hardcoded Secrets",
 		Status: statusSkipped, Detail: "KnoxIQ: no findings"}, got["skipAnalysis"])
 	require.NotContains(t, fixedRemediations, "rem-notfound", "not_found only means no fix call")
-	require.NotContains(t, fixedRemediations, "rem-build")
 }
 
 // TestRun_SkippedFindingsAreAppendedToOutcome is F1: a finding dropped inside

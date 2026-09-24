@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -570,7 +572,10 @@ func (s fixSession) produceFixFor(
 		// it returns, so the checkout still holds the pre-patch content. An
 		// unreadable file means no delta can be computed, and a check that
 		// cannot be computed must not reject.
-		original, readErr := readUnderRoot(s.root, path)
+		original, readErr := "", error(nil)
+		if !tc.Create {
+			original, readErr = readUnderRoot(s.root, path)
+		}
 		if readErr != nil {
 			return res, "", nil
 		}
@@ -596,6 +601,10 @@ func (s fixSession) produceFixFor(
 func (s fixSession) attemptFix(
 	ctx context.Context, path string, in FindingInputs, tc targetContext, priorViolation string,
 ) (fixservice.Result, error) {
+	if tc.Create && s.opts.FixMode != "agent" {
+		// /v1/fix rewrites an uploaded file; it has nothing to upload here.
+		return fixservice.Result{}, fmt.Errorf("creating %s needs --fix-mode agent", path)
+	}
 	if s.opts.FixMode == "agent" {
 		// Model only, never LocateModel: this turn writes the patch that ships.
 		fr, err := s.d.agentFix(ctx, agent.Config{Host: s.host, Token: s.token,
@@ -608,7 +617,7 @@ func (s fixSession) attemptFix(
 				// fixUserPrompt, which renders both when present.
 				DeveloperPrompt: in.DeveloperPrompt, Criteria: in.Criteria,
 				ProjectProfile: s.profile, PriorViolation: priorViolation,
-				Why: tc.Why, OtherFiles: tc.OtherFiles})
+				Why: tc.Why, OtherFiles: tc.OtherFiles, Create: tc.Create})
 		if err != nil {
 			return fixservice.Result{}, err
 		}
@@ -894,27 +903,87 @@ func firstNonEmpty(a, b string) string {
 type workingTree struct {
 	root     string
 	original map[string]string // path -> content before we touched it
+	// created holds paths that did not exist before this run touched them.
+	// Their original is "" (a diff against nothing), and restore deletes
+	// them rather than writing an empty file.
+	created map[string]bool
+	// createdDirs are the directories each created path needed, deepest
+	// first, removed with it when they are empty again.
+	createdDirs map[string][]string
 }
 
 func newWorkingTree(root string) *workingTree {
-	return &workingTree{root: root, original: map[string]string{}}
+	return &workingTree{root: root, original: map[string]string{}, created: map[string]bool{},
+		createdDirs: map[string][]string{}}
 }
 
-// apply writes a patch to the tree, remembering the original content once.
+// apply writes a patch to the tree, remembering the original content once. A
+// path that does not exist yet is recorded as created.
 func (w *workingTree) apply(path, content string) error {
 	if _, seen := w.original[path]; !seen {
 		before, err := readUnderRoot(w.root, path)
-		if err != nil {
+		switch {
+		case err == nil:
+			w.original[path] = before
+		case errors.Is(err, fs.ErrNotExist):
+			dest, destErr := safeDest(w.root, path)
+			if destErr != nil {
+				return destErr
+			}
+			w.original[path] = ""
+			w.created[path] = true
+			w.createdDirs[path] = missingParents(dest)
+		default:
 			return err
 		}
-		w.original[path] = before
 	}
 	return applyPatch(w.root, path, content)
 }
 
-// restore puts every touched file back, for a dry run that must leave no trace.
+// remove deletes a file this run created, for a rolled-back unit. The path
+// stays recorded as created, so a later unit that creates it again, and the
+// final restore, both still treat it as new.
+func (w *workingTree) remove(path string) error {
+	if !w.created[path] {
+		return fmt.Errorf("refusing to delete %s: this run did not create it", path)
+	}
+	dest, err := safeDest(w.root, path)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(dest); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	for _, dir := range w.createdDirs[path] {
+		if os.Remove(dir) != nil {
+			break // not empty (or gone): something else lives there
+		}
+	}
+	return nil
+}
+
+// missingParents returns abs's ancestors that do not exist yet, deepest first.
+func missingParents(abs string) []string {
+	var dirs []string
+	for dir := filepath.Dir(abs); filepath.Dir(dir) != dir; dir = filepath.Dir(dir) {
+		if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+			break
+		}
+		dirs = append(dirs, dir)
+	}
+	return dirs
+}
+
+// restore puts every touched file back, for a dry run that must leave no
+// trace: created files are deleted, the rest rewritten.
 func (w *workingTree) restore() error {
 	for path, content := range w.original {
+		if w.created[path] {
+			if err := w.remove(path); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := applyPatch(w.root, path, content); err != nil {
 			return err
 		}

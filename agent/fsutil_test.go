@@ -92,3 +92,15 @@ func TestWalkSourceFiles_ExcludesWorktreeStyleNestedRepo(t *testing.T) {
 	require.NotContains(t, collectWalked(root), filepath.ToSlash(rel),
 		"a .git file marks a worktree/submodule checkout, also a separate repository")
 }
+
+// mfva dry run on file 83: 3, 17, 104 and 117 were skipped with "app/build.gradle
+// not present" because grep and glob never surfaced .gradle files. A module
+// build script is a valid target, so locate has to be able to find it.
+func TestWalkSourceFiles_IncludesGradleBuildScripts(t *testing.T) {
+	root := t.TempDir()
+	rel := filepath.Join("app", "build.gradle")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "app"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte("dependencies {}\n"), 0o644))
+
+	require.Contains(t, collectWalked(root), filepath.ToSlash(rel))
+}

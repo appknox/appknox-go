@@ -72,7 +72,7 @@ func TestFixUserPrompt_IncludesFindingAndRemediation(t *testing.T) {
 
 func TestBuildFixTools_HasEditPlusReadOnly(t *testing.T) {
 	var edits []editRecord
-	tools, err := buildFixTools(t.TempDir(), "app/Main.java", &edits)
+	tools, err := buildFixTools(t.TempDir(), "app/Main.java", false, &edits)
 	require.NoError(t, err)
 	require.Len(t, tools, 4) // read_file, grep, glob, edit
 }

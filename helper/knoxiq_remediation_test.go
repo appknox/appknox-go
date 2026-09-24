@@ -34,12 +34,22 @@ func TestIsFixable_UncertainIsInScope(t *testing.T) {
 	}
 }
 
-func TestIsFixable_ThirdPartyIsSkipped(t *testing.T) {
+func TestIsFixable_ThirdPartyIsKept(t *testing.T) {
+	// mfva 37: is_third_party, yet every KnoxIQ step edits the app's own
+	// build.gradle and ExportedActivity.java. Where the fix lands decides.
 	f := finding("x", &appknox.KnoxIQValidation{
 		Verdict: "TRUE_POSITIVE", IsThirdParty: boolPtr(true)})
-	if IsFixable(f) {
-		t.Fatal("a vendored library cannot be patched in the customer tree")
+	if !IsFixable(f) {
+		t.Fatal("a third-party finding can still be fixed in the app's own files")
 	}
+}
+
+func TestKnoxIQInputs_CarriesThirdParty(t *testing.T) {
+	f := finding("x", &appknox.KnoxIQValidation{Verdict: "TRUE_POSITIVE", IsThirdParty: boolPtr(true)})
+	f.Remediation = &appknox.KnoxIQRemediation{Remediation: "drop the dependency"}
+	in := knoxIQInputs([]*appknox.KnoxIQFinding{f}, "Redis library")
+	require.Len(t, in.Units, 1)
+	require.True(t, in.Units[0].ThirdParty)
 }
 
 func TestIsFixable_UnknownThirdPartyIsNotThirdParty(t *testing.T) {
@@ -107,8 +117,8 @@ func TestFixableKnoxIQFindings_MixedDropsGetSkipLines(t *testing.T) {
 					"validation":  map[string]any{"verdict": "TRUE_POSITIVE"},
 				},
 				{
-					"title":      "Vendored SDK class",
-					"validation": map[string]any{"verdict": "TRUE_POSITIVE", "is_third_party": true},
+					"title":      "Rejected finding",
+					"validation": map[string]any{"verdict": "TRUE_POSITIVE", "is_valid": false},
 				},
 			},
 		})
@@ -121,8 +131,8 @@ func TestFixableKnoxIQFindings_MixedDropsGetSkipLines(t *testing.T) {
 	require.Equal(t, "Fixable finding", keep[0].Title)
 
 	require.Len(t, skipped, 1)
-	require.Equal(t, findingOutcome{Finding: "Derived Crypto Keys", Title: "Vendored SDK class",
-		Status: statusSkipped, Detail: "KnoxIQ: third-party code"}, skipped[0])
+	require.Equal(t, findingOutcome{Finding: "Derived Crypto Keys", Title: "Rejected finding",
+		Status: statusSkipped, Detail: "KnoxIQ: false positive"}, skipped[0])
 }
 
 func TestKnoxIQInputs_MergesFindingsAndDedupesHints(t *testing.T) {

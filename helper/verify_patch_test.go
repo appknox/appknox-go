@@ -82,11 +82,19 @@ func TestVerifyPatchIgnoresPreExistingBuildConfigUsage(t *testing.T) {
 }
 
 func TestVerifyPatchRejectsBuildFile(t *testing.T) {
-	// aibom-android: edited app/build.gradle.kts, which SCOPE forbids.
-	root := writeRepo(t, map[string]string{"app/build.gradle.kts": "android { }\n"})
-	v := verifyPatch(root, "app/build.gradle.kts", "android { }\n", "android { buildTypes { } }\n")
-	require.NotNil(t, v)
-	require.Equal(t, "build-file", v.Rule)
+	// The root script, settings and ProGuard rules stay out of bounds.
+	for _, p := range []string{"build.gradle", "settings.gradle", "app/proguard-rules.pro", "gradle.properties"} {
+		root := writeRepo(t, map[string]string{p: "android { }\n"})
+		v := verifyPatch(root, p, "android { }\n", "android { buildTypes { } }\n")
+		require.NotNil(t, v, p)
+		require.Equal(t, "build-file", v.Rule, p)
+	}
+}
+
+func TestVerifyPatchAllowsModuleBuildScriptSetting(t *testing.T) {
+	root := writeRepo(t, map[string]string{"app/build.gradle": "android {\n buildTypes {\n  release {\n   minifyEnabled false\n  }\n }\n}\n"})
+	patched := "android {\n buildTypes {\n  release {\n   minifyEnabled true\n   debuggable false\n  }\n }\n}\n"
+	require.Nil(t, verifyPatch(root, "app/build.gradle", "android {\n buildTypes {\n  release {\n   minifyEnabled false\n  }\n }\n}\n", patched))
 }
 
 func TestVerifyPatchAllowsSourceFile(t *testing.T) {

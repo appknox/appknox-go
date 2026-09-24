@@ -82,12 +82,16 @@ SCOPE - the file decides, not the remediation prose.
   surface. Never leave a site unfixed merely because the safe overload is not
   spelled out here.
   A remediation that asks for a new class or helper BY NAME ("introduce a
-  SecureCryptoManager class") is asking for a class, not a file. Add it to the
-  file you were given - a nested static class, or a second non-public top-level
-  class - and call it from the fixed site. Write only what the remediation
+  SecureCryptoManager class") is asking for a class. If that class is listed
+  under "Other files in this remediation" as a new file, its own call has
+  already created it: read it and call it, do not write it again. Otherwise add
+  it to the file you were given - a nested static class, or a second
+  non-public top-level class - and call it from the fixed site. Write only what the remediation
   describes: no extra helpers, no configuration, no tests. That is an edit, and
-  it is in scope. You cannot create files, so a remediation that genuinely
-  requires a separate module or a build-file change is out of scope: say so.
+  it is in scope. You create a file only when the target file is marked NEW
+  (see NEW FILE); otherwise a remediation that genuinely requires a separate
+  module or file is out of scope: say so. A build-script change is
+  yours only when the build script IS the file you were given (see BUILD).
 
   WHERE the remediation says the change belongs decides whether it is yours. If
   it names a file - a manifest, a resource, a build script, another source file
@@ -105,17 +109,54 @@ ATOMIC - steps that depend on one another are all-or-nothing.
   Partial application is correct only across INDEPENDENT sites: three unsafe
   calls, fix the two you can, skip the third. It is NOT correct across a
   dependent sequence. "Create res/xml/foo.xml" then "reference it from the
-  manifest" is one fix in two steps, and you cannot create files - so doing the
-  second alone points the build at something that does not exist. Likewise
+  manifest" is one fix in two steps - doing the second alone points the build
+  at something that does not exist, unless foo.xml is listed under "Other
+  files in this remediation" as a new file, which its own call creates first. Likewise
   "delete the insecure class" then "remove its usage in OtherFile.java":
   deleting alone breaks every file that imports it. If any step in such a chain
   is beyond what you can edit, perform NONE of them and report the whole
-  remediation as out of scope.
+  remediation as out of scope. A step in a file listed under "Other files in
+  this remediation" is NOT beyond reach: that file's own call performs it, so
+  apply your part. (Removing a library's use here while another call removes
+  its dependency from the build script is exactly that.)
 
   Never delete a top-level type, even one that is itself the vulnerability. You
   cannot see which files import it. Make it safe where it stands - a trust
   manager that validates, a verifier that checks the hostname - so its callers
   keep compiling and the scanner stops flagging it.
+
+NEW FILE - when the target file is marked NEW, it does not exist yet.
+  Create it once with create_file, with its complete content; use edit only to
+  correct it afterwards. Write exactly what the remediation specifies for this
+  file, using KnoxIQ's reference content where it gives one. A Java or Kotlin
+  file declares the package that matches its directory and imports every type
+  it names. A resource references only resources you have read or that another
+  NEW file in this remediation creates. No placeholder bodies, TODOs or
+  example values: where the remediation leaves a part unspecified, write the
+  minimal working form. If the file cannot be written without inventing
+  something the remediation does not specify, make NO edit and report why.
+
+BUILD - a module build script (build.gradle, build.gradle.kts) is edited in place.
+  Change only the settings the remediation names, inside the blocks that
+  already hold them (buildTypes { release { ... } }), or delete the dependency
+  line it names - delete it, do not comment it out. Never add a dependency, a
+  plugin, a repository, a signingConfig, or anything that reads an environment
+  variable or project property: those need keys, credentials or artifacts this
+  repository does not have, and CI fails at configuration. When the remediation
+  offers one of those as its fix (a Retrofit client, a release signing config),
+  that part is out of scope: apply the rest and report it. If nothing else is
+  left, make NO edit.
+  The only lines you may add are these settings and the android { },
+  defaultConfig { } and buildTypes { release { } } blocks that hold them:
+  debuggable, minifyEnabled, shrinkResources, proguardFiles, minSdkVersion,
+  targetSdkVersion (and their Kotlin DSL is-/= forms). No tasks, no exec, no
+  apply from, no code.
+  A module's rules file (proguard-rules.pro) only ever gains rules: append the
+  -assumenosideeffects (on android.util.Log only), -keep*, -dontwarn or
+  -dontnote rules the remediation gives, at the end of the file, each naming
+  specific classes, with no quotes. Never remove or rewrite an existing rule,
+  and never add -include, -injars, -dontobfuscate, -dontshrink or any other
+  option.
 
 XML - a manifest or resource is a document, not a text file.
   It must still parse after your edit: one root element, every tag closed once,
@@ -204,7 +245,11 @@ are given.`
 // remediation prose.
 func fixUserPrompt(req FixRequest) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Target file (edit ONLY this): %s\n", req.Path)
+	if req.Create {
+		fmt.Fprintf(&b, "Target file (NEW - create it with create_file, touch nothing else): %s\n", req.Path)
+	} else {
+		fmt.Fprintf(&b, "Target file (edit ONLY this): %s\n", req.Path)
+	}
 	fmt.Fprintf(&b, "Finding: %s\n\n", req.Finding)
 
 	// Before the remediation, because it constrains how the remediation can be
@@ -254,7 +299,11 @@ func writeTargetContext(b *strings.Builder, req FixRequest) {
 	if len(req.OtherFiles) > 0 {
 		b.WriteString("Other files in this remediation, handled in separate calls:\n")
 		for _, o := range req.OtherFiles {
-			fmt.Fprintf(b, "  - %s (%s)\n", o.Path, o.Why)
+			mark := ""
+			if o.New {
+				mark = " [NEW file, created before this call]"
+			}
+			fmt.Fprintf(b, "  - %s%s (%s)\n", o.Path, mark, o.Why)
 		}
 		b.WriteString("Apply only the part of the remediation that belongs in this file.\n")
 	}

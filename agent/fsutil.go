@@ -21,12 +21,15 @@ var skipDirs = map[string]bool{
 	"DerivedData": true, "bin": true, "obj": true,
 }
 
-// sourceSuffixes are the file extensions treated as fixable source.
+// sourceSuffixes are the file extensions treated as fixable source. .gradle and
+// .pro are here so locate can find a module build script or rules file (valid
+// targets); which of those may be edited is decided by validation and the gate.
 var sourceSuffixes = map[string]bool{
 	".java": true, ".kt": true, ".kts": true, ".swift": true, ".m": true,
 	".mm": true, ".js": true, ".jsx": true, ".ts": true, ".tsx": true,
 	".c": true, ".cc": true, ".cpp": true, ".h": true, ".hpp": true,
 	".cs": true, ".go": true, ".py": true, ".rb": true, ".php": true, ".xml": true,
+	".gradle": true, ".pro": true,
 }
 
 // skipDir reports whether a directory should be pruned from the walk.

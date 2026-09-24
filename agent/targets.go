@@ -34,18 +34,29 @@ type TargetRequest struct {
 	Description     string // KnoxIQ finding description
 	Remediation     string // FixInstruction(f): summary, steps, reference fix
 	ClassHint       string // manual --class-hint only; empty on the KnoxIQ path
+	// ThirdParty is KnoxIQ's verdict that the flagged code is a library. The
+	// locate turn is told to target only the app's own files that declare or
+	// use it, never the library.
+	ThirdParty bool
 }
 
 // Target is one file the remediation changes, with the part it carries.
 type Target struct {
 	Path string `json:"path"`
 	Why  string `json:"why"`
+	// New marks a file that does not exist yet and is created by its fix
+	// call. Set by the caller after validation, never read from the model.
+	New bool `json:"-"`
 }
 
 // TargetReply is the locate agent's structured answer.
 type TargetReply struct {
 	Targets  []Target `json:"targets"`
 	NotFound []string `json:"not_found"`
+	// NewFiles are files the remediation creates, each at the exact
+	// repository-relative path it must have. Code validates each path before
+	// anything is created.
+	NewFiles []Target `json:"new_files"`
 	// NeedsNewFile lists remediations that require a file that does not
 	// exist in this repository yet (a new class, resource or config file).
 	// Optional: a reply without it leaves this nil. New-file support is out
@@ -63,15 +74,22 @@ KnoxIQ worked from the compiled app, not from this source, so it names things in
 - layouts (activity_x, R.layout.activity_x) are res/layout*/activity_x.xml;
 - manifest attributes (exported, permission, taskAffinity, allowBackup, uses-permission) are changed in AndroidManifest.xml.
 
-Framework and library classes are NOT targets: android.*, androidx.*, java.*, javax.*, kotlin.*, okhttp3.*, and widgets such as LinearLayout are not the app's code. If KnoxIQ names something you cannot find in this repository, list it under not_found instead of guessing. Never list build files (build.gradle, settings.gradle, gradle.properties, proguard-rules.pro) or anything under a build/ directory.
+Framework and library classes are NOT targets: android.*, androidx.*, java.*, javax.*, kotlin.*, okhttp3.*, and widgets such as LinearLayout are not the app's code. If KnoxIQ names something you cannot find in this repository, list it under not_found instead of guessing.
 
-Some remediations require CREATING a file that does not exist in this repository yet, for example a new class (SecureBaseActivity, a custom InputMethodService), a new resource (res/xml/network_security_config.xml) or a new config file. Search for it first. If the remediation needs such a file and it is not in the repository, list it under needs_new_file as "<file or class>: <what the remediation creates it for>". Do not put it under not_found. List the existing files as targets as usual. A file that already exists in the repository is never new: do not list it under needs_new_file. Build files (build.gradle, proguard-rules.pro) are never targets or new files.
+A module's build script (app/build.gradle, app/build.gradle.kts - any build.gradle below the repository root) IS a target when the remediation changes a setting or removes a dependency in it: debuggable, minifyEnabled, shrinkResources, or deleting a named dependency line. Confirm the setting's block or the dependency line is in that file. The module's ProGuard/R8 rules file (app/proguard-rules.pro, beside that build script) IS a target when the remediation adds a rule to it: -assumenosideeffects to strip logging, -keep, -dontwarn. Never list the root build.gradle, the root proguard-rules.pro, settings.gradle, gradle.properties, or anything under a build/ directory.
 
-Confirm every file with grep or glob before listing it.
+When the finding says the flagged code is third-party (a library), the library itself is never a target. The targets are this repository's own files that declare or use it: the dependency line in the module build script, and every source file that imports, instantiates or calls it. Search for the library's package (grep its import) so none is missed: removing the dependency while one use remains breaks the build. If nothing in this repository declares or uses it, return "targets": [].
+
+Some remediations require CREATING a file that does not exist in this repository yet: a new resource (res/xml/network_security_config.xml), a new class (SecureCryptoManager, a custom InputMethodService), a new config XML. Search for it first; a file that already exists is never new, it is a target. When the remediation creates a file, list it under new_files with the EXACT repository-relative path it must have, in the same module and source set as the files that use it:
+- a resource goes in <module>/src/main/res/<type>/<name>.xml, next to the module's existing res/ directory; the name is lowercase letters, digits and underscores;
+- a class goes in <module>/src/main/java/<package path>/<ClassName>.java (or kotlin/ and .kt, matching what the module already uses), where <package path> is the package of the class that will use it, unless the remediation names another package.
+The files that must change to USE the new file (the manifest that references it, the class that calls it) are ordinary targets, listed as usual. Only when you cannot tell where the new file belongs, list it under needs_new_file as "<file or class>: <what the remediation creates it for>" instead. Build files (build.gradle, proguard-rules.pro) are never new files.
+
+Confirm every existing file with grep or glob before listing it.
 
 Your final message must be ONLY this JSON object, with no other text:
-{"targets":[{"path":"<repository-relative path>","why":"<one short sentence: which part of the remediation this file carries>"}],"not_found":["<name>: <why it is not in this repository>"],"needs_new_file":["<file or class>: <what it is for>"]}
-Use "targets": [] when no file in this repository should change. Use "needs_new_file": [] when the remediation creates nothing new.`
+{"targets":[{"path":"<repository-relative path>","why":"<one short sentence: which part of the remediation this file carries>"}],"new_files":[{"path":"<exact repository-relative path to create>","why":"<what the remediation creates it for>"}],"not_found":["<name>: <why it is not in this repository>"],"needs_new_file":["<file or class>: <what it is for>"]}
+Use "targets": [] when no existing file should change, "new_files": [] when the remediation creates nothing, and "needs_new_file": [] unless a new file's place cannot be determined.`
 
 // targetsUserPrompt renders one KnoxIQ finding in full.
 func targetsUserPrompt(req TargetRequest) string {
@@ -83,6 +101,10 @@ func targetsUserPrompt(req TargetRequest) string {
 	}
 	if h := strings.TrimSpace(req.ClassHint); h != "" {
 		fmt.Fprintf(&b, "Class/symbol hint: %s\n", h)
+	}
+	if req.ThirdParty {
+		b.WriteString("KnoxIQ marks the flagged code as third-party (a library). " +
+			"Target only this repository's own files that declare or use it.\n")
 	}
 	writePromptSection(&b, "KnoxIQ finding title", req.Title)
 	writePromptSection(&b, "KnoxIQ finding description", req.Description)
@@ -106,6 +128,7 @@ type rawTargetReply struct {
 	Targets      *[]Target `json:"targets"`
 	NotFound     []string  `json:"not_found"`
 	NeedsNewFile []string  `json:"needs_new_file"`
+	NewFiles     []Target  `json:"new_files"`
 }
 
 // parseTargetReply returns the LAST JSON object in text that carries a
@@ -123,7 +146,8 @@ func parseTargetReply(text string) (TargetReply, error) {
 		if err := dec.Decode(&raw); err != nil || raw.Targets == nil {
 			continue
 		}
-		return TargetReply{Targets: *raw.Targets, NotFound: raw.NotFound, NeedsNewFile: raw.NeedsNewFile}, nil
+		return TargetReply{Targets: *raw.Targets, NotFound: raw.NotFound, NeedsNewFile: raw.NeedsNewFile,
+			NewFiles: raw.NewFiles}, nil
 	}
 	return TargetReply{}, ErrUnparseableReply
 }

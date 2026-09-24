@@ -70,7 +70,7 @@ func checkTarget(root, raw string) (string, string) {
 	if prunedComponent(root, dest) {
 		return "", reasonGenerated
 	}
-	if buildFileRE.MatchString(rel) {
+	if buildFileRE.MatchString(rel) && !editableBuildFile(root, rel) {
 		return "", reasonBuildFile
 	}
 	if !supportedTarget(rel) {
@@ -112,8 +112,12 @@ func prunedComponent(root, dest string) bool {
 }
 
 // supportedTarget is the set of files a fix call may edit today: Java/Kotlin
-// source, the manifest, and resource XML.
+// source, the manifest, resource XML, a module's build script and its
+// proguard-rules.pro.
 func supportedTarget(rel string) bool {
+	if isModuleBuildScript(rel) || isModuleRulesFile(rel) {
+		return true
+	}
 	switch strings.ToLower(path.Ext(rel)) {
 	case ".java", ".kt":
 		return true
@@ -131,11 +135,16 @@ func supportedTarget(rel string) bool {
 }
 
 // targetRank orders the fan-out: the manifest first, then resources, then
-// source, so a later call reads the declarations earlier calls changed.
+// source, so a later call reads the declarations earlier calls changed. A
+// module build script goes LAST: a dependency may leave it only after the
+// source that used it has been fixed, which checkRemovedDependency reads off
+// the tree on disk.
 func targetRank(rel string) int {
 	switch {
 	case path.Base(rel) == "AndroidManifest.xml":
 		return 0
+	case isModuleBuildScript(rel), isModuleRulesFile(rel):
+		return 3
 	case strings.EqualFold(path.Ext(rel), ".xml"):
 		return 1
 	default:
@@ -146,8 +155,14 @@ func targetRank(rel string) int {
 // orderTargets returns a sorted copy, stable within each rank.
 func orderTargets(targets []agent.Target) []agent.Target {
 	out := append([]agent.Target(nil), targets...)
+	rank := func(t agent.Target) int {
+		if t.New {
+			return -1 // created before anything that refers to it
+		}
+		return targetRank(t.Path)
+	}
 	sort.SliceStable(out, func(i, j int) bool {
-		return targetRank(out[i].Path) < targetRank(out[j].Path)
+		return rank(out[i]) < rank(out[j])
 	})
 	return out
 }

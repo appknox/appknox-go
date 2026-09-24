@@ -17,19 +17,23 @@ import (
 // UNCERTAIN findings are therefore IN SCOPE by design -- they are sent
 // deliberately, and the fix lands in a draft PR a human reviews.
 //
-// Two cases are skipped:
+// Validation absent is skipped. KnoxIQ records one for every finding it
+// returns, so a missing validation means something went wrong upstream. We
+// cannot establish the finding is real, so we do not touch the code. Treating
+// this as fixable would mean editing on the strength of a failure.
 //
-//   - validation absent. KnoxIQ records one for every finding it returns, so a
-//     missing validation means something went wrong upstream. We cannot
-//     establish the finding is real, so we do not touch the code. Treating this
-//     as fixable would mean editing on the strength of a failure.
-//   - code that is NOT first-party. A vendored library cannot be patched in the
-//     customer's tree, and attempting it is how autofix rewrites the wrong file.
-//     This is the filter that actually fires in practice.
+// Third-party findings are NOT skipped here. is_third_party says the flagged
+// code is a library, not where the fix goes: for mfva 37 (jedis) every step
+// KnoxIQ gives edits the app's own files -- the dependency line in
+// app/build.gradle and the Jedis usage in ExportedActivity.java. The locate
+// agent is told the finding is third-party (FindingUnit.ThirdParty) and may
+// target only files in this repository; validateTargets refuses vendored and
+// generated paths; and a third-party finding with nothing left to change is
+// skipped in runUnit as reasonThirdPartyNoSource.
 //
-// A nil IsValid/IsThirdParty inside a present validation still means "not
-// recorded" rather than false: Go's zero value would otherwise silently mark
-// such findings unfixable.
+// A nil IsValid inside a present validation still means "not recorded" rather
+// than false: Go's zero value would otherwise silently mark such findings
+// unfixable.
 func IsFixable(f *appknox.KnoxIQFinding) bool {
 	if f == nil || f.Validation == nil {
 		return false
@@ -39,10 +43,13 @@ func IsFixable(f *appknox.KnoxIQFinding) bool {
 		return false
 	}
 	// Defence in depth: the API is not supposed to send these at all.
-	if v.Verdict == "FALSE_POSITIVE" {
-		return false
-	}
-	return v.IsThirdParty == nil || !*v.IsThirdParty
+	return v.Verdict != "FALSE_POSITIVE"
+}
+
+// isThirdParty reports whether KnoxIQ marked the finding's code as a library.
+// nil means not recorded, and not recorded is not third-party.
+func isThirdParty(f *appknox.KnoxIQFinding) bool {
+	return f != nil && f.Validation != nil && f.Validation.IsThirdParty != nil && *f.Validation.IsThirdParty
 }
 
 // FixInstruction assembles KnoxIQ's remediation into the guidance handed to the
@@ -176,6 +183,7 @@ func knoxIQInputs(findings []*appknox.KnoxIQFinding, vulnerabilityName string) F
 			units = append(units, FindingUnit{
 				Title: f.Title, Description: f.Description, Remediation: text,
 				DeveloperPrompt: f.DeveloperPrompt, Criteria: verificationOf(f),
+				ThirdParty: isThirdParty(f),
 			})
 		} else {
 			skipped = append(skipped, findingOutcome{

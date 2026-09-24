@@ -50,6 +50,9 @@ type FixRequest struct {
 	// OtherFiles are the remediation's other targets. Each is fixed in its
 	// own call, so this file's fixer must not try to do their part.
 	OtherFiles []Target
+	// Create marks Path as a file that does not exist yet: the fixer gets a
+	// create_file tool bound to it, and FixFile reverts by deleting it.
+	Create bool
 }
 
 // FixResult is the outcome of a client-side agent fix. It is side-effect-free:
@@ -76,6 +79,9 @@ func fixWith(ctx context.Context, cfg Config, req FixRequest, run fixRunner) (Fi
 	if err != nil {
 		return FixResult{}, err
 	}
+	if req.Create {
+		return createWith(ctx, cfg, req, abs, run)
+	}
 	original, err := os.ReadFile(abs)
 	if err != nil {
 		return FixResult{}, err
@@ -100,13 +106,37 @@ func fixWith(ctx context.Context, cfg Config, req FixRequest, run fixRunner) (Fi
 	}, nil
 }
 
+// createWith is fixWith for a new file: it must not exist beforehand, and the
+// revert deletes it (and the directories it needed) so disk is left as found.
+func createWith(ctx context.Context, cfg Config, req FixRequest, abs string, run fixRunner) (FixResult, error) {
+	if _, err := os.Lstat(abs); err == nil {
+		return FixResult{}, fmt.Errorf("agent: %s already exists; it is not a new file", req.Path)
+	}
+	dirs := missingDirs(abs)
+	var edits []editRecord
+	runErr := run(ctx, cfg, req, &edits)
+	patched, readErr := os.ReadFile(abs)
+	revertErr := removeCreated(abs, dirs)
+	if runErr != nil {
+		return FixResult{}, runErr
+	}
+	if revertErr != nil {
+		return FixResult{}, fmt.Errorf("agent: removing %s after fix: %w", req.Path, revertErr)
+	}
+	if readErr != nil {
+		// Never created: the fixer abstained.
+		return FixResult{}, nil
+	}
+	return FixResult{Changed: true, PatchedContent: string(patched), Diff: buildDiff(edits)}, nil
+}
+
 // sdkFix drives the Tool Runner with read-only tools + the edit tool, routed
 // through Mycroft.
 func sdkFix(ctx context.Context, cfg Config, req FixRequest, edits *[]editRecord) error {
 	if cfg.Host == "" || cfg.Token == "" {
 		return errors.New("agent: Host and Token are required to reach Mycroft")
 	}
-	tools, err := buildFixTools(req.RepoRoot, req.Path, edits)
+	tools, err := buildFixTools(req.RepoRoot, req.Path, req.Create, edits)
 	if err != nil {
 		return err
 	}
@@ -176,8 +206,9 @@ func boundDeclineReason(text string) string {
 	return text[:maxDeclineReasonLen] + "… [truncated]"
 }
 
-// buildFixTools = read-only Read/Grep/Glob + the edit tool (restricted to allowedPath).
-func buildFixTools(root, allowedPath string, edits *[]editRecord) ([]sdk.BetaTool, error) {
+// buildFixTools = read-only Read/Grep/Glob + the edit tool (restricted to
+// allowedPath), plus create_file when allowedPath is a new file.
+func buildFixTools(root, allowedPath string, create bool, edits *[]editRecord) ([]sdk.BetaTool, error) {
 	tools, err := buildLocateTools(root)
 	if err != nil {
 		return nil, err
@@ -188,7 +219,17 @@ func buildFixTools(root, allowedPath string, edits *[]editRecord) ([]sdk.BetaToo
 	if err != nil {
 		return nil, err
 	}
-	return append(tools, edit), nil
+	tools = append(tools, edit)
+	if !create {
+		return tools, nil
+	}
+	createTool, err := toolrunner.NewBetaToolFromJSONSchema(
+		"create_file", "Create the new target file with its complete content. Refuses if the file exists.",
+		createHandler(root, allowedPath, edits))
+	if err != nil {
+		return nil, err
+	}
+	return append(tools, createTool), nil
 }
 
 // buildDiff renders the recorded edits as a simple -old/+new diff.

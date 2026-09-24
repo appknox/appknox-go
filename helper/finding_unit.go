@@ -16,6 +16,11 @@ type FindingUnit struct {
 	DeveloperPrompt string
 	Criteria        []string
 	ClassHint       string // manual --class-hint path only
+	// ThirdParty is KnoxIQ's is_third_party: the flagged code is a library.
+	// The fix may still be the app's own (drop the dependency, remove its
+	// use); the locate agent is told so, and a unit with no in-repo target is
+	// skipped as reasonThirdPartyNoSource.
+	ThirdParty bool
 }
 
 // unitsOf returns the units to run. Inputs built by knoxIQInputs carry one
@@ -35,16 +40,11 @@ func unitsOf(in FindingInputs) []FindingUnit {
 }
 
 // unfixableReason says why KnoxIQ gave nothing to fix for an analysis, for
-// its SKIPPED outcome line. Third-party wins over the other reasons because
-// it is the product decision that applies whatever else is true.
+// its SKIPPED outcome line. Third-party is not one of the reasons: those
+// findings are kept (see IsFixable) and decided by where the fix lands.
 func unfixableReason(all []*appknox.KnoxIQFinding) string {
 	if len(all) == 0 {
 		return "KnoxIQ: no findings"
-	}
-	for _, f := range all {
-		if f != nil && f.Validation != nil && f.Validation.IsThirdParty != nil && *f.Validation.IsThirdParty {
-			return "KnoxIQ: third-party code"
-		}
 	}
 	for _, f := range all {
 		if f == nil || f.Validation == nil {

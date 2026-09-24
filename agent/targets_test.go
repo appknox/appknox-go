@@ -29,6 +29,17 @@ func TestTargetsUserPrompt_CarriesFullKnoxIQText(t *testing.T) {
 	require.NotContains(t, p, "Class/symbol hint", "no hint line when there is no hint")
 }
 
+func TestTargetsUserPrompt_ThirdPartyIsSaid(t *testing.T) {
+	p := targetsUserPrompt(TargetRequest{VulnerabilityID: 37, Finding: "Redis library", ThirdParty: true})
+	require.Contains(t, p, "KnoxIQ marks the flagged code as third-party")
+	require.NotContains(t, targetsUserPrompt(TargetRequest{Finding: "x"}), "third-party")
+}
+
+func TestTargetsSystemPrompt_ModuleBuildScriptIsATarget(t *testing.T) {
+	require.Contains(t, targetsSystemPrompt, "A module's build script")
+	require.Contains(t, targetsSystemPrompt, "Never list the root build.gradle")
+}
+
 func TestTargetsUserPrompt_ManualHintPath(t *testing.T) {
 	p := targetsUserPrompt(TargetRequest{Finding: "Weak PRNG", ClassHint: "Lcom/x/A;"})
 	require.Contains(t, p, "Finding: Weak PRNG")
@@ -164,4 +175,11 @@ func TestTargetsParams_HonoursOverrides(t *testing.T) {
 func TestSdkLocateTargets_RequiresConfig(t *testing.T) {
 	_, err := sdkLocateTargets(context.Background(), Config{}, TargetRequest{RepoRoot: t.TempDir()})
 	require.Error(t, err)
+}
+
+// mfva 17: the Log-stripping rule lives in app/proguard-rules.pro, so locate
+// must list a module's rules file rather than being told never to.
+func TestTargetsPromptAllowsModuleRulesFile(t *testing.T) {
+	require.Contains(t, targetsSystemPrompt, "app/proguard-rules.pro, beside that build script) IS a target")
+	require.Contains(t, targetsSystemPrompt, "the root proguard-rules.pro")
 }

@@ -61,10 +61,8 @@ func TestUnitsOf_KeepsExplicitUnits(t *testing.T) {
 }
 
 func TestUnfixableReason(t *testing.T) {
-	yes, no := true, false
+	no := false
 	require.Equal(t, "KnoxIQ: no findings", unfixableReason(nil))
-	third := &appknox.KnoxIQFinding{Validation: &appknox.KnoxIQValidation{IsThirdParty: &yes}}
-	require.Equal(t, "KnoxIQ: third-party code", unfixableReason([]*appknox.KnoxIQFinding{third}))
 	fp := &appknox.KnoxIQFinding{Validation: &appknox.KnoxIQValidation{IsValid: &no}}
 	require.Equal(t, "KnoxIQ: false positive", unfixableReason([]*appknox.KnoxIQFinding{fp}))
 	verdict := &appknox.KnoxIQFinding{Validation: &appknox.KnoxIQValidation{Verdict: "FALSE_POSITIVE"}}
