@@ -346,5 +346,61 @@ func TestRun_LocateOnlyMakesNoFixCallsAndNoDelivery(t *testing.T) {
 	require.Equal(t, []string{rel}, out.Located)
 	require.Equal(t, statusTargets, out.Findings[0].Status)
 	require.Equal(t, rel+" (weak PRNG here); app/build.gradle rejected: invalid path; "+
-		"not found in repo: java.util.Random: framework (likely third-party)", out.Findings[0].Detail)
+		"not found in repo: java.util.Random: framework", out.Findings[0].Detail)
+}
+
+// TestRunUnit_NeedsNewFileSkipsWholeFinding is stage A: a locate reply that
+// names an existing target AND a needs_new_file entry must skip the whole
+// finding rather than half-apply it -- fixing the existing target would
+// still leave the remediation referring to a class or resource that does not
+// exist, breaking the PR build.
+func TestRunUnit_NeedsNewFileSkipsWholeFinding(t *testing.T) {
+	root, rel := repoWithFile(t, javaBody)
+	fixed := false
+	d := autofixDeps{
+		locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+			return agent.TargetReply{
+				Targets:      []agent.Target{{Path: rel, Why: "extends the base activity"}},
+				NeedsNewFile: []string{"SecureBaseActivity: base class the activities must extend"},
+			}, nil
+		},
+		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+			fixed = true
+			return agent.FixResult{Changed: true, PatchedContent: "x"}, nil
+		},
+	}
+	s := dryAgentSession(root, d,
+		analysisTarget{AnalysisID: 1, Inputs: oneClass("StrandHogg", "extend SecureBaseActivity")})
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.False(t, fixed, "no fix call for a finding that needs a new file")
+	require.Empty(t, out.Patches)
+	require.Len(t, out.Findings, 1)
+	require.Equal(t, statusSkipped, out.Findings[0].Status)
+	require.True(t, strings.HasPrefix(out.Findings[0].Detail, reasonNeedsNewFile),
+		"Detail must start with the reason: %q", out.Findings[0].Detail)
+	require.Contains(t, out.Findings[0].Detail, "SecureBaseActivity")
+}
+
+// TestRunUnit_NeedsNewFileSkipsInLocateOnlyToo is stage A: --locate-only must
+// print SKIPPED for this finding, not TARGETS -- the new-file gap is real
+// whether or not a fix call would have followed.
+func TestRunUnit_NeedsNewFileSkipsInLocateOnlyToo(t *testing.T) {
+	root, rel := repoWithFile(t, javaBody)
+	d := autofixDeps{
+		locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+			return agent.TargetReply{
+				Targets:      []agent.Target{{Path: rel, Why: "extends the base activity"}},
+				NeedsNewFile: []string{"SecureBaseActivity: base class the activities must extend"},
+			}, nil
+		},
+	}
+	s := fixSession{opts: AutofixOptions{FixMode: "agent", FileID: 1, LocateOnly: true},
+		d: d, root: root, work: newWorkingTree(root),
+		targets: []analysisTarget{{AnalysisID: 1, Inputs: oneClass("StrandHogg", "extend SecureBaseActivity")}}}
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out.Findings, 1)
+	require.Equal(t, statusSkipped, out.Findings[0].Status)
+	require.True(t, strings.HasPrefix(out.Findings[0].Detail, reasonNeedsNewFile))
 }

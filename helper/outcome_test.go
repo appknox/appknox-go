@@ -42,7 +42,7 @@ func TestSummarizeFinding_SkippedNotFound(t *testing.T) {
 	o := summarizeFinding(17, "Application Logs", nil,
 		notFoundNotes([]string{"android.util.Log: framework class"}))
 	require.Equal(t, statusSkipped, o.Status)
-	require.Equal(t, "not found in repo: android.util.Log: framework class (likely third-party)", o.Detail)
+	require.Equal(t, "not found in repo: android.util.Log: framework class", o.Detail)
 }
 
 func TestSummarizeFinding_SkippedNothing(t *testing.T) {
@@ -55,7 +55,7 @@ func TestSummarizeFinding_NotFoundDoesNotDowngradeFixed(t *testing.T) {
 	o := summarizeFinding(121, "Tapjacking", []targetResult{{Path: manifestPath, Patched: true}},
 		notFoundNotes([]string{"LinearLayout: framework widget"}))
 	require.Equal(t, statusFixed, o.Status)
-	require.Equal(t, manifestPath+"; not found in repo: LinearLayout: framework widget (likely third-party)", o.Detail)
+	require.Equal(t, manifestPath+"; not found in repo: LinearLayout: framework widget", o.Detail)
 }
 
 func TestLocatedOutcome(t *testing.T) {
@@ -65,7 +65,7 @@ func TestLocatedOutcome(t *testing.T) {
 		notFoundNotes([]string{"java.util.Random: framework"}))
 	require.Equal(t, statusTargets, o.Status)
 	require.Equal(t, "a/A.java (Random here); b.gradle rejected: invalid path; "+
-		"not found in repo: java.util.Random: framework (likely third-party)", o.Detail)
+		"not found in repo: java.util.Random: framework", o.Detail)
 	require.Equal(t, "locate: no targets", locatedOutcome(FindingInputs{}, nil, nil, nil).Detail)
 }
 

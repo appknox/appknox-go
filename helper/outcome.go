@@ -20,6 +20,13 @@ const (
 	statusTargets = "TARGETS" // --locate-only: what would be fixed
 
 	reasonDeclined = "declined: no edit made"
+
+	// reasonNeedsNewFile is a whole finding's SKIPPED reason when its
+	// remediation needs a file that does not exist in the repository yet.
+	// New-file support is out of scope, and fixing the finding's other
+	// targets would still leave a dangling reference, so the whole finding
+	// is skipped instead of half-applied.
+	reasonNeedsNewFile = "needs a new file (not supported)"
 )
 
 // ErrAllCallsFailed marks a run in which every locate and fix call failed at
@@ -154,7 +161,7 @@ func rejectionResults(rs []rejection) []targetResult {
 func notFoundNotes(names []string) []string {
 	out := make([]string, 0, len(names))
 	for _, n := range names {
-		out = append(out, "not found in repo: "+n+" (likely third-party)")
+		out = append(out, "not found in repo: "+n)
 	}
 	return out
 }

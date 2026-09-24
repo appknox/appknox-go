@@ -46,6 +46,12 @@ type Target struct {
 type TargetReply struct {
 	Targets  []Target `json:"targets"`
 	NotFound []string `json:"not_found"`
+	// NeedsNewFile lists remediations that require a file that does not
+	// exist in this repository yet (a new class, resource or config file).
+	// Optional: a reply without it leaves this nil. New-file support is out
+	// of scope, so a non-empty NeedsNewFile skips the whole finding rather
+	// than fixing the other targets and leaving a dangling reference.
+	NeedsNewFile []string `json:"needs_new_file"`
 }
 
 const targetsSystemPrompt = `You are a security code-locating assistant. A SAST scan of a compiled mobile app flagged a vulnerability, and KnoxIQ wrote a remediation for it. The app's source is checked out on disk. Use the read_file, grep and glob tools (read-only) to find EVERY repository file that this remediation says to change. Never edit anything.
@@ -59,11 +65,13 @@ KnoxIQ worked from the compiled app, not from this source, so it names things in
 
 Framework and library classes are NOT targets: android.*, androidx.*, java.*, javax.*, kotlin.*, okhttp3.*, and widgets such as LinearLayout are not the app's code. If KnoxIQ names something you cannot find in this repository, list it under not_found instead of guessing. Never list build files (build.gradle, settings.gradle, gradle.properties, proguard-rules.pro) or anything under a build/ directory.
 
+Some remediations require CREATING a file that does not exist in this repository yet, for example a new class (SecureBaseActivity, a custom InputMethodService), a new resource (res/xml/network_security_config.xml) or a new config file. Search for it first. If the remediation needs such a file and it is not in the repository, list it under needs_new_file as "<file or class>: <what the remediation creates it for>". Do not put it under not_found. List the existing files as targets as usual.
+
 Confirm every file with grep or glob before listing it.
 
 Your final message must be ONLY this JSON object, with no other text:
-{"targets":[{"path":"<repository-relative path>","why":"<one short sentence: which part of the remediation this file carries>"}],"not_found":["<name>: <why it is not in this repository>"]}
-Use "targets": [] when no file in this repository should change.`
+{"targets":[{"path":"<repository-relative path>","why":"<one short sentence: which part of the remediation this file carries>"}],"not_found":["<name>: <why it is not in this repository>"],"needs_new_file":["<file or class>: <what it is for>"]}
+Use "targets": [] when no file in this repository should change. Use "needs_new_file": [] when the remediation creates nothing new.`
 
 // targetsUserPrompt renders one KnoxIQ finding in full.
 func targetsUserPrompt(req TargetRequest) string {
@@ -95,8 +103,9 @@ func writePromptSection(b *strings.Builder, heading, body string) {
 // rawTargetReply detects a missing "targets" field, which a plain slice
 // cannot distinguish from an empty one.
 type rawTargetReply struct {
-	Targets  *[]Target `json:"targets"`
-	NotFound []string  `json:"not_found"`
+	Targets      *[]Target `json:"targets"`
+	NotFound     []string  `json:"not_found"`
+	NeedsNewFile []string  `json:"needs_new_file"`
 }
 
 // parseTargetReply returns the LAST JSON object in text that carries a
@@ -114,7 +123,7 @@ func parseTargetReply(text string) (TargetReply, error) {
 		if err := dec.Decode(&raw); err != nil || raw.Targets == nil {
 			continue
 		}
-		return TargetReply{Targets: *raw.Targets, NotFound: raw.NotFound}, nil
+		return TargetReply{Targets: *raw.Targets, NotFound: raw.NotFound, NeedsNewFile: raw.NeedsNewFile}, nil
 	}
 	return TargetReply{}, ErrUnparseableReply
 }

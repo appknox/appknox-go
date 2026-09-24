@@ -39,7 +39,7 @@ func TestTargetsUserPrompt_ManualHintPath(t *testing.T) {
 func TestTargetsSystemPrompt_DemandsJSONAndNamesCompiledForms(t *testing.T) {
 	for _, want := range []string{
 		`"targets"`, `"not_found"`, "Foo$3", "overscured", "res/layout", "AndroidManifest.xml",
-		"okhttp3", "grep or glob",
+		"okhttp3", "grep or glob", "needs_new_file",
 	} {
 		require.Contains(t, targetsSystemPrompt, want)
 	}
@@ -97,6 +97,25 @@ func TestParseTargetReply_EmptyTargetsWithNotFound(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, r.Targets)
 	require.Equal(t, []string{"android.util.Log: framework class"}, r.NotFound)
+}
+
+// TestParseTargetReply_NeedsNewFile is stage A: a remediation that needs a
+// file that does not exist yet is carried through in its own structured
+// field, never inferred from not_found free text.
+func TestParseTargetReply_NeedsNewFile(t *testing.T) {
+	r, err := parseTargetReply(`{"targets":[{"path":"a/B.java","why":"x"}],` +
+		`"needs_new_file":["SecureBaseActivity: base class the activities must extend"]}`)
+	require.NoError(t, err)
+	require.Equal(t, []string{"SecureBaseActivity: base class the activities must extend"}, r.NeedsNewFile)
+}
+
+// TestParseTargetReply_NoNeedsNewFileFieldLeavesItNil is stage A: a reply
+// with no needs_new_file field still parses, and the field is nil rather
+// than an empty slice, so callers can test len() the same way either way.
+func TestParseTargetReply_NoNeedsNewFileFieldLeavesItNil(t *testing.T) {
+	r, err := parseTargetReply(`{"targets":[{"path":"a/B.java","why":"x"}]}`)
+	require.NoError(t, err)
+	require.Nil(t, r.NeedsNewFile)
 }
 
 func TestLocateTargetsWith_ParsesRunnerText(t *testing.T) {

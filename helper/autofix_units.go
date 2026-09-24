@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/appknox/appknox-go/agent"
 	"github.com/appknox/appknox-go/fixservice"
@@ -44,6 +45,21 @@ func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit
 	reply, locateErr := s.locateUnit(ctx, in, u)
 	if locateErr != nil {
 		return s.locateFailed(in, locateErr)
+	}
+	if len(reply.NeedsNewFile) > 0 {
+		// The remediation needs a file that does not exist yet (new-file
+		// support is out of scope); fixing the rest of the targets would
+		// still leave the finding referring to a class or resource that is
+		// not there, breaking the PR build. Skip the whole finding: no
+		// validation, no fix calls, no patches. Applies in --locate-only
+		// too, so the line is SKIPPED there, never TARGETS.
+		res = unitResult{outcome: findingOutcome{
+			VulnerabilityID: in.VulnerabilityID,
+			Finding:         in.Finding,
+			Status:          statusSkipped,
+			Detail:          reasonNeedsNewFile + ": " + strings.Join(reply.NeedsNewFile, "; "),
+		}}
+		return res, nil
 	}
 	accepted, rejected := validateTargets(s.root, reply.Targets)
 	res = unitResult{located: targetPaths(accepted)}
