@@ -129,7 +129,10 @@ func everyLocatableAnalysis(
 			continue
 		}
 		if inputs.Remediation == "" {
-			continue // KnoxIQ judged nothing here worth fixing
+			// Printed here, not dropped: a finding that vanishes without a line
+			// is indistinguishable from one autofix never considered.
+			fmt.Println(formatOutcomeLine(skippedAnalysis(id, inputs)))
+			continue
 		}
 		targets = append(targets, analysisTarget{AnalysisID: id, Inputs: inputs})
 	}

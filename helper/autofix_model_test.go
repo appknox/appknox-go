@@ -38,9 +38,9 @@ func captureModels(t *testing.T, opts AutofixOptions) (locateModel, fixModel str
 		// unset work is a nil deref there.
 		work: newWorkingTree(root),
 		d: autofixDeps{
-			locate: func(_ context.Context, cfg agent.Config, _ agent.Request) (string, error) {
+			locateTargets: func(_ context.Context, cfg agent.Config, _ agent.TargetRequest) (agent.TargetReply, error) {
 				locateModel = cfg.Model
-				return rel, nil
+				return agent.TargetReply{Targets: []agent.Target{{Path: rel}}}, nil
 			},
 			agentFix: func(_ context.Context, cfg agent.Config, _ agent.FixRequest) (agent.FixResult, error) {
 				fixModel = cfg.Model

@@ -16,9 +16,7 @@ func TestRun_SecondFindingInTheSameFileIsNotDropped(t *testing.T) {
 
 	// Each fixer call rewrites one token, reading whatever is on disk now.
 	d := autofixDeps{
-		locate: func(context.Context, agent.Config, agent.Request) (string, error) {
-			return "app/A.java", nil
-		},
+		locateTargets: targetsAt("app/A.java"),
 		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
 			cur, err := readUnderRoot(req.RepoRoot, req.Path)
 			if err != nil {

@@ -78,9 +78,9 @@ func repoWithFile(t *testing.T, body string) (string, string) {
 // FindingInputs a real single-analysis file used to produce.
 func deps(path string, res fixservice.Result, in FindingInputs) autofixDeps {
 	return autofixDeps{
-		locate:      func(context.Context, agent.Config, agent.Request) (string, error) { return path, nil },
-		analysisIDs: func(context.Context, int, int) ([]int, error) { return []int{1}, nil },
-		fetch:       func(context.Context, int, int) (FindingInputs, error) { return in, nil },
+		locateTargets: targetsAt(path),
+		analysisIDs:   func(context.Context, int, int) ([]int, error) { return []int{1}, nil },
+		fetch:         func(context.Context, int, int) (FindingInputs, error) { return in, nil },
 		submit: func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
 			return res, nil
 		},
@@ -273,9 +273,9 @@ func TestRunAutofix_UsesResolvedAPIHost(t *testing.T) {
 
 	var gotHost, gotToken string
 	d := deps("", fixservice.Result{}, FindingInputs{})
-	d.locate = func(_ context.Context, cfg agent.Config, _ agent.Request) (string, error) {
+	d.locateTargets = func(_ context.Context, cfg agent.Config, _ agent.TargetRequest) (agent.TargetReply, error) {
 		gotHost, gotToken = cfg.Host, cfg.Token
-		return "", nil
+		return agent.TargetReply{}, nil
 	}
 	_, err := runAutofix(context.Background(),
 		AutofixOptions{RepoPath: t.TempDir(), Finding: "x"}, d)
@@ -328,7 +328,7 @@ func TestRun_EmptyRemediationNeverReachesTheFixer(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
 	agentFixCalled := false
 	d := autofixDeps{
-		locate: func(context.Context, agent.Config, agent.Request) (string, error) { return rel, nil },
+		locateTargets: targetsAt(rel),
 		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
 			agentFixCalled = true
 			return agent.FixResult{Changed: true, PatchedContent: "must never be produced\n"}, nil
@@ -352,36 +352,6 @@ func TestRun_EmptyRemediationNeverReachesTheFixer(t *testing.T) {
 		"the fixer must never be called for a target whose Remediation is empty")
 }
 
-// TestLocateAll_EmptyClassHintsStillLocatesOnce is the regression test for
-// C1: knoxIQInputs derives ClassHints with the same class-descriptor regex
-// the targeting layer was explicitly built to stop requiring, so a manifest /
-// network-config / permission finding routinely has ZERO class hints. Before
-// this fix, looping over in.ClassHints meant such a target made zero locate
-// calls and was silently dropped at the len(paths) == 0 guard in run() --
-// the class-descriptor precondition surviving one layer below resolveTargets,
-// undoing the whole point of the port. A hint-less finding must still get
-// exactly one locate attempt, with an empty ClassHint, so the locate agent
-// can work from the finding text alone.
-func TestLocateAll_EmptyClassHintsStillLocatesOnce(t *testing.T) {
-	var calls int
-	var gotHint string
-	s := fixSession{
-		d: autofixDeps{
-			locate: func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
-				calls++
-				gotHint = req.ClassHint
-				return "app/src/main/AndroidManifest.xml", nil
-			},
-		},
-	}
-	paths, err := s.locateAll(context.Background(),
-		FindingInputs{Finding: "Application Data Backup Allowed"})
-	require.NoError(t, err)
-	require.Equal(t, 1, calls, "a hint-less finding must still get exactly one locate call")
-	require.Equal(t, "", gotHint, "the hint-less pass must carry an empty ClassHint")
-	require.Equal(t, []string{"app/src/main/AndroidManifest.xml"}, paths)
-}
-
 func TestRunAutofix_FullFlow_PushesBranch(t *testing.T) {
 	root, rel := repoWithFile(t, "int r = new Random().nextInt();\n")
 	res := fixservice.Result{Changed: true, PatchedContent: "int r = new SecureRandom().nextInt();\n", Confidence: 0.95}
@@ -401,10 +371,10 @@ func TestRunAutofix_MultiClass_FixesEachLocatedFile(t *testing.T) {
 	for _, rel := range []string{"app/A.java", "app/B.java"} {
 		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte("orig\n"), 0o644))
 	}
-	pathFor := map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java"}
 	d := deps("", fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, FindingInputs{})
-	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
-		return pathFor[req.ClassHint], nil // each class → its own file
+	d.locateTargets = func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
+		require.Equal(t, "com/x/A, com/x/B", req.ClassHint)
+		return agent.TargetReply{Targets: []agent.Target{{Path: "app/A.java"}, {Path: "app/B.java"}}}, nil
 	}
 	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
 		return FindingInputs{Finding: "Derived Crypto Keys",
@@ -429,8 +399,9 @@ func TestRunAutofix_MultiClass_PushBranch_OneBranch(t *testing.T) {
 	}
 	var delivered []filePatch
 	d := deps("", fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, FindingInputs{})
-	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
-		return map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java"}[req.ClassHint], nil
+	d.locateTargets = func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
+		require.Equal(t, "com/x/A, com/x/B", req.ClassHint)
+		return agent.TargetReply{Targets: []agent.Target{{Path: "app/A.java"}, {Path: "app/B.java"}}}, nil
 	}
 	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
 		return FindingInputs{Finding: "Multi", ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}, nil
@@ -558,9 +529,10 @@ func TestRunAutofix_FileID_SkipsFailedFinding(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "app"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "app/A.java"), []byte("orig\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "app/B.java"), []byte("orig\n"), 0o644))
+	pathFor := map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java"}
 	d := deps("", fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, FindingInputs{})
-	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
-		return map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java"}[req.ClassHint], nil
+	d.locateTargets = func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
+		return agent.TargetReply{Targets: []agent.Target{{Path: pathFor[req.ClassHint]}}}, nil
 	}
 	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{1, 2}, nil }
 	d.fetch = func(_ context.Context, _, analysisID int) (FindingInputs, error) {
@@ -745,8 +717,8 @@ func TestRunAutofix_FixBudgetExhausted_TruncatesButKeepsEarlierPatches(t *testin
 	}
 	pathFor := map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java", "com/x/C": "app/C.java"}
 	d := deps("", fixservice.Result{}, FindingInputs{})
-	d.locate = func(_ context.Context, _ agent.Config, req agent.Request) (string, error) {
-		return pathFor[req.ClassHint], nil
+	d.locateTargets = func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
+		return agent.TargetReply{Targets: []agent.Target{{Path: pathFor[req.ClassHint]}}}, nil
 	}
 	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{1, 2, 3}, nil }
 	d.fetch = func(_ context.Context, _, analysisID int) (FindingInputs, error) {
@@ -785,12 +757,12 @@ func TestRunAutofix_LocateBudgetExhausted_Truncates(t *testing.T) {
 			ClassHints: []string{"com/x/C"}, Remediation: "fix"}, nil
 	}
 	var locateCalls int
-	d.locate = func(context.Context, agent.Config, agent.Request) (string, error) {
+	d.locateTargets = func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
 		locateCalls++
 		if locateCalls == 1 {
-			return rel, nil
+			return agent.TargetReply{Targets: []agent.Target{{Path: rel}}}, nil
 		}
-		return "", errors.New("403 invalid credential")
+		return agent.TargetReply{}, errors.New("403 invalid credential")
 	}
 	opts := appknoxOpts(t, root)
 	opts.DryRun = true
@@ -806,8 +778,8 @@ func TestRunAutofix_LocateBudgetExhausted_Truncates(t *testing.T) {
 func TestRunAutofix_TwoFindingsSameFile_CollapsedPatchNamesBothAndDiffsBoth(t *testing.T) {
 	root, rel := repoWithFile(t, "line1\nline2\n")
 	d := autofixDeps{
-		locate:      func(context.Context, agent.Config, agent.Request) (string, error) { return rel, nil },
-		analysisIDs: func(context.Context, int, int) ([]int, error) { return []int{1, 2}, nil },
+		locateTargets: targetsAt(rel),
+		analysisIDs:   func(context.Context, int, int) ([]int, error) { return []int{1, 2}, nil },
 		fetch: func(_ context.Context, _, analysisID int) (FindingInputs, error) {
 			if analysisID == 1 {
 				return FindingInputs{Finding: "Finding A", Remediation: "fix a"}, nil

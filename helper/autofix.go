@@ -52,14 +52,14 @@ type AutofixOptions struct {
 
 // autofixDeps are the injectable collaborators (seams for cost-free tests).
 type autofixDeps struct {
-	locate      func(ctx context.Context, cfg agent.Config, req agent.Request) (string, error)
-	fetch       func(ctx context.Context, fileID, analysisID int) (FindingInputs, error)
-	analysisIDs func(ctx context.Context, fileID, riskThreshold int) ([]int, error)
-	submit      func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
-	agentFix    func(ctx context.Context, cfg agent.Config, req agent.FixRequest) (agent.FixResult, error)
-	deliver     func(ctx context.Context, opts AutofixOptions, patches []filePatch) (Delivery, error)
-	report      func(ctx context.Context, opts AutofixOptions, d Delivery, patches []filePatch) error
-	knoxiqReady func(ctx context.Context, fileID int) error
+	locateTargets func(ctx context.Context, cfg agent.Config, req agent.TargetRequest) (agent.TargetReply, error)
+	fetch         func(ctx context.Context, fileID, analysisID int) (FindingInputs, error)
+	analysisIDs   func(ctx context.Context, fileID, riskThreshold int) ([]int, error)
+	submit        func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
+	agentFix      func(ctx context.Context, cfg agent.Config, req agent.FixRequest) (agent.FixResult, error)
+	deliver       func(ctx context.Context, opts AutofixOptions, patches []filePatch) (Delivery, error)
+	report        func(ctx context.Context, opts AutofixOptions, d Delivery, patches []filePatch) error
+	knoxiqReady   func(ctx context.Context, fileID int) error
 }
 
 // defaultDeps wires every real collaborator except fetch and analysisIDs,
@@ -69,12 +69,12 @@ type autofixDeps struct {
 // a stub" apart from "use the real thing".
 func defaultDeps() autofixDeps {
 	return autofixDeps{
-		locate:      agent.LocateFile,
-		submit:      fixservice.SubmitAndAwait,
-		agentFix:    agent.FixFile,
-		deliver:     deliverBranch,
-		report:      reportAutofixPR,
-		knoxiqReady: checkKnoxIQReady,
+		locateTargets: agent.LocateTargets,
+		submit:        fixservice.SubmitAndAwait,
+		agentFix:      agent.FixFile,
+		deliver:       deliverBranch,
+		report:        reportAutofixPR,
+		knoxiqReady:   checkKnoxIQReady,
 	}
 }
 
@@ -109,6 +109,10 @@ type Outcome struct {
 	// leave the developer with nothing to review, so the work already done is
 	// kept and delivered, and this field labels the result as partial.
 	Truncated string
+
+	// Findings holds one outcome line per KnoxIQ finding attempted, plus one
+	// per analysis KnoxIQ gave nothing to fix (spec 3.4).
+	Findings []findingOutcome
 }
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
@@ -154,6 +158,7 @@ func ProcessAutofix(opts AutofixOptions) {
 		return
 	}
 	if fail {
+		printOutcomeLines(out.Findings)
 		PrintError(err)
 		os.Exit(1)
 	}
@@ -426,6 +431,9 @@ type fixSession struct {
 	// work is shared across analyses so two findings in the same file compose
 	// instead of overwriting each other.
 	work *workingTree
+	// tally counts locate and fix calls for the all-failed exit decision.
+	// run() sets it; a nil tally records nothing.
+	tally *callTally
 }
 
 // run locates and fixes each finding, then delivers every patch on one branch.
@@ -438,70 +446,38 @@ type fixSession struct {
 // the guard the fetch loop in autofix_targets.go already has for the KnoxIQ
 // GETs; this is the same guard for the two calls that actually go through the
 // gateway (locate and fix).
+//
+// The unit of work is a KnoxIQ finding (spec 3.3): each analysis's findings
+// (unitsOf) are located and fixed one at a time via runUnit, in manifest →
+// res → source order within a finding, rather than the whole analysis
+// sharing one locate call.
 func (s fixSession) run(ctx context.Context) (Outcome, error) {
+	s.tally = &callTally{}
 	out := Outcome{}
 	located := map[string]bool{}
 targetLoop:
 	for i, t := range s.targets {
 		in := t.Inputs
-		paths, err := s.locateAll(ctx, in)
-		if err != nil {
+		if in.Remediation == "" && in.SkipReason != "" {
+			out.Findings = append(out.Findings, skippedAnalysis(t.AnalysisID, in))
+			continue
+		}
+		for _, u := range unitsOf(in) {
+			res, err := s.runUnit(ctx, in, u)
+			out = mergeUnit(out, located, res)
+			if err == nil {
+				continue
+			}
 			if isGatewayBudgetExhausted(err) {
 				s.truncate(&out, i, err)
 				break targetLoop
 			}
-			if s.opts.FileID <= 0 {
-				return Outcome{}, err
-			}
-			fmt.Printf("autofix: skipping %q: %v\n", in.Finding, err)
-			continue
+			return out, err
 		}
-		for _, p := range paths {
-			if !located[p] {
-				located[p] = true
-				out.Located = append(out.Located, p)
-			}
-		}
-		// in.Remediation == "" is NOT dead: resolveTargets only guarantees it
-		// non-empty on the automatic --file-id path (everyLocatableAnalysis
-		// filters it there). A manual --finding target never sets Remediation
-		// at all, and --file-id + --analysis-id passes through whatever
-		// d.fetch returned, unfiltered -- both can reach here empty. A fix
-		// built on no instruction is worse than no fix, so this must hold for
-		// every path, not just the one where it happens to be redundant.
-		if len(paths) == 0 || in.Remediation == "" {
-			continue
-		}
-		for _, p := range paths {
-			res, err := s.produceFix(ctx, p, in)
-			if err != nil {
-				if isGatewayBudgetExhausted(err) {
-					s.truncate(&out, i, err)
-					break targetLoop
-				}
-				if s.opts.FileID <= 0 {
-					return out, err
-				}
-				fmt.Printf("autofix: skipping %s for %q: %v\n", p, in.Finding, err)
-				continue
-			}
-			if res.Changed && res.PatchedContent != "" {
-				// Read the pre-patch content BEFORE applying, for the cosmetic
-				// advice below; after apply it would compare a file to itself.
-				before, readErr := readUnderRoot(s.root, p)
-				if err := s.work.apply(p, res.PatchedContent); err != nil {
-					return out, err
-				}
-				advice := ""
-				if readErr == nil {
-					advice = formattingAdvice(p, before, res.PatchedContent)
-				}
-				out.Patches = append(out.Patches, filePatch{
-					Path: p, Content: res.PatchedContent, Diff: res.UnifiedDiff,
-					Confidence: res.Confidence, Finding: in.Finding, Formatting: advice,
-				})
-			}
-		}
+	}
+	if s.tally.allFailed() {
+		return out, fmt.Errorf("%w: %d of %d locate/fix calls failed, last: %v",
+			ErrAllCallsFailed, s.tally.failures, s.tally.calls, s.tally.last)
 	}
 	// One file, one blob. Two analyses that patched the same file each appended
 	// a patch; the last holds both fixes because each was built on the previous
@@ -541,41 +517,6 @@ func (s fixSession) truncate(out *Outcome, i int, cause error) {
 	fmt.Printf("\n!! %s\n", out.Truncated)
 }
 
-// locateAll locates the file for each class hint, returning the distinct
-// paths. A finding with NO class hints still gets exactly one locate pass,
-// with an empty ClassHint: manifest, network-config and permission findings
-// name no Lcom/...; class at all, so looping over an empty hint list would
-// mean they are never even looked for -- which is the class-descriptor
-// precondition creeping back in one layer below resolveTargets, silently
-// undoing the whole point of this port. The locate agent has grep and glob
-// over the checkout and can work from the finding text alone: "Application
-// Data Backup Allowed" leads it to AndroidManifest.xml without needing a
-// class at all.
-func (s fixSession) locateAll(ctx context.Context, in FindingInputs) ([]string, error) {
-	hints := in.ClassHints
-	if len(hints) == 0 {
-		hints = []string{""}
-	}
-	seen := map[string]bool{}
-	var paths []string
-	for _, hint := range hints {
-		// LocateModel first: locating is the cheaper question, so it is the
-		// turn worth running on a smaller model. Falls back to Model, then to
-		// the agent layer's own default.
-		p, err := s.d.locate(ctx, agent.Config{Host: s.host, Token: s.token,
-			Model: firstNonEmpty(s.opts.LocateModel, s.opts.Model)},
-			agent.Request{RepoRoot: s.root, ClassHint: hint, Finding: in.Finding})
-		if err != nil {
-			return nil, err
-		}
-		if p != "" && !seen[p] {
-			seen[p] = true
-			paths = append(paths, p)
-		}
-	}
-	return paths, nil
-}
-
 // maxFixRetries is how many times a rejected patch is regenerated before the
 // file is abandoned. One retry: the gate tells the fixer the one fact it could
 // not see, and a second miss on the same fact is not a third-attempt problem.
@@ -588,15 +529,26 @@ const maxFixRetries = 1
 // the original, so a repository that already fails a check is never blamed on
 // the patch that did not introduce it.
 func (s fixSession) produceFix(ctx context.Context, path string, in FindingInputs) (fixservice.Result, error) {
+	res, _, err := s.produceFixFor(ctx, path, in, targetContext{})
+	return res, err
+}
+
+// produceFixFor is produceFix with the target's place in a multi-file
+// remediation, and it says why no patch came back: reasonDeclined when the
+// fixer abstained, "rejected by patch gate (<rule>)" when the gate discarded
+// the patch after its retry.
+func (s fixSession) produceFixFor(
+	ctx context.Context, path string, in FindingInputs, tc targetContext,
+) (fixservice.Result, string, error) {
 	for attempt, violation := 0, ""; ; attempt++ {
-		res, err := s.attemptFix(ctx, path, in, violation)
+		res, err := s.attemptFix(ctx, path, in, tc, violation)
 		if err != nil {
-			return res, err
+			return res, "", err
 		}
 		// Nothing to check. An abstention is already the safe outcome -- the
 		// gate exists to turn a bad edit into one of these.
 		if !res.Changed || res.PatchedContent == "" {
-			return res, nil
+			return res, reasonDeclined, nil
 		}
 		// The original is what is on disk: the fixer restores the file before
 		// it returns, so the checkout still holds the pre-patch content. An
@@ -604,17 +556,17 @@ func (s fixSession) produceFix(ctx context.Context, path string, in FindingInput
 		// cannot be computed must not reject.
 		original, readErr := readUnderRoot(s.root, path)
 		if readErr != nil {
-			return res, nil
+			return res, "", nil
 		}
 		v := verifyPatch(s.root, path, original, res.PatchedContent)
 		if v == nil {
-			return res, nil
+			return res, "", nil
 		}
 		if attempt >= maxFixRetries {
 			// Discard the patch rather than ship it. A reported gap is
 			// recoverable; a branch that does not compile is not.
 			fmt.Printf("   !! %s rejected (%s); no edit made\n", path, v.Rule)
-			return fixservice.Result{}, nil
+			return fixservice.Result{}, fmt.Sprintf("rejected by patch gate (%s)", v.Rule), nil
 		}
 		fmt.Printf("   .. %s rejected (%s); retrying once\n", path, v.Rule)
 		violation = v.Detail
@@ -624,8 +576,9 @@ func (s fixSession) produceFix(ctx context.Context, path string, in FindingInput
 // attemptFix runs one fix turn, client-side via the agent's Edit tool
 // (--fix-mode agent — NO upload), or server-side via /v1/fix (default).
 // priorViolation is the fact the previous attempt got wrong, empty on the first.
+// tc is the target's place in a multi-file remediation; server mode ignores it.
 func (s fixSession) attemptFix(
-	ctx context.Context, path string, in FindingInputs, priorViolation string,
+	ctx context.Context, path string, in FindingInputs, tc targetContext, priorViolation string,
 ) (fixservice.Result, error) {
 	if s.opts.FixMode == "agent" {
 		// Model only, never LocateModel: this turn writes the patch that ships.
@@ -638,7 +591,8 @@ func (s fixSession) attemptFix(
 				// generic Remediation prose -- see agent/instructions.go's
 				// fixUserPrompt, which renders both when present.
 				DeveloperPrompt: in.DeveloperPrompt, Criteria: in.Criteria,
-				ProjectProfile: s.profile, PriorViolation: priorViolation})
+				ProjectProfile: s.profile, PriorViolation: priorViolation,
+				Why: tc.Why, OtherFiles: tc.OtherFiles})
 		if err != nil {
 			return fixservice.Result{}, err
 		}
@@ -792,6 +746,7 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 	if out.Truncated != "" {
 		fmt.Printf("PARTIAL RUN: %s\n", out.Truncated)
 	}
+	printOutcomeLines(out.Findings)
 	if len(out.Located) == 0 {
 		fmt.Println("No source file located for this finding (advisory only).")
 		return
