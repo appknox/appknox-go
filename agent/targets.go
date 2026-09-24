@@ -100,18 +100,18 @@ type rawTargetReply struct {
 }
 
 // parseTargetReply returns the LAST JSON object in text that carries a
-// "targets" field. Prose and code fences around it are ignored. Inner objects
-// (a single {path, why}) and fragments that start mid-string fail to decode or
-// lack "targets", so the scan keeps walking back to an earlier '{'.
+// "targets" field. Prose and code fences around it are ignored. Each
+// candidate is decoded with a json.Decoder, which reads exactly one JSON
+// value and tolerates whatever text follows it -- so a valid reply followed
+// by prose that happens to contain a '}' is still parsed, unlike anchoring on
+// the last '}' in the whole reply. Inner objects (a single {path, why}) and
+// fragments that start mid-string fail to decode or lack "targets", so the
+// scan keeps walking back to an earlier '{'.
 func parseTargetReply(text string) (TargetReply, error) {
-	end := strings.LastIndex(text, "}")
-	if end < 0 {
-		return TargetReply{}, ErrUnparseableReply
-	}
-	body := text[:end+1]
-	for start := strings.LastIndex(body, "{"); start >= 0; start = strings.LastIndex(body[:start], "{") {
+	for start := strings.LastIndex(text, "{"); start >= 0; start = strings.LastIndex(text[:start], "{") {
 		var raw rawTargetReply
-		if err := json.Unmarshal([]byte(body[start:]), &raw); err != nil || raw.Targets == nil {
+		dec := json.NewDecoder(strings.NewReader(text[start:]))
+		if err := dec.Decode(&raw); err != nil || raw.Targets == nil {
 			continue
 		}
 		return TargetReply{Targets: *raw.Targets, NotFound: raw.NotFound}, nil

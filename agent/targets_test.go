@@ -68,6 +68,18 @@ func TestParseTargetReply_BraceInsideWhy(t *testing.T) {
 	require.Equal(t, "wrap body in if (x) { ... }", r.Targets[0].Why)
 }
 
+// TestParseTargetReply_ValidThenProseWithBrace is F6: the old parser anchored
+// on the LAST '}' in the whole reply, so trailing prose that happens to
+// contain a '}' pushed body past the real JSON value and made a perfectly
+// valid reply unparseable.
+func TestParseTargetReply_ValidThenProseWithBrace(t *testing.T) {
+	text := `{"targets":[{"path":"a/B.java","why":"x"}],"not_found":[]}` +
+		"\n\nLet me know if you'd like the closing brace explained further }."
+	r, err := parseTargetReply(text)
+	require.NoError(t, err)
+	require.Equal(t, []Target{{Path: "a/B.java", Why: "x"}}, r.Targets)
+}
+
 func TestParseTargetReply_Malformed(t *testing.T) {
 	_, err := parseTargetReply(`{"targets": [{"path": "a"`)
 	require.ErrorIs(t, err, ErrUnparseableReply)
