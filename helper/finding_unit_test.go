@@ -32,6 +32,22 @@ func TestKnoxIQInputs_NilRemediationStillAUnit(t *testing.T) {
 	require.Equal(t, "D", in.Units[0].Remediation)
 }
 
+// TestKnoxIQInputs_EmptyFixInstructionGetsSkipLine is F1's second half: a
+// finding whose FixInstruction is empty (no title, description, or
+// remediation at all) used to be dropped from Units with no trace. It must
+// still produce its own SKIPPED outcome line.
+func TestKnoxIQInputs_EmptyFixInstructionGetsSkipLine(t *testing.T) {
+	in := knoxIQInputs([]*appknox.KnoxIQFinding{
+		{Title: "Has text", Description: "D"},
+		{}, // Title, Description and Remediation all empty -> FixInstruction is ""
+	}, "Weak Crypto")
+
+	require.Len(t, in.Units, 1, "the empty finding must not become a unit")
+	require.Equal(t, []findingOutcome{{
+		Finding: "Weak Crypto", Title: "", Status: statusSkipped, Detail: "KnoxIQ: no remediation text",
+	}}, in.Skipped)
+}
+
 func TestUnitsOf_SynthesizesOneUnitForAggregateInputs(t *testing.T) {
 	u := unitsOf(FindingInputs{Finding: "Weak PRNG", ClassHints: []string{"com/x/A", "com/x/B"},
 		Remediation: "r", DeveloperPrompt: "p", Criteria: []string{"c"}})

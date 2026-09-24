@@ -105,24 +105,40 @@ func joinNonEmpty(parts []string, sep string) string {
 //
 // Collapsing these is what once let a 401 look like "nothing to fix" and
 // silently skip a live vulnerability.
-// The string is why nothing was kept, for the outcome line; empty otherwise.
+//
+// A finding filtered out here while a SIBLING finding of the same analysis
+// stays fixable (F1) used to vanish with no outcome line at all -- only the
+// ALL-dropped case (below) ever built a reason. Each such finding now gets
+// its own SKIPPED line in skipped, named by its own title.
+//
+// The string return is why NOTHING was kept, for the analysis-level outcome
+// line; empty otherwise.
 func fixableKnoxIQFindings(
-	ctx context.Context, client *appknox.Client, analysisID int,
-) ([]*appknox.KnoxIQFinding, string, error) {
+	ctx context.Context, client *appknox.Client, analysisID int, vulnerabilityName string,
+) (keep []*appknox.KnoxIQFinding, skipped []findingOutcome, allSkipReason string, err error) {
 	findings, err := client.KnoxIQ.ListByAnalysis(ctx, analysisID)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
-	keep := make([]*appknox.KnoxIQFinding, 0, len(findings))
+	keep = make([]*appknox.KnoxIQFinding, 0, len(findings))
+	var dropped []*appknox.KnoxIQFinding
 	for _, f := range findings {
 		if IsFixable(f) {
 			keep = append(keep, f)
+		} else {
+			dropped = append(dropped, f)
 		}
 	}
 	if len(keep) == 0 {
-		return keep, unfixableReason(findings), nil
+		return keep, nil, unfixableReason(findings), nil
 	}
-	return keep, "", nil
+	for _, f := range dropped {
+		skipped = append(skipped, findingOutcome{
+			Finding: vulnerabilityName, Title: f.Title, Status: statusSkipped,
+			Detail: unfixableReason([]*appknox.KnoxIQFinding{f}),
+		})
+	}
+	return keep, skipped, "", nil
 }
 
 // knoxIQInputs turns the fixable findings into the locate + fix inputs.
@@ -142,9 +158,14 @@ func fixableKnoxIQFindings(
 // into the fix prompt (see attemptFix in autofix.go and fixUserPrompt in
 // agent/instructions.go), and a patch ships whether or not any Criteria were
 // present, let alone met.
+//
+// A finding whose FixInstruction is empty (F1) does not become a Unit -- a fix
+// built on no instruction is worse than no fix -- but it still gets its own
+// SKIPPED outcome line in FindingInputs.Skipped, rather than vanishing.
 func knoxIQInputs(findings []*appknox.KnoxIQFinding, vulnerabilityName string) FindingInputs {
 	var instructions, criteria, developerPrompts []string
 	var units []FindingUnit
+	var skipped []findingOutcome
 	seenHint := map[string]bool{}
 	var hints []string
 
@@ -155,6 +176,11 @@ func knoxIQInputs(findings []*appknox.KnoxIQFinding, vulnerabilityName string) F
 			units = append(units, FindingUnit{
 				Title: f.Title, Description: f.Description, Remediation: text,
 				DeveloperPrompt: f.DeveloperPrompt, Criteria: verificationOf(f),
+			})
+		} else {
+			skipped = append(skipped, findingOutcome{
+				Finding: vulnerabilityName, Title: f.Title,
+				Status: statusSkipped, Detail: "KnoxIQ: no remediation text",
 			})
 		}
 		if f.Remediation != nil {
@@ -178,6 +204,7 @@ func knoxIQInputs(findings []*appknox.KnoxIQFinding, vulnerabilityName string) F
 		Criteria:        criteria,
 		DeveloperPrompt: joinNonEmpty(developerPrompts, "\n\n"),
 		Units:           units,
+		Skipped:         skipped,
 	}
 }
 

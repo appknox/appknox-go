@@ -47,6 +47,15 @@ type FindingInputs struct {
 	// SkipReason says why KnoxIQ gave nothing to fix. It is set only when
 	// Remediation is empty.
 	SkipReason string
+
+	// Skipped is one outcome line per KnoxIQ finding of this analysis that
+	// was dropped before becoming a Unit -- filtered as not-fixable,
+	// third-party or false positive while a sibling finding stayed fixable
+	// (fixableKnoxIQFindings), or left with no remediation text
+	// (knoxIQInputs). Every finding gets exactly one outcome line (spec
+	// 3.4), including these, so fixSession.run appends them to
+	// Outcome.Findings alongside the ones Units produces.
+	Skipped []findingOutcome
 }
 
 // stripHTML removes tags for source-free remediation text.

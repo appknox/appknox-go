@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/appknox/appknox-go/appknox"
@@ -85,6 +86,38 @@ func TestResolveTargets_AllFetchesFailingIsNotNothingFixable(t *testing.T) {
 	}
 	if errors.Is(err, ErrNothingFixable) {
 		t.Fatalf("a KnoxIQ outage must not read as ErrNothingFixable, got %v", err)
+	}
+}
+
+// TestEveryLocatableAnalysis_SkippedAnalysisNotPrintedEarly is F4's first
+// half: a SKIPPED line for an analysis KnoxIQ gave nothing to fix used to be
+// printed directly inside everyLocatableAnalysis and dropped from the
+// returned targets, so it never reached the final Findings block that run()
+// builds. It must be carried through instead, with no line printed here.
+func TestEveryLocatableAnalysis_SkippedAnalysisNotPrintedEarly(t *testing.T) {
+	d := autofixDeps{
+		analysisIDs: func(context.Context, int, int) ([]int, error) { return []int{1, 2}, nil },
+		fetch: func(_ context.Context, _, id int) (FindingInputs, error) {
+			if id == 1 {
+				return FindingInputs{Finding: "Fixable", Remediation: "fix"}, nil
+			}
+			return FindingInputs{Finding: "Hardcoded Secrets", VulnerabilityID: 120,
+				SkipReason: "KnoxIQ: no findings"}, nil
+		},
+	}
+	var targets []analysisTarget
+	printed := captureOutput(func() {
+		var err error
+		targets, err = resolveTargets(context.Background(), AutofixOptions{FileID: 24}, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(printed, "Hardcoded Secrets") {
+		t.Fatalf("the skip line must not print during resolveTargets, got:\n%s", printed)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("the skip-only analysis must still be carried through so run() can report it, got %v", targets)
 	}
 }
 

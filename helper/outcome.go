@@ -101,6 +101,46 @@ func skippedAnalysis(analysisID int, in FindingInputs) findingOutcome {
 	}
 }
 
+// reasonNotAttempted is F4's line for a unit the run stopped before ever
+// reaching: the gateway budget ran out on an earlier unit, so nothing was
+// actually asked about this one.
+const reasonNotAttempted = "not attempted: gateway budget exhausted"
+
+// notAttemptedOutcomes gives each unit in units its own SKIPPED line, for the
+// siblings of a unit that hit gateway-budget exhaustion (spec 3.4 / F4): the
+// run stops before calling locate or fix for them, so without this they get
+// no line at all.
+func notAttemptedOutcomes(in FindingInputs, units []FindingUnit) []findingOutcome {
+	out := make([]findingOutcome, 0, len(units))
+	for _, u := range units {
+		out = append(out, findingOutcome{
+			VulnerabilityID: in.VulnerabilityID, Finding: in.Finding, Title: u.Title,
+			Status: statusSkipped, Detail: reasonNotAttempted,
+		})
+	}
+	return out
+}
+
+// remainingNotAttempted covers every target the run never even started once
+// it stopped for gateway-budget exhaustion (F4). A target already skipped by
+// KnoxIQ (Skipped entries, or the whole analysis via SkipReason) keeps its
+// real reason -- that was decided before any model call and does not depend
+// on the budget -- and only a target that would actually have been attempted
+// gets the not-attempted line.
+func remainingNotAttempted(targets []analysisTarget) []findingOutcome {
+	var out []findingOutcome
+	for _, t := range targets {
+		in := t.Inputs
+		out = append(out, in.Skipped...)
+		if in.Remediation == "" && in.SkipReason != "" {
+			out = append(out, skippedAnalysis(t.AnalysisID, in))
+			continue
+		}
+		out = append(out, notAttemptedOutcomes(in, unitsOf(in))...)
+	}
+	return out
+}
+
 // rejectionResults records validation refusals as unpatched targets.
 func rejectionResults(rs []rejection) []targetResult {
 	out := make([]targetResult, 0, len(rs))

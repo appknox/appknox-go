@@ -186,6 +186,74 @@ func TestRun_OutcomeLinesCoverEveryStatus(t *testing.T) {
 	require.NotContains(t, fixedRemediations, "rem-build")
 }
 
+// TestRun_SkippedFindingsAreAppendedToOutcome is F1: a finding dropped inside
+// a partly fixable analysis (third-party sibling, or no remediation text)
+// still gets exactly one outcome line, carried on FindingInputs.Skipped and
+// appended by run alongside the lines Units produces.
+func TestRun_SkippedFindingsAreAppendedToOutcome(t *testing.T) {
+	root, rel := repoWithFile(t, javaBody)
+	d := autofixDeps{locateTargets: targetsAt(rel),
+		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+			return agent.FixResult{Changed: true, PatchedContent: "class A { }\n"}, nil
+		}}
+	skip := findingOutcome{VulnerabilityID: 5, Finding: "Derived Crypto Keys",
+		Title: "Vendored SDK class", Status: statusSkipped, Detail: "KnoxIQ: third-party code"}
+	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
+		Finding: "Derived Crypto Keys", VulnerabilityID: 5, Remediation: "r",
+		Units:   []FindingUnit{{Title: "Fixable finding", Remediation: "fix it"}},
+		Skipped: []findingOutcome{skip},
+	}})
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out.Findings, 2, "one line for the fixed unit, one for the skipped sibling")
+	require.Contains(t, out.Findings, skip)
+}
+
+// TestRun_BudgetExhaustionGivesNotAttemptedLineForEachRemainingUnit is F4's
+// second half: when the gateway budget is exhausted, run breaks out of the
+// whole target loop, so every unit it had not yet reached -- siblings of the
+// unit that hit the exhaustion, and every unit of every later target -- got
+// no outcome line at all. Each must now get its own SKIPPED line.
+func TestRun_BudgetExhaustionGivesNotAttemptedLineForEachRemainingUnit(t *testing.T) {
+	root, rel := repoWithFile(t, javaBody)
+	d := autofixDeps{
+		locateTargets: func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
+			if req.Title == "first" {
+				return agent.TargetReply{Targets: []agent.Target{{Path: rel}}}, nil
+			}
+			return agent.TargetReply{}, errors.New("429 session call budget exhausted")
+		},
+		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+			return agent.FixResult{Changed: true, PatchedContent: "class A { }\n"}, nil
+		},
+	}
+	s := dryAgentSession(root, d,
+		analysisTarget{AnalysisID: 1, Inputs: FindingInputs{Finding: "V", VulnerabilityID: 9, Units: []FindingUnit{
+			{Title: "first", Remediation: "fix a"},
+			{Title: "second", Remediation: "fix b"}, // hits the exhaustion
+			{Title: "third", Remediation: "fix c"},  // sibling never reached
+		}}},
+		analysisTarget{AnalysisID: 2, Inputs: FindingInputs{Finding: "W", VulnerabilityID: 10,
+			Units: []FindingUnit{{Title: "fourth", Remediation: "fix d"}}}},
+	)
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.NotEmpty(t, out.Truncated)
+	require.Len(t, out.Findings, 4, "first, second (locate failed), third and fourth (not attempted)")
+
+	byTitle := map[string]findingOutcome{}
+	for _, f := range out.Findings {
+		byTitle[f.Title] = f
+	}
+	require.Equal(t, statusFixed, byTitle["first"].Status)
+	require.Equal(t, statusSkipped, byTitle["third"].Status)
+	require.Equal(t, "not attempted: gateway budget exhausted", byTitle["third"].Detail)
+	require.Equal(t, 9, byTitle["third"].VulnerabilityID)
+	require.Equal(t, statusSkipped, byTitle["fourth"].Status)
+	require.Equal(t, "not attempted: gateway budget exhausted", byTitle["fourth"].Detail)
+	require.Equal(t, 10, byTitle["fourth"].VulnerabilityID)
+}
+
 func TestRun_EveryCallFailingReturnsErrAllCallsFailed(t *testing.T) {
 	root := t.TempDir()
 	d := autofixDeps{locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {

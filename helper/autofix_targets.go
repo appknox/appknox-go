@@ -108,6 +108,7 @@ func everyLocatableAnalysis(
 	fmt.Printf("Considering %d analyses on file %d\n", len(ids), opts.FileID)
 
 	targets := make([]analysisTarget, 0, len(ids))
+	fixable := 0
 	failedFetches := 0
 	var lastFetchErr error
 	for _, id := range ids {
@@ -128,15 +129,18 @@ func everyLocatableAnalysis(
 			}
 			continue
 		}
-		if inputs.Remediation == "" {
-			// Printed here, not dropped: a finding that vanishes without a line
-			// is indistinguishable from one autofix never considered.
-			fmt.Println(formatOutcomeLine(skippedAnalysis(id, inputs)))
-			continue
+		switch {
+		case inputs.Remediation != "":
+			fixable++
+			targets = append(targets, analysisTarget{AnalysisID: id, Inputs: inputs})
+		case inputs.SkipReason != "":
+			// Carried through, not printed here (F4): its line belongs in
+			// the final Findings block run() builds, alongside every other
+			// finding's line, not printed early and then never repeated.
+			targets = append(targets, analysisTarget{AnalysisID: id, Inputs: inputs})
 		}
-		targets = append(targets, analysisTarget{AnalysisID: id, Inputs: inputs})
 	}
-	if len(targets) == 0 {
+	if fixable == 0 {
 		// A fetch failure and "KnoxIQ judged nothing fixable" must not read
 		// the same: if anything errored, we do not actually know the answer
 		// for those analyses, so this is NOT ErrNothingFixable -- it is
@@ -150,7 +154,7 @@ func everyLocatableAnalysis(
 		return nil, fmt.Errorf("KnoxIQ has nothing fixable on file %d: %w",
 			opts.FileID, ErrNothingFixable)
 	}
-	fmt.Printf("%d analysis(es) have a fix to attempt\n", len(targets))
+	fmt.Printf("%d analysis(es) have a fix to attempt\n", fixable)
 	return targets, nil
 }
 

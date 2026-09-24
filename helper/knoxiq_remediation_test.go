@@ -1,10 +1,14 @@
 package helper
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/appknox/appknox-go/appknox"
+	"github.com/stretchr/testify/require"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -84,6 +88,41 @@ func TestFixInstruction_FallsBackToDescription(t *testing.T) {
 	if got := FixInstruction(f); got != "D" {
 		t.Fatalf("want description fallback, got %q", got)
 	}
+}
+
+// TestFixableKnoxIQFindings_MixedDropsGetSkipLines is F1's first half: when
+// one finding is dropped as third-party while a sibling stays fixable, the
+// dropped one used to vanish with no outcome line at all (only the
+// ALL-dropped case built a reason, via unfixableReason(findings)). Each
+// dropped finding must now get its own SKIPPED line.
+func TestFixableKnoxIQFindings_MixedDropsGetSkipLines(t *testing.T) {
+	client := testAppknoxClient(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/knoxiq/analyses/9/findings", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"count": 2,
+			"results": []map[string]any{
+				{
+					"title":       "Fixable finding",
+					"remediation": map[string]any{"remediation": "fix it"},
+					"validation":  map[string]any{"verdict": "TRUE_POSITIVE"},
+				},
+				{
+					"title":      "Vendored SDK class",
+					"validation": map[string]any{"verdict": "TRUE_POSITIVE", "is_third_party": true},
+				},
+			},
+		})
+	})
+
+	keep, skipped, reason, err := fixableKnoxIQFindings(context.Background(), client, 9, "Derived Crypto Keys")
+	require.NoError(t, err)
+	require.Empty(t, reason, "some findings are fixable, so this is not the all-dropped case")
+	require.Len(t, keep, 1)
+	require.Equal(t, "Fixable finding", keep[0].Title)
+
+	require.Len(t, skipped, 1)
+	require.Equal(t, findingOutcome{Finding: "Derived Crypto Keys", Title: "Vendored SDK class",
+		Status: statusSkipped, Detail: "KnoxIQ: third-party code"}, skipped[0])
 }
 
 func TestKnoxIQInputs_MergesFindingsAndDedupesHints(t *testing.T) {

@@ -463,11 +463,16 @@ func (s fixSession) run(ctx context.Context) (Outcome, error) {
 targetLoop:
 	for i, t := range s.targets {
 		in := t.Inputs
+		// Findings KnoxIQ gave us but that never became a Unit (F1): filtered
+		// while a sibling stayed fixable, or left with no remediation text.
+		// Each already carries its own outcome line.
+		out.Findings = append(out.Findings, in.Skipped...)
 		if in.Remediation == "" && in.SkipReason != "" {
 			out.Findings = append(out.Findings, skippedAnalysis(t.AnalysisID, in))
 			continue
 		}
-		for _, u := range unitsOf(in) {
+		units := unitsOf(in)
+		for j, u := range units {
 			res, err := s.runUnit(ctx, in, u)
 			out = mergeUnit(out, located, res)
 			if err == nil {
@@ -475,6 +480,12 @@ targetLoop:
 			}
 			if isGatewayBudgetExhausted(err) {
 				s.truncate(&out, i, err)
+				// The unit that hit the exhaustion already has its own line
+				// from runUnit above; everything after it -- its own
+				// siblings, then every later target -- never got a call and
+				// otherwise gets no line at all (F4).
+				out.Findings = append(out.Findings, notAttemptedOutcomes(in, units[j+1:])...)
+				out.Findings = append(out.Findings, remainingNotAttempted(s.targets[i+1:])...)
 				break targetLoop
 			}
 			return out, err
@@ -680,7 +691,7 @@ func fetchKnoxIQInputs(
 	if err != nil {
 		return FindingInputs{}, err
 	}
-	findings, skip, err := fixableKnoxIQFindings(ctx, client, analysisID)
+	findings, filteredSkips, skip, err := fixableKnoxIQFindings(ctx, client, analysisID, vuln.Name)
 	if err != nil {
 		return FindingInputs{}, err
 	}
@@ -689,6 +700,14 @@ func fetchKnoxIQInputs(
 	}
 	in := knoxIQInputs(findings, vuln.Name)
 	in.VulnerabilityID = analysis.VulnerabilityID
+	// Findings dropped before knoxIQInputs saw them (filtered while a sibling
+	// stayed fixable) and findings knoxIQInputs itself dropped (no
+	// remediation text) both land here, each with exactly one outcome line
+	// (F1). VulnerabilityID is stamped now because neither producer knows it.
+	in.Skipped = append(filteredSkips, in.Skipped...)
+	for i := range in.Skipped {
+		in.Skipped[i].VulnerabilityID = analysis.VulnerabilityID
+	}
 	return in, nil
 }
 
