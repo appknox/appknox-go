@@ -268,12 +268,15 @@ func TestResolveTargets_RequiresFileIDOrFinding(t *testing.T) {
 // must reach locate (i.e. be fetched and attempted), and the run must print
 // how many were dropped and under which threshold name.
 func TestEveryLocatableAnalysis_ReportsCountBelowRiskThreshold(t *testing.T) {
-	risks := map[int]int{1: 1, 2: 2, 3: 4}
+	// Analysis 9 is Passed (risk 0): it is not a finding at all, so it must
+	// not be counted as "below the threshold" -- on a real file most
+	// analyses are Passed (mfva: 86 of 108).
+	risks := map[int]int{1: 1, 2: 2, 3: 4, 9: 0}
 	var fetched []int
 	d := autofixDeps{
 		analysisIDs: func(_ context.Context, _ int, threshold int) ([]int, error) {
 			var ids []int
-			for _, id := range []int{1, 2, 3} {
+			for _, id := range []int{1, 2, 3, 9} {
 				if risks[id] >= threshold {
 					ids = append(ids, id)
 				}

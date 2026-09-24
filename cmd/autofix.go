@@ -73,5 +73,5 @@ func init() {
 	f.Bool("list-analyses", false, "List the file's analyses + derived class hints, then exit (needs --file-id)")
 	f.Bool("locate-only", false, "Locate and validate targets per KnoxIQ finding, print them, then exit: no fix, no job registration, no push")
 	f.StringP(
-		flagRiskThreshold, "r", "low", "Risk threshold to fail the command. Available options: low, medium, high, critical")
+		flagRiskThreshold, "r", "low", "Minimum risk of the findings to fix; defaults to what cicheck used for this file id. Available options: low, medium, high, critical")
 }

@@ -100,17 +100,17 @@ func everyLocatableAnalysis(
 	if err != nil {
 		return nil, err
 	}
-	// A second call to the SAME analysisIDs seam, this time with threshold 0
-	// ("everything"), to learn how many were dropped by the real threshold.
-	// In the real wiring (withKnoxIQFetchers) both calls share
-	// memoizedAnalysesFor's per-fileID cache, so this is not a second
-	// Appknox API call -- just a second pass over the analyses list already
-	// fetched above. opts.RiskThreshold is already >0 here (runAutofix
-	// normalizes an unset value to 1 before resolveTargets is called), so
-	// this second call is never redundant with the first.
+	// A second call to the SAME analysisIDs seam, this time with threshold 1
+	// (every non-Passed finding), to learn how many findings the real
+	// threshold dropped. In the real wiring (withKnoxIQFetchers) both calls
+	// share memoizedAnalysesFor's per-fileID cache, so this is not a second
+	// Appknox API call. The baseline is 1, not 0: Passed analyses are not
+	// findings, and counting them would report most of the file (mfva: 86 of
+	// 108) as "below the threshold". At threshold 1 (low) nothing can be
+	// below it, so the second call is skipped.
 	below := 0
-	if opts.RiskThreshold > 0 {
-		allIDs, err := d.analysisIDs(ctx, opts.FileID, 0)
+	if opts.RiskThreshold > 1 {
+		allIDs, err := d.analysisIDs(ctx, opts.FileID, 1)
 		if err != nil {
 			return nil, err
 		}
