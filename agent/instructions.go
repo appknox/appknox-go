@@ -213,6 +213,7 @@ func fixUserPrompt(req FixRequest) string {
 	if p := strings.TrimSpace(req.ProjectProfile); p != "" {
 		fmt.Fprintf(&b, "This project, read from its build files:\n%s\n\n", p)
 	}
+	writeTargetContext(&b, req)
 	fmt.Fprintf(&b, "Remediation:\n%s\n", req.Remediation)
 
 	if strings.TrimSpace(req.DeveloperPrompt) != "" {
@@ -241,4 +242,23 @@ func fixUserPrompt(req FixRequest) string {
 			"Produce a fix that does not repeat it, or make no edit and report why.", v)
 	}
 	return b.String()
+}
+
+// writeTargetContext tells the fixer where its file sits in a remediation that
+// spans several files, so it applies its own part and leaves the rest to the
+// calls that own those files. Nothing is written for a single-file fix.
+func writeTargetContext(b *strings.Builder, req FixRequest) {
+	if w := strings.TrimSpace(req.Why); w != "" {
+		fmt.Fprintf(b, "Why this file: %s\n", w)
+	}
+	if len(req.OtherFiles) > 0 {
+		b.WriteString("Other files in this remediation, handled in separate calls:\n")
+		for _, o := range req.OtherFiles {
+			fmt.Fprintf(b, "  - %s (%s)\n", o.Path, o.Why)
+		}
+		b.WriteString("Apply only the part of the remediation that belongs in this file.\n")
+	}
+	if strings.TrimSpace(req.Why) != "" || len(req.OtherFiles) > 0 {
+		b.WriteString("\n")
+	}
 }

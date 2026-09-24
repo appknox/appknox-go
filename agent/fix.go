@@ -44,6 +44,12 @@ type FixRequest struct {
 	// is information the prompt by itself could never supply -- which is why
 	// two repos given the same remediation and the same rule still diverged.
 	PriorViolation string
+	// Why is the locate agent's one-sentence reason this file is a target:
+	// which part of the remediation it carries.
+	Why string
+	// OtherFiles are the remediation's other targets. Each is fixed in its
+	// own call, so this file's fixer must not try to do their part.
+	OtherFiles []Target
 }
 
 // FixResult is the outcome of a client-side agent fix. It is side-effect-free:

@@ -3,6 +3,8 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Each rule below is here because its absence produced a measured defect --
@@ -203,4 +205,25 @@ func TestFixUserPrompt_omitsTheProfileSectionWhenUnknown(t *testing.T) {
 	if strings.Contains(got, "read from its build files") {
 		t.Errorf("an empty profile should print no heading:\n%s", got)
 	}
+}
+
+func TestFixUserPrompt_WhyAndOtherFilesPrecedeRemediation(t *testing.T) {
+	p := fixUserPrompt(FixRequest{
+		Path: "app/src/main/AndroidManifest.xml", Finding: "StrandHogg",
+		Remediation: "set taskAffinity and check isTaskRoot",
+		Why:         `set taskAffinity="" on MainActivity`,
+		OtherFiles:  []Target{{Path: "app/src/main/java/com/x/MainActivity.java", Why: "add isTaskRoot() check"}},
+	})
+	why := strings.Index(p, `Why this file: set taskAffinity="" on MainActivity`)
+	header := strings.Index(p, "Other files in this remediation, handled in separate calls:")
+	other := strings.Index(p, "  - app/src/main/java/com/x/MainActivity.java (add isTaskRoot() check)")
+	rem := strings.Index(p, "Remediation:")
+	require.True(t, why >= 0 && header > why && other > header && rem > other, p)
+	require.Contains(t, p, "Apply only the part of the remediation that belongs in this file.")
+}
+
+func TestFixUserPrompt_NoTargetContextNoBlocks(t *testing.T) {
+	p := fixUserPrompt(FixRequest{Path: "a/A.java", Finding: "f", Remediation: "r"})
+	require.NotContains(t, p, "Why this file")
+	require.NotContains(t, p, "Other files in this remediation")
 }
