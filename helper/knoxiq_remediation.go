@@ -105,12 +105,13 @@ func joinNonEmpty(parts []string, sep string) string {
 //
 // Collapsing these is what once let a 401 look like "nothing to fix" and
 // silently skip a live vulnerability.
+// The string is why nothing was kept, for the outcome line; empty otherwise.
 func fixableKnoxIQFindings(
 	ctx context.Context, client *appknox.Client, analysisID int,
-) ([]*appknox.KnoxIQFinding, error) {
+) ([]*appknox.KnoxIQFinding, string, error) {
 	findings, err := client.KnoxIQ.ListByAnalysis(ctx, analysisID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	keep := make([]*appknox.KnoxIQFinding, 0, len(findings))
 	for _, f := range findings {
@@ -118,10 +119,16 @@ func fixableKnoxIQFindings(
 			keep = append(keep, f)
 		}
 	}
-	return keep, nil
+	if len(keep) == 0 {
+		return keep, unfixableReason(findings), nil
+	}
+	return keep, "", nil
 }
 
 // knoxIQInputs turns the fixable findings into the locate + fix inputs.
+//
+// ClassHints are for --list-analyses display only. Targeting uses Units, whose
+// full text goes to the locate agent.
 //
 // Criteria come from remediation.verification and NOTHING ELSE. remediation.steps
 // often names the same symbols and would usually work, but steps are
@@ -137,12 +144,18 @@ func fixableKnoxIQFindings(
 // present, let alone met.
 func knoxIQInputs(findings []*appknox.KnoxIQFinding, vulnerabilityName string) FindingInputs {
 	var instructions, criteria, developerPrompts []string
+	var units []FindingUnit
 	seenHint := map[string]bool{}
 	var hints []string
 
 	for _, f := range findings {
-		if text := FixInstruction(f); text != "" {
+		text := FixInstruction(f)
+		if text != "" {
 			instructions = append(instructions, text)
+			units = append(units, FindingUnit{
+				Title: f.Title, Description: f.Description, Remediation: text,
+				DeveloperPrompt: f.DeveloperPrompt, Criteria: verificationOf(f),
+			})
 		}
 		if f.Remediation != nil {
 			criteria = append(criteria, f.Remediation.Verification...)
@@ -164,5 +177,14 @@ func knoxIQInputs(findings []*appknox.KnoxIQFinding, vulnerabilityName string) F
 		Remediation:     joinNonEmpty(instructions, "\n\n"),
 		Criteria:        criteria,
 		DeveloperPrompt: joinNonEmpty(developerPrompts, "\n\n"),
+		Units:           units,
 	}
+}
+
+// verificationOf returns the finding's verification assertions, or nil.
+func verificationOf(f *appknox.KnoxIQFinding) []string {
+	if f.Remediation == nil {
+		return nil
+	}
+	return f.Remediation.Verification
 }

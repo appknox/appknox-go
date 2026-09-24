@@ -721,14 +721,16 @@ func fetchKnoxIQInputs(
 	if err != nil {
 		return FindingInputs{}, err
 	}
-	findings, err := fixableKnoxIQFindings(ctx, client, analysisID)
+	findings, skip, err := fixableKnoxIQFindings(ctx, client, analysisID)
 	if err != nil {
 		return FindingInputs{}, err
 	}
 	if len(findings) == 0 {
-		return FindingInputs{}, nil
+		return FindingInputs{Finding: vuln.Name, VulnerabilityID: analysis.VulnerabilityID, SkipReason: skip}, nil
 	}
-	return knoxIQInputs(findings, vuln.Name), nil
+	in := knoxIQInputs(findings, vuln.Name)
+	in.VulnerabilityID = analysis.VulnerabilityID
+	return in, nil
 }
 
 // findAnalysisByID returns the analysis with the given id, or nil.

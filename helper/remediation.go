@@ -35,6 +35,18 @@ type FindingInputs struct {
 
 	// DeveloperPrompt is KnoxIQ's own wording for the fix, passed through.
 	DeveloperPrompt string
+
+	// VulnerabilityID is the Appknox vulnerability this analysis reports; 0 on
+	// the manual --finding path. Printed on outcome lines.
+	VulnerabilityID int
+
+	// Units are this analysis's KnoxIQ findings, one each. Empty on the
+	// manual path; see unitsOf.
+	Units []FindingUnit
+
+	// SkipReason says why KnoxIQ gave nothing to fix. It is set only when
+	// Remediation is empty.
+	SkipReason string
 }
 
 // stripHTML removes tags for source-free remediation text.
