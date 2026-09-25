@@ -13,16 +13,64 @@ import (
 	"sort"
 )
 
-func getAppknoxAccessToken() string {
-	accessToken := viper.GetString("access-token")
-	if accessToken == "" {
-		fmt.Println("Appknox access token missing!")
-		fmt.Println("Please run 'appknox init' to set the token.")
-		fmt.Println("Or in case you're integrating appknox on a CI/CD tool")
-		fmt.Println("Use APPKNOX_ACCESS_TOKEN as env.")
+// credentials holds exactly one resolved credential type: either a Personal
+// Access Token, or a service account access key ID / secret pair.
+type credentials struct {
+	accessToken     string
+	accessKeyID     string
+	accessKeySecret string
+}
+
+func (c credentials) isServiceAccount() bool {
+	return c.accessKeyID != "" || c.accessKeySecret != ""
+}
+
+// resolveCredentials validates the raw credential inputs and resolves
+// exactly one of PAT or service-account auth. It rejects both or neither
+// credential type being provided, and a service account key pair that is
+// only half-provided. Pure function, no I/O — see getCredentials for the
+// CLI-facing wrapper that prints and exits on error.
+func resolveCredentials(accessToken, accessKeyID, accessKeySecret string) (credentials, error) {
+	hasPAT := accessToken != ""
+	hasServiceAccount := accessKeyID != "" && accessKeySecret != ""
+	hasPartialServiceAccount := (accessKeyID != "") != (accessKeySecret != "")
+
+	switch {
+	case hasPartialServiceAccount:
+		return credentials{}, fmt.Errorf(
+			"both --access-key-id and --access-key-secret " +
+				"(or APPKNOX_ACCESS_KEY_ID and APPKNOX_ACCESS_KEY_SECRET) must be provided together")
+	case hasPAT && hasServiceAccount:
+		return credentials{}, fmt.Errorf(
+			"provide either an access token or a service account access key/secret, not both")
+	case !hasPAT && !hasServiceAccount:
+		return credentials{}, fmt.Errorf(
+			"Appknox credentials missing!\n" +
+				"Please run 'appknox init' to set an access token,\n" +
+				"or set APPKNOX_ACCESS_TOKEN as env for a Personal Access Token,\n" +
+				"or set APPKNOX_ACCESS_KEY_ID and APPKNOX_ACCESS_KEY_SECRET as env for a Service Account.")
+	}
+
+	return credentials{
+		accessToken:     accessToken,
+		accessKeyID:     accessKeyID,
+		accessKeySecret: accessKeySecret,
+	}, nil
+}
+
+// getCredentials reads all supported credential flags/env vars and resolves
+// them via resolveCredentials, exiting with a clear message on error.
+func getCredentials() credentials {
+	creds, err := resolveCredentials(
+		viper.GetString("access-token"),
+		viper.GetString("access-key-id"),
+		viper.GetString("access-key-secret"),
+	)
+	if err != nil {
+		fmt.Println(err)
 		os.Exit(1)
 	}
-	return accessToken
+	return creds
 }
 
 // GetHostMappings returns a map of host names to URLs.
@@ -65,7 +113,7 @@ func ResolveHostAndRegion(host, region string, hostMappings map[string]string) (
 }
 
 func getClient() *appknox.Client {
-	token := getAppknoxAccessToken()
+	creds := getCredentials()
 
 	// Check for region and host first
 	region := viper.GetString("region")
@@ -81,7 +129,12 @@ func getClient() *appknox.Client {
 		os.Exit(1)
 	}
 
-	client, err := appknox.NewClient(token)
+	var client *appknox.Client
+	if creds.isServiceAccount() {
+		client, err = appknox.NewClientWithServiceAccount(creds.accessKeyID, creds.accessKeySecret)
+	} else {
+		client, err = appknox.NewClient(creds.accessToken)
+	}
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
