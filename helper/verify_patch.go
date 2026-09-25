@@ -107,6 +107,9 @@ func verifyPatch(root, path, original, patched string) *patchViolation {
 	if v := checkBuildConfigUsage(root, original, patched); v != nil {
 		return v
 	}
+	if v := checkJavaLanguageLevel(root, path, original, patched); v != nil {
+		return v
+	}
 	if v := checkBuildScriptEdit(path, original, patched); v != nil {
 		return v
 	}
