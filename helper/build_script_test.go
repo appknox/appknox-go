@@ -407,3 +407,40 @@ func TestCheckBuildScriptEdit_RefusesActivationByDeletion(t *testing.T) {
 	// Removing a // comment line is harmless.
 	require.Nil(t, checkBuildScriptEdit("app/build.gradle", mfvaGradle+"// old note\n", mfvaGradle))
 }
+
+// mfva verify run 36091852012 (116, root detection): the source fix used
+// RootBeer, the build-script edit that added the dependency was refused by the
+// gate, and the retry abstained. Recorded as a plain decline, that let the
+// source half ship and the build failed on `package com.scottyab.rootbeer
+// does not exist`. A decline after a refusal is a refusal, and a finding whose
+// build-script change was refused is rolled back.
+func TestRun_RolledBackWhenBuildScriptChangeRefusedThenDeclined(t *testing.T) {
+	root := writeRepo(t, map[string]string{"app/build.gradle": mfvaGradle, exportedRel: exportedJedis})
+	attempts := 0
+	d := autofixDeps{
+		locateTargets: targetsAt(exportedRel, "app/build.gradle"),
+		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
+			if req.Path == exportedRel {
+				return agent.FixResult{Changed: true, PatchedContent: "import com.scottyab.rootbeer.RootBeer;\n" + exportedJedis}, nil
+			}
+			attempts++
+			if req.PriorViolation == "" {
+				return agent.FixResult{Changed: true,
+					PatchedContent: mfvaGradle + "dependencies { implementation 'com.scottyab:rootbeer-lib:0.1.0' }\n"}, nil
+			}
+			return agent.FixResult{}, nil // the retry abstains
+		},
+	}
+	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
+		Finding: "Root detection", VulnerabilityID: 116, Remediation: "r",
+		Units: []FindingUnit{{Title: "root", Remediation: "add RootBeer and check isRooted()"}},
+	}})
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 2, attempts, "refused once, retried once")
+	require.Equal(t, statusSkipped, out.Findings[0].Status, out.Findings[0].Detail)
+	require.Contains(t, out.Findings[0].Detail, "rejected by patch gate (build-script-addition), then declined")
+	require.Empty(t, out.Patches, "the RootBeer source half must not ship without its dependency")
+	got, _ := os.ReadFile(filepath.Join(root, exportedRel))
+	require.Equal(t, exportedJedis, string(got), "rolled back on disk")
+}

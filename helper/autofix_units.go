@@ -207,12 +207,19 @@ func (s fixSession) rollBack(results []targetResult, before map[string]string) e
 //     refused or failed, or no existing file was changed to use it -- the new
 //     file and the edits that refer to it (a manifest's
 //     @xml/network_security_config, a call to SecureCryptoManager) are one
-//     change, and a new file nothing uses fixes nothing.
+//     change, and a new file nothing uses fixes nothing; or
+//   - the gate refused its module build-script change (even when the retry
+//     then declined) and anything else was changed: the rest may import the
+//     dependency that change would have added (mfva 116, RootBeer).
 //
-// A declined EXISTING target alone triggers neither: it needed no change.
+// A declined EXISTING target alone triggers none: it needed no change.
 func needsRollback(results []targetResult) bool {
-	script, hasNew, failed, usedBy := false, false, false, false
+	script, hasNew, failed, usedBy, scriptRefused := false, false, false, false, false
 	for _, r := range results {
+		refused := strings.HasPrefix(r.Reason, "rejected by patch gate")
+		// A build-script change the gate refused is something the rest of
+		// the remediation may rely on: a dependency its source imports.
+		scriptRefused = scriptRefused || (!r.Patched && refused && isModuleBuildScript(r.Path))
 		switch {
 		case r.New:
 			hasNew = true
@@ -223,11 +230,11 @@ func needsRollback(results []targetResult) bool {
 		if r.Patched && (isModuleBuildScript(r.Path) || isModuleRulesFile(r.Path)) {
 			script = true
 		}
-		if !r.Patched && (strings.HasPrefix(r.Reason, "rejected by patch gate") || strings.HasPrefix(r.Reason, "error:")) {
+		if !r.Patched && (refused || strings.HasPrefix(r.Reason, "error:")) {
 			failed = true
 		}
 	}
-	return (script && failed) || (hasNew && (failed || !usedBy))
+	return (script && failed) || (hasNew && (failed || !usedBy)) || (scriptRefused && (usedBy || hasNew))
 }
 
 // withoutPaths drops targets naming a file listed as new: the model sometimes

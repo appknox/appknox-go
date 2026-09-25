@@ -558,14 +558,21 @@ func (s fixSession) produceFix(ctx context.Context, path string, in FindingInput
 func (s fixSession) produceFixFor(
 	ctx context.Context, path string, in FindingInputs, tc targetContext,
 ) (fixservice.Result, string, error) {
+	refused := "" // the rule the previous attempt broke, if any
 	for attempt, violation := 0, ""; ; attempt++ {
 		res, err := s.attemptFix(ctx, path, in, tc, violation)
 		if err != nil {
 			return res, "", err
 		}
 		// Nothing to check. An abstention is already the safe outcome -- the
-		// gate exists to turn a bad edit into one of these.
+		// gate exists to turn a bad edit into one of these. After a refusal it
+		// is still a refusal: the file needed a change the gate would not
+		// allow (mfva 116's RootBeer dependency), which is not the same as
+		// needing no change, and fixTargets' rollback must see the difference.
 		if !res.Changed || res.PatchedContent == "" {
+			if refused != "" {
+				return res, fmt.Sprintf("rejected by patch gate (%s), then declined", refused), nil
+			}
 			return res, reasonDeclined, nil
 		}
 		// The original is what is on disk: the fixer restores the file before
@@ -590,7 +597,7 @@ func (s fixSession) produceFixFor(
 			return fixservice.Result{}, fmt.Sprintf("rejected by patch gate (%s)", v.Rule), nil
 		}
 		fmt.Printf("   .. %s rejected (%s); retrying once\n", path, v.Rule)
-		violation = v.Detail
+		violation, refused = v.Detail, v.Rule
 	}
 }
 
