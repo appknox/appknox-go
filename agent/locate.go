@@ -30,12 +30,19 @@ func autofixBaseURL(host string) string {
 
 // rewriteAutofixMessages maps the SDK's /v1/messages path onto Mycroft's
 // KnoxIQ proxy. Query strings (e.g. beta=true) are left intact.
+//
+// WithAPIKey puts the Appknox PAT in X-Api-Key. Mycroft authenticates
+// Authorization: Token, the same header as the working autofix curl.
 func rewriteAutofixMessages(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 	if strings.HasSuffix(req.URL.Path, anthropicMessagesSuffix) {
 		req.URL.Path = strings.TrimSuffix(req.URL.Path, anthropicMessagesSuffix)
 		if !strings.HasSuffix(req.URL.Path, "/") {
 			req.URL.Path += "/"
 		}
+	}
+	if key := req.Header.Get("X-Api-Key"); key != "" {
+		req.Header.Set("Authorization", "Token "+key)
+		req.Header.Del("X-Api-Key")
 	}
 	return next(req)
 }
