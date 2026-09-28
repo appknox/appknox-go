@@ -74,7 +74,7 @@ const (
 type Config struct {
 	Host          string // APPKNOX_API_HOST; messages go to {Host}/api/knoxiq/autofix/
 	Token         string // Appknox PAT presented to Mycroft (not a provider key)
-	Model         string // optional; defaults to Claude Sonnet
+	Model         string // optional; defaults to Claude Haiku 4.5
 	MaxTokens     int64  // optional; each turn has its own default (locate: defaultTargetsMaxTokens, fix: defaultFixMaxTokens)
 	MaxIterations int    // optional; defaults to defaultMaxIterations
 }
@@ -86,7 +86,7 @@ type Config struct {
 func runnerParamsWithBudget(cfg Config, system, user string, fallbackMaxTokens int64) sdk.BetaToolRunnerParams {
 	model := cfg.Model
 	if model == "" {
-		model = string(sdk.ModelClaudeSonnet5)
+		model = string(sdk.ModelClaudeHaiku4_5)
 	}
 	maxTokens := cfg.MaxTokens
 	if maxTokens <= 0 {
