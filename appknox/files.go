@@ -124,6 +124,20 @@ type HealthScoreOptions struct {
 	EventType string `url:"event_type,omitempty"`
 }
 
+// HealthScoreAuditEntry is one recalculation in a file's health score history.
+// KnoxIQRan marks a recalculation triggered by a completed KnoxIQ triage.
+type HealthScoreAuditEntry struct {
+	EventType string `json:"event_type"`
+	KnoxIQRan bool   `json:"knoxiq_ran"`
+	Score     int    `json:"score"`
+}
+
+// HealthScoreAudit represents the response returned by the API endpoint
+// /api/v3/files/{id}/health_score_audit.
+type HealthScoreAudit struct {
+	AuditTrail []HealthScoreAuditEntry `json:"audit_trail"`
+}
+
 // FileListOptions specifies the optional parameters to the
 // FilesService.List method.
 type FileListOptions struct {
@@ -180,8 +194,9 @@ func (s *FilesService) GetScansStatusSummary(ctx context.Context, fileID int) (*
 }
 
 // GetHealthScore fetches the security health score for the given file using
-// the v3 endpoint /api/v3/files/{id}/health_score.
-// If opt.EventType is provided, it is sent as a query parameter and stores an audit entry.
+// the v3 endpoint /api/v3/files/{id}/health_score. The backend returns the
+// file's latest stored score; opt.EventType is sent as a query parameter when
+// provided, but current backends do not use it to select a score.
 func (s *FilesService) GetHealthScore(ctx context.Context, fileID int, opt *HealthScoreOptions) (*HealthScore, *Response, error) {
 	u := fmt.Sprintf("api/v3/files/%v/health_score", fileID)
 	URL, err := addOptions(u, opt)
@@ -195,4 +210,17 @@ func (s *FilesService) GetHealthScore(ctx context.Context, fileID int, opt *Heal
 	var healthScore HealthScore
 	resp, err := s.client.Do(ctx, req, &healthScore)
 	return &healthScore, resp, err
+}
+
+// GetHealthScoreAudit fetches the recalculation history of a file's health
+// score using the v3 endpoint /api/v3/files/{id}/health_score_audit.
+func (s *FilesService) GetHealthScoreAudit(ctx context.Context, fileID int) (*HealthScoreAudit, *Response, error) {
+	u := fmt.Sprintf("api/v3/files/%v/health_score_audit", fileID)
+	req, err := s.client.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var audit HealthScoreAudit
+	resp, err := s.client.Do(ctx, req, &audit)
+	return &audit, resp, err
 }
