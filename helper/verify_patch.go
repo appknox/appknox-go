@@ -117,6 +117,9 @@ func verifyPatchWith(root, path, original, patched string, opts gateOpts) *patch
 		if v := checkResourceRefs(root, path, original, patched); v != nil {
 			return v
 		}
+		if v := checkRReferences(root, path, original, patched); v != nil {
+			return v
+		}
 	}
 	if v := checkBuildConfigImport(original, patched); v != nil {
 		return v

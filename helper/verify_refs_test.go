@@ -49,3 +49,42 @@ func TestVerifyPatchWith_DeferRefs(t *testing.T) {
 	require.NotNil(t, v)
 	require.Equal(t, "missing-resource", v.Rule)
 }
+
+func TestVerifyPatchRReferences(t *testing.T) {
+	root := writeRepo(t, map[string]string{
+		"app/build.gradle":                 "android {\n    namespace 'com.x'\n}\n",
+		"app/src/main/res/layout/main.xml": "<LinearLayout/>\n",
+		"app/src/main/java/com/x/A.kt":     "package com.x\n\nclass A\n",
+	})
+	p := "app/src/main/java/com/x/A.kt"
+	orig := "package com.x\n\nclass A\n"
+	body := func(expr string) string { return "package com.x\n\nclass A { val v = " + expr + " }\n" }
+
+	v := verifyPatch(root, p, orig, body("R.layout.secure_keyboard"))
+	require.NotNil(t, v)
+	require.Equal(t, "missing-r-reference", v.Rule)
+	require.Contains(t, v.Detail, "R.layout.secure_keyboard")
+
+	for _, ok := range []string{"R.layout.main", "android.R.layout.simple_list_item_1", "com.other.R.layout.gone",
+		"com.x.R.layout.main", "R.styleable.Key_label", "R.attr.colorPrimary",
+		"R.string.abc_action_bar_home_description"} {
+		require.Nil(t, verifyPatch(root, p, orig, body(ok)), ok)
+	}
+	require.NotNil(t, verifyPatch(root, p, orig, body("com.x.R.string.gone")), "the module's own qualified R is judged")
+
+	imported := "package com.x\n\nimport com.other.R\n\nclass A { val v = R.layout.gone }\n"
+	require.Nil(t, verifyPatch(root, p, orig, imported), "an imported foreign R is not this module's")
+	require.Nil(t, verifyPatchWith(root, p, orig, body("R.layout.secure_keyboard"), gateOpts{deferRefs: true}))
+}
+
+// With no namespace to place it, a qualified R cannot be told from a foreign
+// one and is not judged; an unqualified R is always the module's own.
+func TestVerifyPatchRReferencesWithoutNamespace(t *testing.T) {
+	root := writeRepo(t, map[string]string{"app/src/main/java/com/x/A.java": "package com.x;\nclass A {}\n"})
+	p := "app/src/main/java/com/x/A.java"
+	orig := "package com.x;\nclass A {}\n"
+	require.Nil(t, verifyPatch(root, p, orig, "package com.x;\nclass A { int v = com.x.R.layout.gone; }\n"))
+	v := verifyPatch(root, p, orig, "package com.x;\nclass A { int v = R.layout.gone; }\n")
+	require.NotNil(t, v)
+	require.Equal(t, "missing-r-reference", v.Rule)
+}
