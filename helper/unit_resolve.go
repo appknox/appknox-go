@@ -95,23 +95,24 @@ var completionFileKinds = map[string]bool{"layout": true, "xml": true, "drawable
 
 // completionTarget is the file that should define r, in the main source set
 // of the module holding the file that references it. It passes the same
-// validation as a locate turn's new_files.
+// validation as a locate turn's new_files, so a NEW file under an
+// Eclipse-layout <module>/res is refused and its reference inlined instead.
 func completionTarget(root string, r unresolvedRef) (agent.Target, bool) {
 	module := moduleRoot(root, r.From)
 	if module == "" {
 		return agent.Target{}, false
 	}
-	main := path.Join(module, "src", "main")
+	res := moduleResDir(root, module)
 	var rel, why string
 	switch {
 	case r.Kind == "class":
 		rel = classPath(root, module, r.Name)
 		why = fmt.Sprintf("completion: create class %s, which %s declares; write it as the remediation describes", r.Name, r.From)
 	case valuesFiles[r.Kind] != "":
-		rel = path.Join(main, "res", "values", valuesFiles[r.Kind])
+		rel = path.Join(res, "values", valuesFiles[r.Kind])
 		why = fmt.Sprintf("completion: define %s, which %s references; add only that entry", r, r.From)
 	case completionFileKinds[r.Kind]:
-		rel = path.Join(main, "res", r.Kind, r.Name+".xml")
+		rel = path.Join(res, r.Kind, r.Name+".xml")
 		why = fmt.Sprintf("completion: create %s, which %s references", r, r.From)
 	default:
 		return agent.Target{}, false
@@ -124,6 +125,18 @@ func completionTarget(root string, r unresolvedRef) (agent.Target, bool) {
 		return agent.Target{Path: got, Why: why}, true
 	}
 	return agent.Target{}, false
+}
+
+// moduleResDir is the module's main res directory the build reads:
+// <module>/src/main/res when it exists, else an Eclipse-layout <module>/res
+// (res.srcDirs = ['res']) when that exists, else <module>/src/main/res.
+func moduleResDir(root, module string) string {
+	for _, dir := range []string{path.Join(module, "src", "main", "res"), path.Join(module, "res")} {
+		if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(dir))); err == nil && info.IsDir() {
+			return dir
+		}
+	}
+	return path.Join(module, "src", "main", "res")
 }
 
 // classPath places a new class in the module's language: Kotlin when the

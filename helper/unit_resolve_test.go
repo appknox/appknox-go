@@ -126,6 +126,40 @@ func TestCompletionTarget(t *testing.T) {
 	}
 }
 
+// An Eclipse-layout module keeps res/ at the module root (res.srcDirs =
+// ['res']): a completion under src/main/res would land where the build never
+// looks while the index says it resolves.
+func TestCompletionTarget_ModuleResDir(t *testing.T) {
+	root := writeRepo(t, map[string]string{
+		"legacy/build.gradle":               "android {\n    sourceSets { main { res.srcDirs = ['res'] } }\n}\n",
+		"legacy/AndroidManifest.xml":        "<manifest/>\n",
+		"legacy/res/values/strings.xml":     stringsBody,
+		"legacy/res/xml/cfg.xml":            "<input-method/>\n",
+		"both/build.gradle":                 "android {}\n",
+		"both/res/values/strings.xml":       stringsBody,
+		"both/src/main/res/values/keep.xml": "<resources/>\n",
+	})
+	cases := []struct {
+		ref  unresolvedRef
+		path string
+		ok   bool
+	}{
+		{unresolvedRef{"string", "secure_keyboard_name", "legacy/res/xml/cfg.xml"}, "legacy/res/values/strings.xml", true},
+		// A new file outside src/<set>/ fails new-file placement: no target,
+		// so the reference is inlined instead of written outside the build.
+		{unresolvedRef{"dimen", "key_height", "legacy/res/xml/cfg.xml"}, "", false},
+		{unresolvedRef{"string", "secure_keyboard_name", "both/src/main/res/values/keep.xml"},
+			"both/src/main/res/values/strings.xml", true},
+	}
+	for _, c := range cases {
+		got, ok := completionTarget(root, c.ref)
+		require.Equal(t, c.ok, ok, c.ref.String()+" -> "+got.Path)
+		if ok {
+			require.Equal(t, c.path, got.Path)
+		}
+	}
+}
+
 // dvfa: the config names @string/secure_keyboard_name, which nothing defines.
 // Completion adds it to strings.xml, and the unit lands.
 func TestRun_CompletionDefinesAMissingString(t *testing.T) {
