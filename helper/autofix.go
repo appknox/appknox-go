@@ -559,7 +559,7 @@ func (s fixSession) produceFixFor(
 	ctx context.Context, path string, in FindingInputs, tc targetContext,
 ) (fixservice.Result, string, error) {
 	refused := "" // the rule the previous attempt broke, if any
-	for attempt, violation := 0, ""; ; attempt++ {
+	for attempt, violation := 0, tc.Prior; ; attempt++ {
 		res, err := s.attemptFix(ctx, path, in, tc, violation)
 		if err != nil {
 			return res, "", err
@@ -586,7 +586,7 @@ func (s fixSession) produceFixFor(
 		if readErr != nil {
 			return res, "", nil
 		}
-		v := verifyPatch(s.root, path, original, res.PatchedContent)
+		v := verifyPatchWith(s.root, path, original, res.PatchedContent, gateOpts{deferRefs: tc.DeferRefs})
 		if v == nil {
 			return res, "", nil
 		}

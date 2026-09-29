@@ -28,6 +28,11 @@ type targetContext struct {
 	Why        string
 	OtherFiles []agent.Target
 	Create     bool // the target is a new file
+	// DeferRefs leaves reference checks to the unit's resolve pass (spec 3.2).
+	DeferRefs bool
+	// Prior is a violation the FIRST attempt is already told about: a
+	// completion round re-fixing a file that references what nothing defines.
+	Prior string
 }
 
 // runUnit locates and fixes one KnoxIQ finding.

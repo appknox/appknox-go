@@ -462,3 +462,31 @@ func TestRunUnit_NeedsNewFileFalseClaimIsTargetsInLocateOnly(t *testing.T) {
 	require.Equal(t, statusTargets, out.Findings[0].Status)
 	require.Contains(t, out.Findings[0].Detail, "not new: app/build.gradle")
 }
+
+func TestProduceFixFor_PriorReachesTheFirstAttempt(t *testing.T) {
+	root, rel := repoWithFile(t, javaBody)
+	var priors []string
+	s := dryAgentSession(root, autofixDeps{agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
+		priors = append(priors, req.PriorViolation)
+		return agent.FixResult{}, nil
+	}})
+	_, reason, err := s.produceFixFor(context.Background(), rel, FindingInputs{Finding: "f", Remediation: "r"},
+		targetContext{Prior: "write the literal"})
+	require.NoError(t, err)
+	require.Equal(t, reasonDeclined, reason)
+	require.Equal(t, []string{"write the literal"}, priors)
+}
+
+func TestProduceFixFor_DeferRefsReachesTheGate(t *testing.T) {
+	root := writeRepo(t, map[string]string{manifestRel: manifestBody})
+	s := dryAgentSession(root, autofixDeps{agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+		return agent.FixResult{Changed: true, PatchedContent: manifestNSC}, nil // @xml/network_security_config: absent
+	}})
+	in := FindingInputs{Finding: "f", Remediation: "r"}
+	_, reason, err := s.produceFixFor(context.Background(), manifestRel, in, targetContext{DeferRefs: true})
+	require.NoError(t, err)
+	require.Equal(t, "", reason, "deferred: the unit pass judges it")
+	_, reason, err = s.produceFixFor(context.Background(), manifestRel, in, targetContext{})
+	require.NoError(t, err)
+	require.Equal(t, "rejected by patch gate (missing-resource)", reason)
+}
