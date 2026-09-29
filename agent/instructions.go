@@ -130,8 +130,13 @@ NEW FILE - when the target file is marked NEW, it does not exist yet.
   correct it afterwards. Write exactly what the remediation specifies for this
   file, using KnoxIQ's reference content where it gives one. A Java or Kotlin
   file declares the package that matches its directory and imports every type
-  it names. A resource references only resources you have read or that another
-  NEW file in this remediation creates. No placeholder bodies, TODOs or
+  it names. Every resource a new or edited file names (@string/, @layout/,
+  @xml/, @dimen/, @style/ in XML, R.<type>.<name> in code)
+  must be one you have read or one listed as a NEW file in this remediation.
+  When it is neither (a
+  label, a keyboard layout, a size), write the literal value in place
+  (android:label="Secure keyboard"), or build the view in code; never name a
+  resource that nothing creates. No placeholder bodies, TODOs or
   example values: where the remediation leaves a part unspecified, write the
   minimal working form. If the file cannot be written without inventing
   something the remediation does not specify, make NO edit and report why.
@@ -166,6 +171,12 @@ XML - a manifest or resource is a document, not a text file.
   (allowBackup, debuggable, launchMode) may conflict at merge time. Change such
   an attribute only when the remediation names this file, and say in your report
   that a merge conflict is possible.
+  A component you add to a manifest (<activity>, <service>, <receiver>,
+  <provider>) that has an <intent-filter> must declare android:exported explicitly
+  - the build rejects it otherwise. Use "false" unless the remediation says other
+  apps or the system must reach it. A service the system binds (an input method,
+  an accessibility service) is exported="true" and carries its binding permission
+  (android:permission="android.permission.BIND_INPUT_METHOD" for an input method).
 
 MINIMAL - change the named construct, not the call around it.
   Do NOT alter a method signature, argument list, overload, import, or exception

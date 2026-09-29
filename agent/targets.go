@@ -87,8 +87,14 @@ The files that must change to USE the new file (the manifest that references it,
 
 Confirm every existing file with grep or glob before listing it.
 
-Your final message must be ONLY this JSON object, with no other text:
-{"targets":[{"path":"<repository-relative path>","why":"<one short sentence: which part of the remediation this file carries>"}],"new_files":[{"path":"<exact repository-relative path to create>","why":"<what the remediation creates it for>"}],"not_found":["<name>: <why it is not in this repository>"],"needs_new_file":["<file or class>: <what it is for>"]}
+Every not_found entry states the search that came back empty ("Info.plist: glob *Info.plist returned no files"). Never say a file is absent, or "usually not committed", from general knowledge: report only what your searches showed. The tools list source-like files only, so a file type they never show (.plist, .pbxproj, .xcconfig, .entitlements, .dart) may still exist: write "<name>: not searchable (<type>)" for it, never "not in this repository".
+
+You have about 12 tool calls. Stop searching once every part of the remediation is placed or ruled out, and answer: an answer with not_found entries is always better than no answer.
+
+You may think briefly first. Then end with the JSON object inside <answer></answer> tags, and write nothing after the closing tag:
+<answer>{"targets":[{"path":"<repository-relative path>","why":"<one short sentence: which part of the remediation this file carries>"}],"new_files":[{"path":"<exact repository-relative path to create>","why":"<what the remediation creates it for>"}],"not_found":["<name>: <why it is not in this repository>"],"needs_new_file":["<file or class>: <what it is for>"]}</answer>
+Example, for a remediation that adds a network security config and pins a library's client:
+<answer>{"targets":[{"path":"app/src/main/AndroidManifest.xml","why":"sets android:networkSecurityConfig on <application>"}],"new_files":[{"path":"app/src/main/res/xml/network_security_config.xml","why":"the config the manifest references"}],"not_found":["com.lib.Pinner: grep Pinner matched no files"],"needs_new_file":[]}</answer>
 Use "targets": [] when no existing file should change, "new_files": [] when the remediation creates nothing, and "needs_new_file": [] unless a new file's place cannot be determined.`
 
 // targetsUserPrompt renders one KnoxIQ finding in full.

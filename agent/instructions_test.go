@@ -249,3 +249,21 @@ func TestFixSystemPrompt_rulesFileOnlyGainsRules(t *testing.T) {
 		}
 	}
 }
+
+// Batch-1 arch runs, 2026-09-29: the keylogger remediation (133) broke the
+// build in three of four repos that received it -- a new input_method_config.xml
+// naming a @string nobody created (dvfa), a new service with an intent-filter
+// but no android:exported (vuln-bank-mobile), a new Kotlin class using an
+// R.layout nobody created (PeopleInSpace).
+func TestFixSystemPrompt_newComponentsResolveAndDeclareExported(t *testing.T) {
+	for _, want := range []string{
+		"must be one you have read or one listed as a NEW file",
+		"write the literal value in place",
+		"must declare android:exported explicitly",
+		"BIND_INPUT_METHOD",
+	} {
+		if !strings.Contains(fixSystemPrompt, want) {
+			t.Errorf("system prompt should contain %q", want)
+		}
+	}
+}

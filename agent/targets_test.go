@@ -183,3 +183,26 @@ func TestTargetsPromptAllowsModuleRulesFile(t *testing.T) {
 	require.Contains(t, targetsSystemPrompt, "app/proguard-rules.pro, beside that build script) IS a target")
 	require.Contains(t, targetsSystemPrompt, "the root proguard-rules.pro")
 }
+
+// Batch-1 arch runs, 2026-09-29. ndk-samples (104, 133), kotlinconf (133) and
+// DVRN (83, 133) all ended "locate: unparseable reply"; iGoat-Swift answered
+// "Info.plist is not present in this repository" when it was, because the
+// tools never list .plist files and the model filled the gap from general
+// knowledge. The prompt must ask for a delimited answer, a tool-call budget,
+// and evidence behind every not_found.
+func TestTargetsSystemPrompt_AnswerTagsBudgetAndEvidence(t *testing.T) {
+	for _, want := range []string{
+		"<answer>", "</answer>", "about 12 tool calls",
+		"states the search that came back empty", "from general knowledge",
+		"not searchable", ".plist", ".pbxproj",
+	} {
+		require.Contains(t, targetsSystemPrompt, want)
+	}
+}
+
+func TestParseTargetReply_AnswerTagsAfterScratchpad(t *testing.T) {
+	text := "Searched manifests {twice}.\n<answer>{\"targets\":[{\"path\":\"app/src/main/AndroidManifest.xml\",\"why\":\"w\"}],\"new_files\":[],\"not_found\":[],\"needs_new_file\":[]}</answer>"
+	r, err := parseTargetReply(text)
+	require.NoError(t, err)
+	require.Len(t, r.Targets, 1)
+}
