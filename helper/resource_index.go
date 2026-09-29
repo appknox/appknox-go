@@ -36,11 +36,14 @@ var resPathRE = regexp.MustCompile(`(^|/)res/([a-z]+)(-[^/]+)?/([^/]+)$`)
 // idDefRE finds an id a layout or menu declares.
 var idDefRE = regexp.MustCompile(`@\+id/([A-Za-z0-9_.]+)`)
 
-// classDeclRE finds class, interface and object declarations, nested ones
-// included: over-counting a class only makes a completion less likely, and a
-// completion that duplicates a class breaks the build.
-var classDeclRE = regexp.MustCompile(`(?m)^\s*(?:(?:public|private|protected|internal|abstract|final|open|` +
-	`sealed|data|enum|annotation|inner|static|value)\s+)*(?:class|interface|object|@interface)\s+(\w+)`)
+// classDeclRE finds class, interface, object, enum and record declarations,
+// nested ones and those behind same-line annotations (@Keep, @AndroidEntryPoint,
+// @SuppressWarnings("x")) included: over-counting a class only makes a
+// completion less likely, and a completion that duplicates a class breaks the
+// build. Kotlin's `enum class` reads enum as a modifier.
+var classDeclRE = regexp.MustCompile(`(?m)^\s*(?:(?:@[\w.]+(?:\([^)\n]*\))?|public|private|protected|internal|` +
+	`abstract|final|open|sealed|data|enum|annotation|inner|static|value)\s+)*` +
+	`(?:class|interface|object|@interface|record|enum)\s+(\w+)`)
 
 // valuesKinds maps a res/values element to the R kind it defines.
 var valuesKinds = map[string]string{

@@ -92,3 +92,25 @@ func TestResourceIndex_GeneratedResources(t *testing.T) {
 	}))
 	require.True(t, plugin.has("string", "default_web_client_id"), "the plugin is applied")
 }
+
+// A declaration the index misses is reported unresolved, and completing it
+// writes a duplicate class. Each form on its own line, as real sources have it.
+func TestResourceIndex_ClassDeclarationForms(t *testing.T) {
+	cases := []struct{ name, file, src, fqcn string }{
+		{"Hilt-annotated Kotlin class", "K.kt",
+			"package com.x\n\n@AndroidEntryPoint class MainActivity : AppCompatActivity()\n", "com.x.MainActivity"},
+		{"annotated public Java class", "Foo.java", "package com.x;\n\n@Keep public class Foo {}\n", "com.x.Foo"},
+		{"annotation with arguments", "Bar.java",
+			"package com.x;\n\n@SuppressWarnings(\"unused\") @Keep final class Bar {}\n", "com.x.Bar"},
+		{"qualified annotation", "Baz.kt", "package com.x\n\n@androidx.annotation.Keep object Baz\n", "com.x.Baz"},
+		{"Java record", "Point.java", "package com.x;\n\npublic record Point(int x, int y) {}\n", "com.x.Point"},
+		{"Java enum", "Mode.java", "package com.x;\n\npublic enum Mode { A, B }\n", "com.x.Mode"},
+		{"Kotlin enum class", "Color.kt", "package com.x\n\nenum class Color { RED }\n", "com.x.Color"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := writeRepo(t, map[string]string{"app/src/main/java/com/x/" + c.file: c.src})
+			require.True(t, buildResourceIndex(root).hasClass(c.fqcn))
+		})
+	}
+}
