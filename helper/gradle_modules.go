@@ -110,3 +110,15 @@ func projectDirs(root string) map[string]string {
 	}
 	return out
 }
+
+// mergesWith reports whether AGP merges the manifest at other with the one at
+// patched: the same module (any source set), or a library module either one
+// pulls in through project(':x'). A manifest outside any Gradle module is
+// assumed to merge with everything -- today's conservative behaviour (spec 3.3).
+func mergesWith(root, patched, other string) bool {
+	pm, om := moduleRoot(root, patched), moduleRoot(root, other)
+	if pm == "" || om == "" || pm == om {
+		return true
+	}
+	return projectDeps(root, pm)[om] || projectDeps(root, om)[pm]
+}

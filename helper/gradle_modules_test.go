@@ -40,3 +40,50 @@ func TestProjectDeps(t *testing.T) {
 	require.Equal(t, map[string]bool{"lib": true, "libs/core": true}, projectDeps(root, "app"))
 	require.Empty(t, projectDeps(root, "lib"))
 }
+
+func TestVerifyPatchMergeScoping(t *testing.T) {
+	sets := "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n" +
+		"  <application android:allowBackup=\"true\"/>\n</manifest>\n"
+	patched := "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n" +
+		"  <application android:allowBackup=\"false\"/>\n</manifest>\n"
+	cases := []struct {
+		name     string
+		files    map[string]string
+		path     string
+		conflict bool
+	}{
+		{"sibling sample modules (ndk-samples)", map[string]string{
+			"hello-jni/app/build.gradle": "", "hello-jni/app/src/main/AndroidManifest.xml": "<manifest/>\n",
+			"teapots/app/build.gradle": "", "teapots/app/src/main/AndroidManifest.xml": sets,
+		}, "hello-jni/app/src/main/AndroidManifest.xml", false},
+		{"main and debug of one module (PeopleInSpace)", map[string]string{
+			"app/build.gradle": "", "app/src/main/AndroidManifest.xml": "<manifest/>\n",
+			"app/src/debug/AndroidManifest.xml": sets,
+		}, "app/src/main/AndroidManifest.xml", true},
+		{"app and its project(':lib')", map[string]string{
+			"settings.gradle":                  "include ':app', ':lib'\n",
+			"app/build.gradle":                 "dependencies {\n    implementation project(':lib')\n}\n",
+			"app/src/main/AndroidManifest.xml": "<manifest/>\n",
+			"lib/build.gradle":                 "", "lib/src/main/AndroidManifest.xml": sets,
+		}, "app/src/main/AndroidManifest.xml", true},
+		{"unrelated module", map[string]string{
+			"app/build.gradle": "", "app/src/main/AndroidManifest.xml": "<manifest/>\n",
+			"wear/build.gradle": "", "wear/src/main/AndroidManifest.xml": sets,
+		}, "app/src/main/AndroidManifest.xml", false},
+		{"non-Gradle tree stays repository-wide", map[string]string{
+			"app/src/main/AndroidManifest.xml": "<manifest/>\n", "samples/x/AndroidManifest.xml": sets,
+		}, "app/src/main/AndroidManifest.xml", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := writeRepo(t, c.files)
+			v := verifyPatch(root, c.path, "<manifest/>\n", patched)
+			if !c.conflict {
+				require.Nil(t, v)
+				return
+			}
+			require.NotNil(t, v)
+			require.Equal(t, "manifest-merge-conflict", v.Rule)
+		})
+	}
+}

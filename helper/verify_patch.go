@@ -421,6 +421,10 @@ func findManifestConflict(root, path string, attrs map[string]bool) (string, str
 		if filepath.Base(p) != "AndroidManifest.xml" || sameFile(p, root, path) {
 			return nil
 		}
+		// ndk-samples: thirty independent sample apps are not one merge.
+		if rel, relErr := filepath.Rel(root, p); relErr != nil || !mergesWith(root, path, filepath.ToSlash(rel)) {
+			return nil
+		}
 		b, readErr := os.ReadFile(p)
 		if readErr != nil {
 			return nil
