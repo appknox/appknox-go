@@ -137,3 +137,20 @@ func TestResourceIndex_ValuesWithDoctypeEntities(t *testing.T) {
 	}
 	require.True(t, x.has("color", "accent"), "entries after an entity use are indexed")
 }
+
+// Values files define drawables and ids too; layouts, menus and navigation
+// graphs define ids with @+id.
+func TestResourceIndex_ValuesDrawablesAndIDDefinitions(t *testing.T) {
+	root := writeRepo(t, map[string]string{
+		"app/src/main/res/values/drawables.xml": "<resources>\n    <drawable name=\"scrim\">#80000000</drawable>\n" +
+			"    <item type=\"drawable\" name=\"alias\">@drawable/scrim</item>\n    <item type=\"id\" name=\"spare\"/>\n</resources>\n",
+		"app/src/main/res/menu/main.xml":      "<menu><item android:id=\"@+id/action_lock\"/></menu>\n",
+		"app/src/main/res/navigation/nav.xml": "<navigation android:id=\"@+id/nav\"><fragment android:id=\"@+id/home\"/></navigation>\n",
+	})
+	x := buildResourceIndex(root)
+	require.True(t, x.has("drawable", "scrim"), "<drawable name=...> in values")
+	require.True(t, x.has("drawable", "alias"))
+	require.True(t, x.has("id", "spare"))
+	require.True(t, x.has("id", "action_lock"), "@+id in a menu")
+	require.True(t, x.has("id", "home"), "@+id in a navigation graph")
+}

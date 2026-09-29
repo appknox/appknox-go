@@ -50,6 +50,7 @@ var valuesKinds = map[string]string{
 	"string": "string", "dimen": "dimen", "color": "color", "bool": "bool", "integer": "integer",
 	"string-array": "array", "integer-array": "array", "array": "array", "plurals": "plurals",
 	"fraction": "fraction", "style": "style", "attr": "attr", "declare-styleable": "styleable",
+	"drawable": "drawable",
 }
 
 // buildResourceIndex walks the checkout once, skipping what agent.PruneDir

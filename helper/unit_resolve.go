@@ -84,7 +84,7 @@ func unresolvedUnitRefs(root string, patched []string, before map[string]string)
 var valuesFiles = map[string]string{
 	"string": "strings.xml", "plurals": "strings.xml", "dimen": "dimens.xml", "fraction": "dimens.xml",
 	"color": "colors.xml", "bool": "bools.xml", "integer": "integers.xml", "array": "arrays.xml",
-	"style": "styles.xml",
+	"style": "styles.xml", "id": "ids.xml",
 }
 
 // completionFileKinds are file resources a completion may create as one new
@@ -108,6 +108,10 @@ func completionTarget(root string, r unresolvedRef) (agent.Target, bool) {
 	case r.Kind == "class":
 		rel = classPath(root, module, r.Name)
 		why = fmt.Sprintf("completion: create class %s, which %s declares; write it as the remediation describes", r.Name, r.From)
+	case r.Kind == "id":
+		rel = path.Join(res, "values", valuesFiles[r.Kind])
+		why = fmt.Sprintf(`completion: define %s, which %s references; add only <item type="id" name="%s"/>`,
+			r, r.From, r.Name)
 	case valuesFiles[r.Kind] != "":
 		rel = path.Join(res, "values", valuesFiles[r.Kind])
 		why = fmt.Sprintf("completion: define %s, which %s references; add only that entry", r, r.From)
@@ -206,6 +210,17 @@ func byReferrer(refs []unresolvedRef) []referrer {
 		out = append(out, referrer{from: from, refs: rs})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].from < out[j].from })
+	return out
+}
+
+// inlinable drops the refs a re-fix cannot replace with a literal: ids.
+func inlinable(refs []unresolvedRef) []unresolvedRef {
+	out := make([]unresolvedRef, 0, len(refs))
+	for _, r := range refs {
+		if r.Kind != "id" {
+			out = append(out, r)
+		}
+	}
 	return out
 }
 
@@ -348,8 +363,9 @@ func (s fixSession) completeUnit(ctx context.Context, in FindingInputs, u Findin
 				return patches, done, refs, err
 			}
 		}
-		// What completion did not define is inlined where it is referenced.
-		for _, g := range byReferrer(unresolvedUnitRefs(s.root, patchedPaths(results, done), before)) {
+		// What completion did not define is inlined where it is referenced;
+		// an id has no literal value, so it is left to the next round.
+		for _, g := range byReferrer(inlinable(unresolvedUnitRefs(s.root, patchedPaths(results, done), before))) {
 			t := agent.Target{Path: g.from, Why: whyOf(all, g.from)}
 			_, patch, err := s.fixOne(ctx, in, u, t, all, inlinePrior(g.refs))
 			if patch != nil {

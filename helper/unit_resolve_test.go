@@ -160,6 +160,73 @@ func TestCompletionTarget_ModuleResDir(t *testing.T) {
 	}
 }
 
+// An id is defined in values/ids.xml; there is no literal to inline for one.
+func TestCompletionTarget_ID(t *testing.T) {
+	kt := "app/src/main/java/com/x/Main.kt"
+	root := writeRepo(t, map[string]string{"app/build.gradle": imeGradle, kt: "package com.x\n\nclass Main\n"})
+	got, ok := completionTarget(root, unresolvedRef{"id", "btn_ok", kt})
+	require.True(t, ok)
+	require.Equal(t, "app/src/main/res/values/ids.xml", got.Path)
+	require.True(t, got.New)
+	require.Contains(t, got.Why, `<item type="id" name="btn_ok"/>`)
+	require.Contains(t, got.Why, "R.id.btn_ok")
+}
+
+// The ids.xml completion defines the id the new code uses, and the unit lands.
+func TestRun_CompletionDefinesAMissingID(t *testing.T) {
+	kt := "app/src/main/java/com/x/SecureIME.kt"
+	ids := "app/src/main/res/values/ids.xml"
+	root := imeRepo(t, map[string]string{"app/src/main/java/com/x/Main.kt": "package com.x\n\nclass Main\n"})
+	reply := agent.TargetReply{
+		Targets:  []agent.Target{{Path: manifestRel, Why: "declare it"}},
+		NewFiles: []agent.Target{{Path: kt, Why: "the service"}},
+	}
+	s := nscSession(t, root, reply, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
+		switch req.Path {
+		case kt:
+			return agent.FixResult{Changed: true, PatchedContent: "package com.x\n\nclass SecureIME { val v = R.id.key_row }\n"}, nil
+		case manifestRel:
+			return agent.FixResult{Changed: true, PatchedContent: manifestSvc}, nil
+		case ids:
+			require.True(t, req.Create)
+			return agent.FixResult{Changed: true,
+				PatchedContent: "<resources>\n    <item type=\"id\" name=\"key_row\"/>\n</resources>\n"}, nil
+		}
+		return agent.FixResult{}, errors.New("unexpected fix call for " + req.Path)
+	})
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, statusFixed, out.Findings[0].Status, out.Findings[0].Detail)
+	require.Contains(t, out.Findings[0].Detail, ids+" (completion)")
+	require.NoError(t, s.work.restore())
+}
+
+// A declined id completion is not "inlined": the referencing file is never
+// re-fixed with a prompt asking for an id's literal value; the unit rolls back.
+func TestRun_DeclinedIDCompletionIsNotInlined(t *testing.T) {
+	kt := "app/src/main/java/com/x/SecureIME.kt"
+	root := imeRepo(t, map[string]string{"app/src/main/java/com/x/Main.kt": "package com.x\n\nclass Main\n"})
+	reply := agent.TargetReply{
+		Targets:  []agent.Target{{Path: manifestRel, Why: "declare it"}},
+		NewFiles: []agent.Target{{Path: kt, Why: "the service"}},
+	}
+	s := nscSession(t, root, reply, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
+		switch {
+		case req.Path == kt:
+			require.Empty(t, req.PriorViolation, "an id has no literal to inline")
+			return agent.FixResult{Changed: true, PatchedContent: "package com.x\n\nclass SecureIME { val v = R.id.key_row }\n"}, nil
+		case req.Path == manifestRel:
+			return agent.FixResult{Changed: true, PatchedContent: manifestSvc}, nil
+		}
+		return agent.FixResult{}, nil // ids.xml: declined
+	})
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, statusSkipped, out.Findings[0].Status, out.Findings[0].Detail)
+	require.Contains(t, out.Findings[0].Detail, "rolled back: unresolved R.id.key_row after 2 completion rounds")
+	require.Empty(t, out.Patches)
+}
+
 // dvfa: the config names @string/secure_keyboard_name, which nothing defines.
 // Completion adds it to strings.xml, and the unit lands.
 func TestRun_CompletionDefinesAMissingString(t *testing.T) {
