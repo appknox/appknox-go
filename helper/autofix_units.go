@@ -148,6 +148,9 @@ const reasonRolledBack = "rolled back: this remediation lands whole or not at al
 // patched is put back as it was before the unit ran, and the unit ships
 // nothing. A target the fixer DECLINED does not trigger it: declining means
 // the file needed no change (e.g. a manifest with no debuggable attribute).
+//
+// After the loop, the unit's resolve pass completes what its files reference
+// and nothing defines (unit_resolve.go); a unit it cannot resolve rolls back.
 func (s fixSession) fixTargets(
 	ctx context.Context, in FindingInputs, u FindingUnit, accepted []agent.Target,
 ) ([]filePatch, []targetResult, error) {
@@ -159,7 +162,7 @@ func (s fixSession) fixTargets(
 		if content, err := readUnderRoot(s.root, t.Path); err == nil {
 			before[t.Path] = content
 		}
-		tr, patch, err := s.fixOne(ctx, in, u, t, accepted)
+		tr, patch, err := s.fixOne(ctx, in, u, t, accepted, "")
 		tr.New = t.New
 		results = append(results, tr)
 		if patch != nil {
@@ -173,13 +176,26 @@ func (s fixSession) fixTargets(
 			break
 		}
 	}
-	if !needsRollback(results) {
+	if needsRollback(results) {
+		return s.rollBackUnit(patches, results, before, reasonRolledBack, fixErr)
+	}
+	if fixErr != nil {
+		// The run stops before completion: what this unit leaves unresolved
+		// must not ship.
+		if left := unresolvedUnitRefs(s.root, patchedPaths(results), before); len(left) > 0 {
+			return s.rollBackUnit(patches, results, before, unresolvedReason(left, 0), fixErr)
+		}
 		return patches, results, fixErr
 	}
-	if err := s.rollBack(results, before); err != nil {
-		return patches, results, err
+	patches, done, left, err := s.completeUnit(ctx, in, u, accepted, results, patches, before)
+	all := append(append([]targetResult{}, results...), done...)
+	if err != nil {
+		return s.rollBackUnit(patches, all, before, reasonRolledBack, err)
 	}
-	return nil, rolledBack(results), fixErr
+	if len(left) > 0 {
+		return s.rollBackUnit(patches, all, before, unresolvedReason(left, maxCompletionRounds), nil)
+	}
+	return patches, landed(all), nil
 }
 
 // rollBack writes each patched target back to its content before the unit.
@@ -319,16 +335,31 @@ func rejectionList(rs []rejection) string {
 	return strings.Join(parts, "; ")
 }
 
-// rolledBack marks every patched result as rolled back.
+// rolledBack marks every patched target of a unit as rolled back.
 func rolledBack(results []targetResult) []targetResult {
+	return rolledBackWith(results, reasonRolledBack)
+}
+
+func rolledBackWith(results []targetResult, reason string) []targetResult {
 	out := make([]targetResult, len(results))
 	for i, r := range results {
 		if r.Patched {
-			r = targetResult{Path: r.Path, Reason: reasonRolledBack, New: r.New}
+			r = targetResult{Path: r.Path, Reason: reason, New: r.New, Completion: r.Completion}
 		}
 		out[i] = r
 	}
 	return out
+}
+
+// rollBackUnit undoes a unit and reports each patched target with reason.
+// runErr, the error that stopped the run if any, is passed through.
+func (s fixSession) rollBackUnit(patches []filePatch, results []targetResult, before map[string]string,
+	reason string, runErr error,
+) ([]filePatch, []targetResult, error) {
+	if err := s.rollBack(results, before); err != nil {
+		return patches, results, err
+	}
+	return nil, rolledBackWith(results, reason), runErr
 }
 
 // locateUnit runs the locate turn for one finding, on LocateModel first.
@@ -362,12 +393,14 @@ func (s fixSession) locateFailed(in FindingInputs, err error) (unitResult, error
 // so the next call reads this one's change. Only this finding's remediation
 // goes in, never a sibling finding's.
 func (s fixSession) fixOne(
-	ctx context.Context, in FindingInputs, u FindingUnit, t agent.Target, all []agent.Target,
+	ctx context.Context, in FindingInputs, u FindingUnit, t agent.Target, all []agent.Target, prior string,
 ) (targetResult, *filePatch, error) {
 	unitIn := FindingInputs{Finding: in.Finding, Remediation: u.Remediation,
 		DeveloperPrompt: u.DeveloperPrompt, Criteria: u.Criteria}
-	res, reason, err := s.produceFixFor(ctx, t.Path, unitIn,
-		targetContext{Why: t.Why, OtherFiles: othersThan(all, t.Path), Create: t.New})
+	// Reference checks wait for the unit's resolve pass (spec 3.2): the
+	// file defining a reference may come later in the unit, or be completed.
+	res, reason, err := s.produceFixFor(ctx, t.Path, unitIn, targetContext{Why: t.Why,
+		OtherFiles: othersThan(all, t.Path), Create: t.New, DeferRefs: true, Prior: prior})
 	s.tally.record(err)
 	if err != nil {
 		tr := targetResult{Path: t.Path, Reason: "error: " + err.Error()}

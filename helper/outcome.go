@@ -45,6 +45,9 @@ type targetResult struct {
 	Patched bool
 	Reason  string // why there is no patch; empty when Patched
 	New     bool   // the target was a file this unit creates
+	// Completion marks a file the unit resolve pass added (spec 3.5), so the
+	// outcome shows why, say, strings.xml changed.
+	Completion bool
 }
 
 // findingOutcome is one printed outcome line.
@@ -70,7 +73,11 @@ func summarizeFinding(vulnID int, finding string, results []targetResult, notes 
 	var ok, failed []string
 	for _, r := range results {
 		if r.Patched {
-			ok = append(ok, r.Path)
+			name := r.Path
+			if r.Completion {
+				name += " (completion)"
+			}
+			ok = append(ok, name)
 			continue
 		}
 		failed = append(failed, r.Path+" "+r.Reason)

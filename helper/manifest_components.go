@@ -84,3 +84,44 @@ func checkExported(path, original, patched string) *patchViolation {
 	}
 	return nil
 }
+
+// addedComponentClasses returns the fully qualified classes of the components
+// a manifest patch adds (activity-alias names an alias, not a class). Only
+// this module's own classes are returned: a name in another package may come
+// from a dependency, which is not on disk to check.
+func addedComponentClasses(root, path, original, patched string) []string {
+	if filepath.Base(path) != "AndroidManifest.xml" {
+		return nil
+	}
+	ns := moduleNamespace(root, moduleRoot(root, path))
+	had := map[string]bool{}
+	for _, c := range manifestComponents(original) {
+		had[c.Name] = true
+	}
+	var out []string
+	for _, c := range manifestComponents(patched) {
+		if had[c.Name] || c.Tag == "activity-alias" {
+			continue
+		}
+		if fqcn, ok := componentClass(ns, c.Name); ok {
+			out = append(out, fqcn)
+		}
+	}
+	return out
+}
+
+// componentClass resolves android:name against the module namespace.
+func componentClass(ns, name string) (string, bool) {
+	if ns == "" || name == "" {
+		return "", false
+	}
+	switch {
+	case strings.HasPrefix(name, "."):
+		return ns + name, true
+	case !strings.Contains(name, "."):
+		return ns + "." + name, true
+	case strings.HasPrefix(name, ns+"."):
+		return name, true
+	}
+	return "", false
+}
