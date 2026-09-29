@@ -169,8 +169,10 @@ func (x *resourceIndex) addClasses(abs string) {
 	}
 }
 
-// addValues reads the direct children of <resources>. A file that stops
-// parsing keeps what was read before the error; the build judges the rest.
+// addValues reads the direct children of <resources>. The decoder is not
+// strict, so an entity a DOCTYPE declares (&appname;) does not stop it; a
+// file that still stops parsing keeps what was read before the error, and
+// the build judges the rest.
 func (x *resourceIndex) addValues(abs string) {
 	f, err := os.Open(abs)
 	if err != nil {
@@ -178,6 +180,8 @@ func (x *resourceIndex) addValues(abs string) {
 	}
 	defer f.Close()
 	dec := xml.NewDecoder(f)
+	dec.Strict = false
+	dec.Entity = xml.HTMLEntity
 	depth := 0
 	for {
 		tok, err := dec.Token()

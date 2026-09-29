@@ -114,3 +114,26 @@ func TestResourceIndex_ClassDeclarationForms(t *testing.T) {
 		})
 	}
 }
+
+// A DOCTYPE-declared entity must not stop the values file at its first use:
+// every entry after it would look missing, and completion would duplicate it.
+func TestResourceIndex_ValuesWithDoctypeEntities(t *testing.T) {
+	root := writeRepo(t, map[string]string{
+		"app/src/main/res/values/strings.xml": `<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE resources [
+    <!ENTITY appname "Vault">
+]>
+<resources>
+    <string name="before">x</string>
+    <string name="title">&appname; settings</string>
+    <string name="after">About &appname; &amp; more</string>
+    <color name="accent">#fff</color>
+</resources>
+`,
+	})
+	x := buildResourceIndex(root)
+	for _, n := range []string{"before", "title", "after"} {
+		require.True(t, x.has("string", n), n)
+	}
+	require.True(t, x.has("color", "accent"), "entries after an entity use are indexed")
+}
