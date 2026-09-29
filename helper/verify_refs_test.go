@@ -88,3 +88,73 @@ func TestVerifyPatchRReferencesWithoutNamespace(t *testing.T) {
 	require.NotNil(t, v)
 	require.Equal(t, "missing-r-reference", v.Rule)
 }
+
+// A new ref that is a prefix of an existing one (original has R.layout.foobar,
+// patch adds R.layout.foo) must be reported, not skipped as pre-existing.
+func TestVerifyPatchRReferencesPrefixCollision(t *testing.T) {
+	root := writeRepo(t, map[string]string{
+		"app/build.gradle":                 "android {\n    namespace 'com.x'\n}\n",
+		"app/src/main/res/layout/main.xml": "<LinearLayout/>\n",
+		"app/src/main/java/com/x/A.kt":     "package com.x\n\nclass A\n",
+	})
+	p := "app/src/main/java/com/x/A.kt"
+	orig := "package com.x\n\nclass A { val v = R.layout.foobar }\n"
+	patched := "package com.x\n\nclass A { val v = R.layout.foobar; val u = R.layout.foo }\n"
+	// R.layout.foo is newly added (not in original), so it should be reported as missing
+	v := verifyPatch(root, p, orig, patched)
+	require.NotNil(t, v, "R.layout.foo is a new reference and should be reported")
+	require.Equal(t, "missing-r-reference", v.Rule)
+	require.Contains(t, v.Detail, "R.layout.foo")
+}
+
+// References inside comments must not be judged.
+func TestVerifyPatchRReferencesInComments(t *testing.T) {
+	root := writeRepo(t, map[string]string{
+		"app/build.gradle":                 "android {\n    namespace 'com.x'\n}\n",
+		"app/src/main/res/layout/main.xml": "<LinearLayout/>\n",
+		"app/src/main/java/com/x/A.kt":     "package com.x\n\nclass A\n",
+	})
+	p := "app/src/main/java/com/x/A.kt"
+	orig := "package com.x\n\nclass A\n"
+
+	// Line comment with missing reference: should not be reported
+	patched := "package com.x\n\nclass A { // TODO use R.layout.missing\n}\n"
+	require.Nil(t, verifyPatch(root, p, orig, patched), "reference in line comment")
+
+	// Block comment with missing reference: should not be reported
+	patched = "package com.x\n\nclass A { /* use R.layout.missing */ }\n"
+	require.Nil(t, verifyPatch(root, p, orig, patched), "reference in block comment")
+}
+
+// References inside string and char literals must not be judged.
+func TestVerifyPatchRReferencesInLiterals(t *testing.T) {
+	root := writeRepo(t, map[string]string{
+		"app/build.gradle":                 "android {\n    namespace 'com.x'\n}\n",
+		"app/src/main/res/layout/main.xml": "<LinearLayout/>\n",
+		"app/src/main/java/com/x/A.kt":     "package com.x\n\nclass A\n",
+	})
+	p := "app/src/main/java/com/x/A.kt"
+	orig := "package com.x\n\nclass A\n"
+
+	// String literal with missing reference: should not be reported
+	patched := "package com.x\n\nclass A { val s = \"R.layout.missing\" }\n"
+	require.Nil(t, verifyPatch(root, p, orig, patched), "reference in string literal")
+
+	// Char literal with missing reference: should not be reported
+	patched = "package com.x\n\nclass A { val c = 'R' }\n"
+	require.Nil(t, verifyPatch(root, p, orig, patched), "reference in char literal")
+}
+
+// Foreign R import with trailing comment should still bail out.
+func TestVerifyPatchRReferencesImportWithTrailingComment(t *testing.T) {
+	root := writeRepo(t, map[string]string{
+		"app/build.gradle":                 "android {\n    namespace 'com.x'\n}\n",
+		"app/src/main/res/layout/main.xml": "<LinearLayout/>\n",
+		"app/src/main/java/com/x/A.kt":     "package com.x\n\nclass A\n",
+	})
+	p := "app/src/main/java/com/x/A.kt"
+	orig := "package com.x\n\nclass A\n"
+	// Import of foreign R with trailing comment should cause early return (not judged)
+	patched := "package com.x\n\nimport com.other.R; // comment\n\nclass A { val v = R.layout.missing }\n"
+	require.Nil(t, verifyPatch(root, p, orig, patched), "foreign R import with trailing comment")
+}

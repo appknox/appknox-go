@@ -65,6 +65,71 @@ var rImportRE = regexp.MustCompile(`(?m)^\s*import\s+([\w.]+)\.R\s*;?\s*$`)
 // rKindsUnchecked have no res/ entry to look up.
 var rKindsUnchecked = map[string]bool{"styleable": true, "attr": true}
 
+// codeOnly returns the source with comments and string/char literals replaced
+// by spaces (preserving newlines for line number stability). This prevents
+// matching R references that appear only in comments or literals.
+func codeOnly(src string) string {
+	var b strings.Builder
+	for i := 0; i < len(src); {
+		switch {
+		case strings.HasPrefix(src[i:], "//"):
+			for i < len(src) && src[i] != '\n' {
+				b.WriteByte(' ')
+				i++
+			}
+		case strings.HasPrefix(src[i:], "/*"):
+			i += 2
+			for i < len(src) && !strings.HasPrefix(src[i:], "*/") {
+				if src[i] == '\n' {
+					b.WriteByte('\n')
+				} else {
+					b.WriteByte(' ')
+				}
+				i++
+			}
+			if i < len(src) {
+				b.WriteString("  ")
+				i += 2
+			}
+		case strings.HasPrefix(src[i:], `"""`):
+			i += 3
+			for i < len(src) && !strings.HasPrefix(src[i:], `"""`) {
+				if src[i] == '\n' {
+					b.WriteByte('\n')
+				} else {
+					b.WriteByte(' ')
+				}
+				i++
+			}
+			if i < len(src) {
+				b.WriteString("   ")
+				i += 3
+			}
+		case src[i] == '"' || src[i] == '\'':
+			quote := src[i]
+			b.WriteByte(' ')
+			i++
+			for i < len(src) && src[i] != quote && src[i] != '\n' {
+				if src[i] == '\\' {
+					b.WriteString("  ")
+					i += 2
+					continue
+				}
+				b.WriteByte(' ')
+				i++
+			}
+			if i < len(src) && src[i] == quote {
+				b.WriteByte(' ')
+				i++
+			}
+		default:
+			b.WriteByte(src[i])
+			i++
+		}
+	}
+	return b.String()
+}
+
 // introducedRRefs returns the R.<kind>.<name> references a Java/Kotlin patch
 // adds that belong to this module's own R: not android.R, not another
 // module's qualified R, not a file that imports a foreign R, and not a
@@ -76,17 +141,25 @@ func introducedRRefs(root, path, original, patched string) []resourceRef {
 		return nil
 	}
 	ns := moduleNamespace(root, moduleRoot(root, path))
-	for _, m := range rImportRE.FindAllStringSubmatch(patched, -1) {
+	originalCode := codeOnly(original)
+	patchedCode := codeOnly(patched)
+	for _, m := range rImportRE.FindAllStringSubmatch(patchedCode, -1) {
 		if m[1] != ns {
 			return nil
 		}
 	}
 	var out []resourceRef
 	seen := map[string]bool{}
-	for _, m := range rRefRE.FindAllStringSubmatch(patched, -1) {
+	// Build the set of refs that already exist in the original.
+	originalRefs := map[string]bool{}
+	for _, m := range rRefRE.FindAllStringSubmatch(originalCode, -1) {
+		ref := m[1] + "R." + m[2] + "." + m[3]
+		originalRefs[ref] = true
+	}
+	for _, m := range rRefRE.FindAllStringSubmatch(patchedCode, -1) {
 		qual, kind, name := strings.TrimSuffix(m[1], "."), m[2], m[3]
 		ref := m[1] + "R." + kind + "." + name
-		if seen[ref] || strings.Contains(original, ref) {
+		if seen[ref] || originalRefs[ref] {
 			continue
 		}
 		seen[ref] = true
