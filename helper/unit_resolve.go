@@ -248,6 +248,18 @@ func createdByUnit(results []targetResult, path string) bool {
 	return false
 }
 
+// unitCreated reports whether the unit already created path itself -- by one
+// of its own original targets, or by an earlier completion round. Fix round
+// 1: a completion target that checkNewTarget now reports as reasonNewExists
+// (because THIS unit created it, in this round or an earlier one) must still
+// be treated as new, or its "before" content gets recorded as whatever this
+// unit itself just wrote -- hiding a reference that file introduces from
+// unresolvedUnitRefs, and later making rollBack resurrect it from that stale
+// content instead of deleting it (spec 3.5).
+func unitCreated(results, done []targetResult, path string) bool {
+	return createdByUnit(results, path) || createdByUnit(done, path)
+}
+
 // whyOf is the locate turn's reason for path, or "".
 func whyOf(all []agent.Target, path string) string {
 	for _, t := range all {
@@ -258,12 +270,31 @@ func whyOf(all []agent.Target, path string) string {
 	return ""
 }
 
-// upsertPatch returns patches with p in place of any earlier patch to its path.
-func upsertPatch(patches []filePatch, p filePatch) []filePatch {
+// upsertPatch returns patches with p in place of any earlier patch to its
+// path. When there IS an earlier patch, p's Diff is recomputed from the
+// path's pre-unit content (before[p.Path] -- "" both when the path is
+// absent from before and when it was genuinely empty, and "" is exactly
+// right for a path this unit created) to p's final content, the same way
+// autofix.go's collapsedPatch recomputes a multi-patch path's diff from its
+// true original to its final state (see unifiedDiff there). Without this, a
+// path fixed more than once in one unit -- a new file re-fixed after its
+// completion declined, a completion target itself completed again -- would
+// report only its LAST call's hunk instead of the whole change (fix round 1).
+// A path with no earlier patch keeps its own Diff, which already covers its
+// one true pre-call state.
+func upsertPatch(patches []filePatch, p filePatch, before map[string]string) []filePatch {
 	out := make([]filePatch, 0, len(patches)+1)
+	replaced := false
 	for _, q := range patches {
-		if q.Path != p.Path {
-			out = append(out, q)
+		if q.Path == p.Path {
+			replaced = true
+			continue
+		}
+		out = append(out, q)
+	}
+	if replaced {
+		if d := unifiedDiff(p.Path, before[p.Path], p.Content); d != "" {
+			p.Diff = d
 		}
 	}
 	return append(out, p)
@@ -285,17 +316,20 @@ func (s fixSession) completeUnit(ctx context.Context, in FindingInputs, u Findin
 			return patches, done, nil, nil
 		}
 		for _, t := range completionTargets(s.root, refs) {
-			if _, known := before[t.Path]; !known {
-				if content, err := readUnderRoot(s.root, t.Path); err == nil {
-					before[t.Path] = content
+			created := t.New || unitCreated(results, done, t.Path)
+			if !created {
+				if _, known := before[t.Path]; !known {
+					if content, err := readUnderRoot(s.root, t.Path); err == nil {
+						before[t.Path] = content
+					}
 				}
 			}
 			tr, patch, err := s.fixOne(ctx, in, u, t, all, "")
-			tr.New = t.New || createdByUnit(results, t.Path)
+			tr.New = created
 			tr.Completion = true
 			done = append(done, tr)
 			if patch != nil {
-				patches = upsertPatch(patches, *patch)
+				patches = upsertPatch(patches, *patch, before)
 			}
 			if err != nil {
 				return patches, done, refs, err
@@ -306,7 +340,7 @@ func (s fixSession) completeUnit(ctx context.Context, in FindingInputs, u Findin
 			t := agent.Target{Path: g.from, Why: whyOf(all, g.from)}
 			_, patch, err := s.fixOne(ctx, in, u, t, all, inlinePrior(g.refs))
 			if patch != nil {
-				patches = upsertPatch(patches, *patch)
+				patches = upsertPatch(patches, *patch, before)
 			}
 			if err != nil {
 				return patches, done, g.refs, err

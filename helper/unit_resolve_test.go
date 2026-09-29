@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,6 +178,13 @@ func TestRun_CompletionDeclinedInlinesTheLiteral(t *testing.T) {
 	for _, p := range out.Patches {
 		if p.Path == imeConfigRel {
 			require.Equal(t, imeConfigLit, p.Content)
+			// Fix round 1 (#2): imeConfigRel was fixed twice in this unit (its
+			// creation, then this inline re-fix); the shipped patch's Diff
+			// must cover the whole file from nothing, not just the last call's
+			// hunk, so the creation itself -- this added <input-method line --
+			// still shows up.
+			require.Contains(t, p.Diff, "+<input-method",
+				"the diff should show the file's whole content as added, not just the last edit")
 		}
 	}
 	require.NoError(t, s.work.restore())
@@ -286,6 +294,11 @@ func TestRun_CompletionBudgetExhaustedRollsBack(t *testing.T) {
 
 // Review Focus: the completion target is a file this same unit created. The
 // rollback deletes it instead of failing on "content before the fix was not read".
+//
+// Fix round 1 (#3): the completion call for stringsRel actually PATCHES on
+// every round (still lacking the string each time), not just declines after
+// its creation -- a decline never exercised createdByUnit across rounds, so
+// this alone would still have passed against the pre-fix-round-1 code.
 func TestRun_CompletionOfAUnitCreatedFileRollsBackCleanly(t *testing.T) {
 	root := writeRepo(t, map[string]string{"app/build.gradle": imeGradle, manifestRel: manifestBody, imeClassRel: imeClass})
 	reply := agent.TargetReply{
@@ -297,8 +310,10 @@ func TestRun_CompletionOfAUnitCreatedFileRollsBackCleanly(t *testing.T) {
 		switch {
 		case req.Path == imeConfigRel && req.PriorViolation == "":
 			return agent.FixResult{Changed: true, PatchedContent: imeConfigRef}, nil
-		case req.Path == stringsRel && req.Create:
-			return agent.FixResult{Changed: true, PatchedContent: stringsBody}, nil // lacks the string
+		case req.Path == stringsRel:
+			// Every call -- the initial creation AND every completion
+			// round's re-fix -- still lacks the string.
+			return agent.FixResult{Changed: true, PatchedContent: stringsBody}, nil
 		case req.Path == manifestRel:
 			return agent.FixResult{Changed: true, PatchedContent: manifestIME}, nil
 		}
@@ -310,4 +325,80 @@ func TestRun_CompletionOfAUnitCreatedFileRollsBackCleanly(t *testing.T) {
 	require.True(t, strings.Contains(out.Findings[0].Detail, "after 2 completion rounds"), out.Findings[0].Detail)
 	_, statErr := os.Stat(filepath.Join(root, stringsRel))
 	require.True(t, os.IsNotExist(statErr), "the unit created it, so the rollback deletes it")
+}
+
+// Fix round 1 (#1a): the unit creates strings.xml, which also declares a
+// style referencing @color/brand. A later completion round re-fixes that
+// same file to add a DIFFERENT missing string (secure_keyboard_name);
+// recording the file's round-1 content as "before" must not make
+// @color/brand look like it was already there, hiding it from every later
+// unresolvedUnitRefs computation. Left hidden, the unit would land FIXED
+// with @color/brand still undefined anywhere in the repository.
+func TestRun_CompletionOfUnitCreatedFileDoesNotHideItsOwnRef(t *testing.T) {
+	root := writeRepo(t, map[string]string{"app/build.gradle": imeGradle, manifestRel: manifestBody, imeClassRel: imeClass})
+	created := "<resources>\n    <string name=\"app_name\">x</string>\n" +
+		"    <style name=\"K\"><item name=\"android:textColor\">@color/brand</item></style>\n</resources>\n"
+	completed := created[:len(created)-len("</resources>\n")] +
+		"    <string name=\"secure_keyboard_name\">S</string>\n</resources>\n"
+	reply := agent.TargetReply{
+		Targets: []agent.Target{{Path: manifestRel, Why: "declare it"}},
+		NewFiles: []agent.Target{{Path: imeConfigRel, Why: "config"},
+			{Path: stringsRel, Why: "the app's strings"}},
+	}
+	s := nscSession(t, root, reply, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
+		switch {
+		case req.Path == imeConfigRel:
+			return agent.FixResult{Changed: true, PatchedContent: imeConfigRef}, nil
+		case req.Path == stringsRel && req.Create:
+			return agent.FixResult{Changed: true, PatchedContent: created}, nil
+		case req.Path == stringsRel:
+			// Completion/inline re-fix: defines secure_keyboard_name, but
+			// @color/brand -- introduced by the SAME file's own creation --
+			// is still there, still undefined anywhere.
+			return agent.FixResult{Changed: true, PatchedContent: completed}, nil
+		case req.Path == manifestRel:
+			return agent.FixResult{Changed: true, PatchedContent: manifestIME}, nil
+		}
+		return agent.FixResult{}, nil // colors.xml completion: declined
+	})
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.NotEqual(t, statusFixed, out.Findings[0].Status,
+		"landed FIXED with @color/brand still undefined anywhere: "+out.Findings[0].Detail)
+}
+
+// Fix round 1 (#1b): round 1 creates a completion file that still does not
+// define what the code references; round 2 targets that SAME file again
+// (checkNewTarget now sees it as existing). Both rounds' result entries must
+// end up New, or rollBack applies a stale "before" recorded in round 2 on
+// top of round 1's remove and resurrects the file it should have deleted.
+func TestRun_CompletionFileFromRound1DoesNotSurviveRollback(t *testing.T) {
+	kt := "app/src/main/java/com/x/SecureIME.kt"
+	dimens := "app/src/main/res/values/dimens.xml"
+	root := imeRepo(t, map[string]string{"app/src/main/java/com/x/Main.kt": "package com.x\n\nclass Main\n"})
+	reply := agent.TargetReply{
+		Targets:  []agent.Target{{Path: manifestRel, Why: "declare it"}},
+		NewFiles: []agent.Target{{Path: kt, Why: "the service"}},
+	}
+	n := 0
+	s := nscSession(t, root, reply, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
+		switch {
+		case req.Path == kt && req.PriorViolation == "":
+			return agent.FixResult{Changed: true,
+				PatchedContent: "package com.x\n\nclass SecureIME { val v = R.dimen.key_height }\n"}, nil
+		case req.Path == manifestRel:
+			return agent.FixResult{Changed: true, PatchedContent: manifestSvc}, nil
+		case req.Path == dimens:
+			// A different dimen each round: still never key_height.
+			n++
+			return agent.FixResult{Changed: true, PatchedContent: fmt.Sprintf(
+				"<resources>\n    <dimen name=\"other%d\">1dp</dimen>\n</resources>\n", n)}, nil
+		}
+		return agent.FixResult{}, nil
+	})
+	out, err := s.run(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, statusSkipped, out.Findings[0].Status, out.Findings[0].Detail)
+	_, statErr := os.Stat(filepath.Join(root, dimens))
+	require.True(t, os.IsNotExist(statErr), "dimens.xml survived the rollback")
 }
