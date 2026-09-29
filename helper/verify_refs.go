@@ -67,10 +67,21 @@ var rKindsUnchecked = map[string]bool{"styleable": true, "attr": true}
 
 // codeOnly returns the source with comments and string/char literals replaced
 // by spaces (preserving newlines for line number stability). This prevents
-// matching R references that appear only in comments or literals.
-func codeOnly(src string) string {
+// matching R references that appear only in comments or literals. With
+// templates (Kotlin), a string's ${...} spans stay code: an R reference in
+// one is compiled. A $name template holds no R reference and stays blank.
+func codeOnly(src string, templates bool) string {
 	var b strings.Builder
-	for i := 0; i < len(src); {
+	codeSpan(src, 0, templates, false, &b)
+	return b.String()
+}
+
+// codeSpan copies code from src[i:] to b, blanking comments and literals, and
+// returns where it stopped: the end of src or, inTemplate, just past the '}'
+// that closes a ${...} template.
+func codeSpan(src string, i int, templates, inTemplate bool, b *strings.Builder) int {
+	depth := 0
+	for i < len(src) {
 		switch {
 		case strings.HasPrefix(src[i:], "//"):
 			for i < len(src) && src[i] != '\n' {
@@ -79,12 +90,9 @@ func codeOnly(src string) string {
 			}
 		case strings.HasPrefix(src[i:], "/*"):
 			i += 2
+			b.WriteString("  ")
 			for i < len(src) && !strings.HasPrefix(src[i:], "*/") {
-				if src[i] == '\n' {
-					b.WriteByte('\n')
-				} else {
-					b.WriteByte(' ')
-				}
+				blankByte(b, src[i])
 				i++
 			}
 			if i < len(src) {
@@ -92,24 +100,13 @@ func codeOnly(src string) string {
 				i += 2
 			}
 		case strings.HasPrefix(src[i:], `"""`):
-			i += 3
-			for i < len(src) && !strings.HasPrefix(src[i:], `"""`) {
-				if src[i] == '\n' {
-					b.WriteByte('\n')
-				} else {
-					b.WriteByte(' ')
-				}
-				i++
-			}
-			if i < len(src) {
-				b.WriteString("   ")
-				i += 3
-			}
-		case src[i] == '"' || src[i] == '\'':
-			quote := src[i]
+			i = stringLit(src, i, `"""`, templates, b)
+		case src[i] == '"':
+			i = stringLit(src, i, `"`, templates, b)
+		case src[i] == '\'':
 			b.WriteByte(' ')
 			i++
-			for i < len(src) && src[i] != quote && src[i] != '\n' {
+			for i < len(src) && src[i] != '\'' && src[i] != '\n' {
 				if src[i] == '\\' {
 					b.WriteString("  ")
 					i += 2
@@ -118,16 +115,66 @@ func codeOnly(src string) string {
 				b.WriteByte(' ')
 				i++
 			}
-			if i < len(src) && src[i] == quote {
+			if i < len(src) && src[i] == '\'' {
 				b.WriteByte(' ')
 				i++
 			}
+		case inTemplate && src[i] == '{':
+			depth++
+			b.WriteByte(src[i])
+			i++
+		case inTemplate && src[i] == '}':
+			if depth == 0 {
+				b.WriteByte(' ')
+				return i + 1
+			}
+			depth--
+			b.WriteByte(src[i])
+			i++
 		default:
 			b.WriteByte(src[i])
 			i++
 		}
 	}
-	return b.String()
+	return i
+}
+
+// stringLit blanks the string literal opening at src[i] with quote (`"` or
+// `"""`) and returns the index past it. A single-quoted string ends at a
+// line end, like an unterminated one; with templates its ${...} spans are
+// copied as code.
+func stringLit(src string, i int, quote string, templates bool, b *strings.Builder) int {
+	b.WriteString(strings.Repeat(" ", len(quote)))
+	i += len(quote)
+	raw := quote == `"""`
+	for i < len(src) {
+		switch {
+		case strings.HasPrefix(src[i:], quote):
+			b.WriteString(strings.Repeat(" ", len(quote)))
+			return i + len(quote)
+		case !raw && src[i] == '\n':
+			return i
+		case !raw && src[i] == '\\':
+			b.WriteString("  ")
+			i += 2
+		case templates && strings.HasPrefix(src[i:], "${"):
+			b.WriteString("  ")
+			i = codeSpan(src, i+2, templates, true, b)
+		default:
+			blankByte(b, src[i])
+			i++
+		}
+	}
+	return i
+}
+
+// blankByte writes a space for c, or c itself when it is a newline.
+func blankByte(b *strings.Builder, c byte) {
+	if c == '\n' {
+		b.WriteByte('\n')
+		return
+	}
+	b.WriteByte(' ')
 }
 
 // introducedRRefs returns the R.<kind>.<name> references a Java/Kotlin patch
@@ -135,14 +182,15 @@ func codeOnly(src string) string {
 // module's qualified R, not a file that imports a foreign R, and not a
 // library resource.
 func introducedRRefs(root, path, original, patched string) []resourceRef {
-	switch strings.ToLower(filepath.Ext(path)) {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
 	case ".java", ".kt":
 	default:
 		return nil
 	}
 	ns := moduleNamespace(root, moduleRoot(root, path))
-	originalCode := codeOnly(original)
-	patchedCode := codeOnly(patched)
+	originalCode := codeOnly(original, ext == ".kt")
+	patchedCode := codeOnly(patched, ext == ".kt")
 	for _, m := range rImportRE.FindAllStringSubmatch(patchedCode, -1) {
 		if m[1] != ns {
 			return nil

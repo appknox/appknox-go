@@ -158,3 +158,47 @@ func TestVerifyPatchRReferencesImportWithTrailingComment(t *testing.T) {
 	patched := "package com.x\n\nimport com.other.R; // comment\n\nclass A { val v = R.layout.missing }\n"
 	require.Nil(t, verifyPatch(root, p, orig, patched), "foreign R import with trailing comment")
 }
+
+// A Kotlin string template's ${...} is code: an R reference inside one is
+// compiled, so it is judged. Text around it, a $name template and a string
+// nested inside the template stay literals.
+func TestVerifyPatchRReferencesInKotlinTemplates(t *testing.T) {
+	root := writeRepo(t, map[string]string{
+		"app/build.gradle":                 "android {\n    namespace 'com.x'\n}\n",
+		"app/src/main/res/layout/main.xml": "<LinearLayout/>\n",
+		"app/src/main/java/com/x/A.kt":     "package com.x\n\nclass A\n",
+	})
+	p := "app/src/main/java/com/x/A.kt"
+	orig := "package com.x\n\nclass A\n"
+	body := func(expr string) string { return "package com.x\n\nclass A { val s = " + expr + " }\n" }
+
+	for _, bad := range []string{
+		`"Hello ${getString(R.string.missing)}!"`,
+		`"""multi ${getString(R.string.missing)} line"""`,
+		`"a ${if (x) { getString(R.string.missing) } else "b"} c"`,
+		`"${f("x", R.string.missing)}"`,
+	} {
+		v := verifyPatch(root, p, orig, body(bad))
+		require.NotNil(t, v, bad)
+		require.Equal(t, "missing-r-reference", v.Rule, bad)
+		require.Contains(t, v.Detail, "R.string.missing", bad)
+	}
+	for _, ok := range []string{
+		`"R.string.missing $name"`,
+		`"${name} R.string.missing"`,
+		`"${f("R.string.missing")}"`,
+		`"""R.string.missing ${name}"""`,
+		`"${getString(R.layout.main)}"`,
+	} {
+		require.Nil(t, verifyPatch(root, p, orig, body(ok)), ok)
+	}
+}
+
+// A '}' inside a string nested in a template does not close the template.
+func TestCodeOnlyKotlinTemplateNestedString(t *testing.T) {
+	got := codeOnly(`val s = "${f("}", R.string.a)} R.string.b"`, true)
+	require.Contains(t, got, "R.string.a")
+	require.NotContains(t, got, "R.string.b")
+	require.Equal(t, len(`val s = "${f("}", R.string.a)} R.string.b"`), len(got), "offsets are preserved")
+	require.NotContains(t, codeOnly(`String s = "${R.string.a}";`, false), "R.string.a", "Java has no templates")
+}
