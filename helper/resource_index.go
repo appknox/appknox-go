@@ -3,6 +3,7 @@ package helper
 import (
 	"encoding/xml"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -52,6 +53,7 @@ var valuesKinds = map[string]string{
 // skips (build output, vendored trees, nested repositories).
 func buildResourceIndex(root string) *resourceIndex {
 	x := &resourceIndex{defined: map[string]bool{}, classes: map[string]bool{}}
+	x.defined[resKey("integer", "google_play_services_version")] = true
 	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
 		if err != nil || info == nil {
 			return nil
@@ -80,6 +82,14 @@ func (x *resourceIndex) add(abs, rel string) {
 		x.addClasses(abs)
 		return
 	}
+	switch path.Base(rel) {
+	case "build.gradle", "build.gradle.kts":
+		x.addScript(abs)
+		return
+	case "google-services.json":
+		x.addGoogleServices()
+		return
+	}
 	m := resPathRE.FindStringSubmatch(rel)
 	if m == nil {
 		return
@@ -93,6 +103,42 @@ func (x *resourceIndex) add(abs, rel string) {
 	x.defined[resKey(kind, strings.SplitN(base, ".", 2)[0])] = true
 	if strings.HasSuffix(base, ".xml") {
 		x.addIDs(abs)
+	}
+}
+
+// resValueRE finds resValue "kind", "name", "value" (Groovy) and
+// resValue("kind", "name", "value") (Kotlin DSL) in a module build script.
+var resValueRE = regexp.MustCompile(`\bresValue\s*\(?\s*["'](\w+)["']\s*,\s*["']([\w.]+)["']`)
+
+// googleServicesPluginRE finds the google-services plugin applied in a script.
+var googleServicesPluginRE = regexp.MustCompile(`["']com\.google\.gms\.google-services["']`)
+
+// googleServicesStrings are the string resources the google-services plugin
+// generates from google-services.json.
+var googleServicesStrings = []string{"default_web_client_id", "google_app_id", "gcm_defaultSenderId",
+	"google_api_key", "google_crash_reporting_api_key", "google_storage_bucket", "project_id",
+	"firebase_database_url"}
+
+// addScript indexes what a module build script generates: its resValue
+// entries, and the google-services strings when it applies that plugin.
+func (x *resourceIndex) addScript(abs string) {
+	b, err := os.ReadFile(abs)
+	if err != nil {
+		return
+	}
+	for _, m := range resValueRE.FindAllSubmatch(b, -1) {
+		x.defined[resKey(string(m[1]), string(m[2]))] = true
+	}
+	if googleServicesPluginRE.Match(b) {
+		x.addGoogleServices()
+	}
+}
+
+// addGoogleServices marks the google-services strings defined: a repository
+// with a google-services.json, or applying the plugin, gets them generated.
+func (x *resourceIndex) addGoogleServices() {
+	for _, n := range googleServicesStrings {
+		x.defined[resKey("string", n)] = true
 	}
 }
 
@@ -176,7 +222,7 @@ var libraryResourcePrefixes = []string{"abc_", "material_", "mtrl_", "design_", 
 // libraryStylePrefixes are the same for styles, in R form (dots as underscores).
 var libraryStylePrefixes = []string{"Theme_AppCompat", "Theme_MaterialComponents", "Theme_Material3",
 	"Theme_Design", "ThemeOverlay_", "Widget_", "TextAppearance_", "Base_", "Platform_",
-	"ShapeAppearance_", "Animation_AppCompat"}
+	"ShapeAppearance_", "Animation_AppCompat", "Theme_SplashScreen", "AlertDialog_AppCompat"}
 
 func libraryResource(kind, name string) bool {
 	n := strings.ReplaceAll(name, ".", "_")

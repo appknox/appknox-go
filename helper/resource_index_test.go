@@ -53,6 +53,42 @@ func TestLibraryResource(t *testing.T) {
 	require.True(t, libraryResource("style", "Theme_MaterialComponents_DayNight"))
 	require.True(t, libraryResource("string", "abc_action_bar_home_description"))
 	require.True(t, libraryResource("color", "mtrl_btn_bg"))
+	require.True(t, libraryResource("style", "Theme.SplashScreen"))
+	require.True(t, libraryResource("style", "Theme_SplashScreen_IconBackground"))
+	require.True(t, libraryResource("style", "AlertDialog.AppCompat.Light"))
 	require.False(t, libraryResource("style", "Theme.App"))
 	require.False(t, libraryResource("string", "secure_keyboard_name"))
+}
+
+// Resources the build generates never sit in res/: resValue in a module
+// script, and the google-services plugin's values. Completing one writes a
+// duplicate ("Duplicate resources") or a wrong override.
+func TestResourceIndex_GeneratedResources(t *testing.T) {
+	groovy := "android {\n    defaultConfig {\n        resValue \"string\", \"app_name\", \"X\"\n" +
+		"        resValue 'bool', \"is_debug\", 'false'\n    }\n}\n"
+	kts := "android {\n    buildTypes {\n        release { resValue(\"string\", \"api_host\", \"h\") }\n    }\n}\n"
+	root := writeRepo(t, map[string]string{
+		"app/build.gradle":         groovy,
+		"lib/build.gradle.kts":     kts,
+		"app/google-services.json": "{}\n",
+		"wear/build.gradle":        "android {}\n",
+	})
+	x := buildResourceIndex(root)
+	require.True(t, x.has("string", "app_name"), "Groovy resValue")
+	require.True(t, x.has("bool", "is_debug"), "Groovy resValue, single quotes")
+	require.True(t, x.has("string", "api_host"), "Kotlin DSL resValue(...)")
+	for _, n := range []string{"default_web_client_id", "google_app_id", "gcm_defaultSenderId", "google_api_key",
+		"google_crash_reporting_api_key", "google_storage_bucket", "project_id", "firebase_database_url"} {
+		require.True(t, x.has("string", n), n)
+	}
+	require.True(t, x.has("integer", "google_play_services_version"))
+
+	bare := buildResourceIndex(writeRepo(t, map[string]string{"app/build.gradle": "android {}\n"}))
+	require.False(t, bare.has("string", "google_app_id"), "no google-services.json, no plugin")
+	require.True(t, bare.has("integer", "google_play_services_version"), "always defined")
+
+	plugin := buildResourceIndex(writeRepo(t, map[string]string{
+		"app/build.gradle.kts": "plugins {\n    id(\"com.google.gms.google-services\")\n}\n",
+	}))
+	require.True(t, plugin.has("string", "default_web_client_id"), "the plugin is applied")
 }
