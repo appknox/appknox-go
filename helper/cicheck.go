@@ -198,12 +198,29 @@ func runStandardRiskCheck(ctx context.Context, client *appknox.Client, fileID in
 }
 
 // ProcessHealthScoreCiCheck gates on the file health score, plus the optional
-// exploit-likelihood gate when configured.
+// exploit-likelihood gate when configured. When the file has KnoxIQ triage it
+// waits for it first, so the gate uses the KnoxIQ-adjusted score.
 func ProcessHealthScoreCiCheck(fileID int, policy CiPolicy) {
 	waitForStaticScan(fileID, policy.Budget)
 	ctx := context.Background()
 	client := getClient()
 
+	triage := awaitKnoxIQHealthScore(ctx, client, fileID, policy.Budget)
+	score := triage.score
+	if !triage.scoreReady {
+		score = fetchHealthScore(ctx, client, fileID)
+	}
+
+	likelihoodCount := 0
+	if policy.LikelihoodThreshold >= 0 {
+		likelihoodCount = countLikelihoodOffenders(ctx, client, fileID, policy, triage)
+	}
+	decideHealthScore(fileID, policy, score, likelihoodCount, triage.scoreReady)
+}
+
+// fetchHealthScore returns the file's current health score, exiting the
+// process if it can't be fetched.
+func fetchHealthScore(ctx context.Context, client *appknox.Client, fileID int) int {
 	options := &appknox.HealthScoreOptions{
 		EventType: string(enums.EventTypeSASTCompleted),
 	}
@@ -212,27 +229,26 @@ func ProcessHealthScoreCiCheck(fileID int, policy CiPolicy) {
 		PrintError(err)
 		os.Exit(1)
 	}
-
-	likelihoodCount := 0
-	if policy.LikelihoodThreshold >= 0 {
-		likelihoodCount = countLikelihoodOffenders(ctx, client, fileID, policy)
-	}
-	decideHealthScore(fileID, policy, healthScoreResponse.HealthScore, likelihoodCount)
+	return healthScoreResponse.HealthScore
 }
 
 // decideHealthScore prints the health-score (and optional likelihood) verdict
 // and exits non-zero when the score is below threshold or the likelihood gate
-// is breached.
-func decideHealthScore(fileID int, policy CiPolicy, score, likelihoodCount int) {
+// is breached. afterTriage labels a score recalculated from KnoxIQ triage.
+func decideHealthScore(fileID int, policy CiPolicy, score, likelihoodCount int, afterTriage bool) {
 	msg := fmt.Sprintf("\nCheck file ID %d on appknox dashboard for more details.\n", fileID)
+	label := ""
+	if afterTriage {
+		label = " (after KnoxIQ triage)"
+	}
 	healthFail := score < policy.HealthScoreThreshold
 	likelihoodFail := policy.LikelihoodThreshold >= 0 && likelihoodCount > 0
 	if healthFail {
-		PrintError(fmt.Sprintf("Health score %d is below the threshold %d.",
-			score, policy.HealthScoreThreshold))
+		PrintError(fmt.Sprintf("Health score %d%s is below the threshold %d.",
+			score, label, policy.HealthScoreThreshold))
 	} else {
-		fmt.Printf("\nHealth score %d is greater than or equal to threshold %d.\n",
-			score, policy.HealthScoreThreshold)
+		fmt.Printf("\nHealth score %d%s is greater than or equal to threshold %d.\n",
+			score, label, policy.HealthScoreThreshold)
 	}
 	if likelihoodFail {
 		PrintError(fmt.Sprintf("Found %d vulnerabilities with exploit likelihood >= %s",

@@ -157,16 +157,88 @@ func waitForKnoxIQ(ctx context.Context, client *appknox.Client, fileID int, dead
 	}
 }
 
-// countLikelihoodOffenders waits for KnoxIQ triage and returns how many counted
-// analyses meet the likelihood threshold; 0 (with a warning) when the file has
-// no KnoxIQ triage.
-func countLikelihoodOffenders(ctx context.Context, client *appknox.Client, fileID int, policy CiPolicy) int {
+// knoxIQHealthScoreGrace bounds how long to wait, once triage has completed,
+// for the backend to write the KnoxIQ-adjusted health score. The backend
+// recalculates right after marking the scan complete, so this only covers the
+// gap between those two writes. A var so tests can shrink it.
+var knoxIQHealthScoreGrace = 30 * time.Second
+
+// healthScoreTriage records how far KnoxIQ got for a health-score check.
+type healthScoreTriage struct {
+	available  bool // the file has KnoxIQ triage (running or done)
+	completed  bool // triage finished, so KnoxIQ results can be read
+	scoreReady bool // the health score has been recalculated from that triage
+	score      int  // that recalculated score; only meaningful when scoreReady
+}
+
+// awaitKnoxIQHealthScore waits for KnoxIQ triage when the file has it, so the
+// health-score gate uses the KnoxIQ-adjusted score rather than the one
+// calculated when the static scan finished. Files without triage return
+// straight away, keeping the plain health-score flow unchanged.
+func awaitKnoxIQHealthScore(ctx context.Context, client *appknox.Client, fileID int, budget ScanBudget) healthScoreTriage {
 	status, available := knoxIQAvailable(ctx, client, fileID)
 	if !available {
+		return healthScoreTriage{}
+	}
+	// Once triage has completed the stored score may already be the adjusted
+	// one, so only label it "before triage" while triage is still pending.
+	if status != enums.KnoxIQStatusCompleted {
+		fmt.Printf("\nHealth score before KnoxIQ triage: %d\n", fetchHealthScore(ctx, client, fileID))
+	}
+	if !waitForKnoxIQ(ctx, client, fileID, budget.KnoxIQDeadline()) {
+		PrintError("KnoxIQ did not complete — using the health score calculated before triage")
+		return healthScoreTriage{available: true}
+	}
+	score, ready := knoxIQHealthScoreReady(ctx, client, fileID, time.Now().Add(knoxIQHealthScoreGrace))
+	if !ready {
+		PrintError("KnoxIQ completed but the health score has not been recalculated yet — using the current score")
+		return healthScoreTriage{available: true, completed: true}
+	}
+	return healthScoreTriage{available: true, completed: true, scoreReady: true, score: score}
+}
+
+// knoxIQHealthScoreReady polls the health score history until it holds a
+// recalculation from KnoxIQ triage, or the deadline passes, and returns the
+// file's current score from that same response. Triage completing and the
+// score being recalculated are separate writes, so the first can be visible
+// before the second — and the recalculation can fail outright. 403 and 404
+// mean this backend can't answer, so there is nothing to wait for.
+func knoxIQHealthScoreReady(ctx context.Context, client *appknox.Client, fileID int, deadline time.Time) (int, bool) {
+	for {
+		audit, _, err := client.Files.GetHealthScoreAudit(ctx, fileID)
+		if err == nil && audit.CurrentScore != nil && hasKnoxIQRecalculation(audit) {
+			return audit.CurrentScore.Score, true
+		}
+		if code := appknox.StatusCodeOf(err); code == 403 || code == 404 {
+			return 0, false
+		}
+		if time.Now().After(deadline) {
+			return 0, false
+		}
+		time.Sleep(knoxIQPollInterval)
+	}
+}
+
+// hasKnoxIQRecalculation reports whether the audit trail holds a static-scan
+// health score recalculated from KnoxIQ triage.
+func hasKnoxIQRecalculation(audit *appknox.HealthScoreAudit) bool {
+	for _, entry := range audit.AuditTrail {
+		if entry.KnoxIQRan && entry.EventType == string(enums.EventTypeSASTCompleted) {
+			return true
+		}
+	}
+	return false
+}
+
+// countLikelihoodOffenders returns how many counted analyses meet the
+// likelihood threshold, reading the triage the caller already waited for; 0
+// (with a warning) when triage is unavailable or did not complete.
+func countLikelihoodOffenders(ctx context.Context, client *appknox.Client, fileID int, policy CiPolicy, triage healthScoreTriage) int {
+	if !triage.available {
 		PrintError("exploit-likelihood gating requires KnoxIQ triage — skipping (no KnoxIQ results for this file)")
 		return 0
 	}
-	if status != enums.KnoxIQStatusCompleted && !waitForKnoxIQ(ctx, client, fileID, policy.Budget.KnoxIQDeadline()) {
+	if !triage.completed {
 		PrintError("KnoxIQ did not complete — skipping exploit-likelihood gate")
 		return 0
 	}
