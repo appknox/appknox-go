@@ -34,11 +34,12 @@ var reportsCreateCmd = &cobra.Command{
 		if err != nil {
 			err := errors.New("Valid file id is required")
 			helper.PrintError(err)
+			os.Exit(1)
 		}
 		reportId, _, err := helper.ProcessCreateReport(fileID)
 		if err != nil {
 			helper.PrintError(err)
-			return
+			os.Exit(1)
 		}
 		fmt.Println(reportId)
 
@@ -65,11 +66,13 @@ var reportsDownloadCsvCmd = &cobra.Command{
 		if err != nil {
 			err := errors.New("Valid Report id is required")
 			helper.PrintError(err)
+			os.Exit(1)
 		}
 		outputFilePath, _ := cmd.Flags().GetString("output")
 		err = helper.ProcessDownloadReportCSV(reportID, outputFilePath)
 		if err != nil {
 			helper.PrintError(err)
+			os.Exit(1)
 		}
 	},
 }
@@ -88,16 +91,17 @@ var reportsDownloadExcelCmd = &cobra.Command{
 		if err != nil {
 			err := errors.New("Valid Report id is required")
 			helper.PrintError(err)
-			return
+			os.Exit(1)
 		}
 		outputFilePath, _ := cmd.Flags().GetString("output")
 		if outputFilePath == "" {
 			helper.PrintError(errors.New(`Error: Required flag "output" not set`))
-			return
+			os.Exit(1)
 		}
 		err = helper.ProcessDownloadReportExcel(reportID, outputFilePath)
 		if err != nil {
 			helper.PrintError(err)
+			os.Exit(1)
 		}
 	},
 }
@@ -123,7 +127,7 @@ Use 'appknox reports create <file_id>' to generate a report and get the report I
 		reportID, err := strconv.Atoi(args[0])
 		if err != nil {
 			helper.PrintError(errors.New("valid report id is required"))
-			return
+			os.Exit(1)
 		}
 		outputDir, _ := cmd.Flags().GetString("output")
 		if outputDir == "" {
@@ -132,6 +136,7 @@ Use 'appknox reports create <file_id>' to generate a report and get the report I
 		err = helper.ProcessDownloadReportPDF(reportID, outputDir)
 		if err != nil {
 			helper.PrintError(err)
+			os.Exit(1)
 		}
 	},
 }
