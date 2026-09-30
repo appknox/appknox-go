@@ -245,10 +245,13 @@ func TestFilesService_GetHealthScoreAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Files.GetHealthScoreAudit returned error: %v", err)
 	}
-	want := &HealthScoreAudit{AuditTrail: []HealthScoreAuditEntry{
-		{EventType: "sast_completed", KnoxIQRan: false, Score: 34},
-		{EventType: "sast_completed", KnoxIQRan: true, Score: 47},
-	}}
+	want := &HealthScoreAudit{
+		CurrentScore: &HealthScoreAuditCurrent{Score: 47},
+		AuditTrail: []HealthScoreAuditEntry{
+			{EventType: "sast_completed", KnoxIQRan: false, Score: 34},
+			{EventType: "sast_completed", KnoxIQRan: true, Score: 47},
+		},
+	}
 	if !reflect.DeepEqual(audit, want) {
 		t.Errorf("Files.GetHealthScoreAudit returned %+v, want %+v", audit, want)
 	}

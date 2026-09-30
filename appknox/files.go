@@ -132,10 +132,18 @@ type HealthScoreAuditEntry struct {
 	Score     int    `json:"score"`
 }
 
+// HealthScoreAuditCurrent is the file's current health score as reported by
+// the audit endpoint (the score of its most recent recalculation).
+type HealthScoreAuditCurrent struct {
+	Score int `json:"score"`
+}
+
 // HealthScoreAudit represents the response returned by the API endpoint
-// /api/v3/files/{id}/health_score_audit.
+// /api/v3/files/{id}/health_score_audit. CurrentScore is nil when the file
+// has no recalculations yet.
 type HealthScoreAudit struct {
-	AuditTrail []HealthScoreAuditEntry `json:"audit_trail"`
+	CurrentScore *HealthScoreAuditCurrent `json:"current_score"`
+	AuditTrail   []HealthScoreAuditEntry  `json:"audit_trail"`
 }
 
 // FileListOptions specifies the optional parameters to the

@@ -168,6 +168,7 @@ type healthScoreTriage struct {
 	available  bool // the file has KnoxIQ triage (running or done)
 	completed  bool // triage finished, so KnoxIQ results can be read
 	scoreReady bool // the health score has been recalculated from that triage
+	score      int  // that recalculated score; only meaningful when scoreReady
 }
 
 // awaitKnoxIQHealthScore waits for KnoxIQ triage when the file has it, so the
@@ -188,29 +189,31 @@ func awaitKnoxIQHealthScore(ctx context.Context, client *appknox.Client, fileID 
 		PrintError("KnoxIQ did not complete — using the health score calculated before triage")
 		return healthScoreTriage{available: true}
 	}
-	if !knoxIQHealthScoreReady(ctx, client, fileID, time.Now().Add(knoxIQHealthScoreGrace)) {
+	score, ready := knoxIQHealthScoreReady(ctx, client, fileID, time.Now().Add(knoxIQHealthScoreGrace))
+	if !ready {
 		PrintError("KnoxIQ completed but the health score has not been recalculated yet — using the current score")
 		return healthScoreTriage{available: true, completed: true}
 	}
-	return healthScoreTriage{available: true, completed: true, scoreReady: true}
+	return healthScoreTriage{available: true, completed: true, scoreReady: true, score: score}
 }
 
 // knoxIQHealthScoreReady polls the health score history until it holds a
-// recalculation from KnoxIQ triage, or the deadline passes. Triage completing
-// and the score being recalculated are separate writes, so the first can be
-// visible before the second — and the recalculation can fail outright. 403 and
-// 404 mean this backend can't answer, so there is nothing to wait for.
-func knoxIQHealthScoreReady(ctx context.Context, client *appknox.Client, fileID int, deadline time.Time) bool {
+// recalculation from KnoxIQ triage, or the deadline passes, and returns the
+// file's current score from that same response. Triage completing and the
+// score being recalculated are separate writes, so the first can be visible
+// before the second — and the recalculation can fail outright. 403 and 404
+// mean this backend can't answer, so there is nothing to wait for.
+func knoxIQHealthScoreReady(ctx context.Context, client *appknox.Client, fileID int, deadline time.Time) (int, bool) {
 	for {
 		audit, _, err := client.Files.GetHealthScoreAudit(ctx, fileID)
-		if err == nil && hasKnoxIQRecalculation(audit) {
-			return true
+		if err == nil && audit.CurrentScore != nil && hasKnoxIQRecalculation(audit) {
+			return audit.CurrentScore.Score, true
 		}
 		if code := appknox.StatusCodeOf(err); code == 403 || code == 404 {
-			return false
+			return 0, false
 		}
 		if time.Now().After(deadline) {
-			return false
+			return 0, false
 		}
 		time.Sleep(knoxIQPollInterval)
 	}

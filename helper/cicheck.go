@@ -206,7 +206,10 @@ func ProcessHealthScoreCiCheck(fileID int, policy CiPolicy) {
 	client := getClient()
 
 	triage := awaitKnoxIQHealthScore(ctx, client, fileID, policy.Budget)
-	score := fetchHealthScore(ctx, client, fileID)
+	score := triage.score
+	if !triage.scoreReady {
+		score = fetchHealthScore(ctx, client, fileID)
+	}
 
 	likelihoodCount := 0
 	if policy.LikelihoodThreshold >= 0 {
