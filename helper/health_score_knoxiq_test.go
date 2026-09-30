@@ -80,10 +80,12 @@ func (s *healthScoreServer) start(t *testing.T) (*appknox.Client, func()) {
 }
 
 const (
-	auditRecalculated = `{"audit_trail":[` +
+	// current_score is deliberately different from the health_score endpoint's
+	// 34, so a test can tell which of the two responses a score came from.
+	auditRecalculated = `{"current_score":{"score":47},"audit_trail":[` +
 		`{"event_type":"sast_completed","knoxiq_ran":false,"score":34},` +
 		`{"event_type":"sast_completed","knoxiq_ran":true,"score":47}]}`
-	auditNotRecalculated = `{"audit_trail":[` +
+	auditNotRecalculated = `{"current_score":{"score":34},"audit_trail":[` +
 		`{"event_type":"sast_completed","knoxiq_ran":false,"score":34}]}`
 )
 
@@ -108,8 +110,10 @@ func TestAwaitKnoxIQHealthScore_PendingThenRecalculated(t *testing.T) {
 		triage = awaitKnoxIQHealthScore(context.Background(), client, 1, NewScanBudget(time.Minute, time.Minute))
 	})
 
-	assert.Equal(t, healthScoreTriage{available: true, completed: true, scoreReady: true}, triage)
+	assert.Equal(t, healthScoreTriage{available: true, completed: true, scoreReady: true, score: 47}, triage)
 	assert.Contains(t, out, "Health score before KnoxIQ triage: 34")
+	assert.Equal(t, 1, srv.hits("/api/v3/files/1/health_score"),
+		"only the pre-triage score is fetched; the final one comes from the audit response")
 }
 
 // TestAwaitKnoxIQHealthScore_AlreadyCompleted checks a file whose triage
@@ -125,7 +129,7 @@ func TestAwaitKnoxIQHealthScore_AlreadyCompleted(t *testing.T) {
 		triage = awaitKnoxIQHealthScore(context.Background(), client, 1, NewScanBudget(time.Minute, time.Minute))
 	})
 
-	assert.Equal(t, healthScoreTriage{available: true, completed: true, scoreReady: true}, triage)
+	assert.Equal(t, healthScoreTriage{available: true, completed: true, scoreReady: true, score: 47}, triage)
 	assert.NotContains(t, out, "before KnoxIQ triage")
 	assert.Zero(t, srv.hits("/api/v3/files/1/health_score"))
 }
@@ -194,10 +198,23 @@ func TestKnoxIQHealthScoreReady_BackendWithoutAudit(t *testing.T) {
 	defer teardown()
 
 	start := time.Now()
-	ready := knoxIQHealthScoreReady(context.Background(), client, 1, time.Now().Add(time.Minute))
+	_, ready := knoxIQHealthScoreReady(context.Background(), client, 1, time.Now().Add(time.Minute))
 
 	assert.False(t, ready)
 	assert.Less(t, time.Since(start), 2*time.Second)
+}
+
+// TestKnoxIQHealthScoreReady_NoCurrentScore guards the nil current_score case
+// (no recalculations recorded): treated as not ready, never a nil dereference.
+func TestKnoxIQHealthScoreReady_NoCurrentScore(t *testing.T) {
+	srv := &healthScoreServer{auditJSON: `{"current_score":null,"audit_trail":[` +
+		`{"event_type":"sast_completed","knoxiq_ran":true,"score":47}]}`}
+	client, teardown := srv.start(t)
+	defer teardown()
+
+	_, ready := knoxIQHealthScoreReady(context.Background(), client, 1, time.Now())
+
+	assert.False(t, ready)
 }
 
 // TestCountLikelihoodOffenders_UsesCompletedTriage checks the likelihood gate
