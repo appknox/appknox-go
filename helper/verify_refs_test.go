@@ -202,3 +202,65 @@ func TestCodeOnlyKotlinTemplateNestedString(t *testing.T) {
 	require.Equal(t, len(`val s = "${f("}", R.string.a)} R.string.b"`), len(got), "offsets are preserved")
 	require.NotContains(t, codeOnly(`String s = "${R.string.a}";`, false), "R.string.a", "Java has no templates")
 }
+
+// A class in a sub-package that uses the module's R unqualified must import it:
+// R is generated in the namespace package only (allsafe-android: the new
+// challenges/SecureInputMethodService.kt used R.layout.secure_keyboard with no
+// import infosecadventures.allsafe.R and failed compileDebugKotlin).
+func TestVerifyPatchRNotImported(t *testing.T) {
+	root := writeRepo(t, map[string]string{
+		"app/build.gradle": "android {\n    namespace 'com.x'\n}\n",
+		"app/src/main/res/layout/secure_keyboard.xml": "<LinearLayout/>\n",
+	})
+	kt := "app/src/main/java/com/x/sub/K.kt"
+	java := "app/src/main/java/com/x/sub/J.java"
+	cases := []struct {
+		name, path, patched string
+		want                string
+	}{
+		{"kotlin sub-package, no import", kt,
+			"package com.x.sub\n\nclass K { val v = R.layout.secure_keyboard }\n", "r-not-imported"},
+		{"java sub-package, no import", java,
+			"package com.x.sub;\n\nclass J { int v = R.layout.secure_keyboard; }\n", "r-not-imported"},
+		{"kotlin with import", kt,
+			"package com.x.sub\n\nimport com.x.R\n\nclass K { val v = R.layout.secure_keyboard }\n", ""},
+		{"java with import", java,
+			"package com.x.sub;\n\nimport com.x.R;\n\nclass J { int v = R.layout.secure_keyboard; }\n", ""},
+		{"wildcard import", kt,
+			"package com.x.sub\n\nimport com.x.*\n\nclass K { val v = R.layout.secure_keyboard }\n", ""},
+		{"namespace package itself", "app/src/main/java/com/x/K.kt",
+			"package com.x\n\nclass K { val v = R.layout.secure_keyboard }\n", ""},
+		{"qualified reference", kt,
+			"package com.x.sub\n\nclass K { val v = com.x.R.layout.secure_keyboard }\n", ""},
+		{"android.R only", kt,
+			"package com.x.sub\n\nclass K { val v = android.R.layout.simple_list_item_1 }\n", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := verifyPatchWith(root, c.path, "", c.patched, gateOpts{deferRefs: true})
+			if c.want == "" {
+				if v != nil {
+					require.NotEqual(t, "r-not-imported", v.Rule, v.Detail)
+				}
+				return
+			}
+			require.NotNil(t, v)
+			require.Equal(t, c.want, v.Rule)
+			require.Contains(t, v.Detail, "import com.x.R")
+		})
+	}
+}
+
+// An R already in use unqualified in the original is in scope already; the
+// check judges only what the patch adds.
+func TestVerifyPatchRNotImportedPreexisting(t *testing.T) {
+	root := writeRepo(t, map[string]string{
+		"app/build.gradle":              "android {\n    namespace 'com.x'\n}\n",
+		"app/src/main/res/layout/a.xml": "<LinearLayout/>\n",
+		"app/src/main/res/layout/b.xml": "<LinearLayout/>\n",
+	})
+	p := "app/src/main/java/com/x/sub/K.kt"
+	orig := "package com.x.sub\n\nimport com.x.*\n\nclass K { val a = R.layout.a }\n"
+	patched := "package com.x.sub\n\nimport com.x.*\n\nclass K { val a = R.layout.a; val b = R.layout.b }\n"
+	require.Nil(t, verifyPatchWith(root, p, orig, patched, gateOpts{deferRefs: true}))
+}

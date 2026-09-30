@@ -219,6 +219,70 @@ func introducedRRefs(root, path, original, patched string) []resourceRef {
 	return out
 }
 
+// wildcardImportRE finds `import <pkg>.*`, which brings that package's R into scope.
+var wildcardImportRE = regexp.MustCompile(`(?m)^\s*import\s+([\w.]+)\.\*\s*;?\s*$`)
+
+// checkRInScope rejects a patch that adds an unqualified R.<kind>.<name> to a
+// class outside the module's namespace package without importing that R: the
+// build generates R in the namespace package only, so the reference does not
+// compile ("Unresolved reference 'R'") even when the resource exists. Enforced
+// per file, never deferred: the fixer can always add the import itself.
+func checkRInScope(root, path, original, patched string) *patchViolation {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext != ".java" && ext != ".kt" {
+		return nil
+	}
+	ref := firstNewUnqualifiedR(original, patched, ext == ".kt")
+	if ref == "" {
+		return nil
+	}
+	ns := moduleNamespace(root, moduleRoot(root, path))
+	if ns == "" {
+		return nil
+	}
+	m := packageDeclRE.FindStringSubmatch(patched)
+	if m == nil || m[1] == ns {
+		return nil
+	}
+	code := codeOnly(patched, ext == ".kt")
+	// Any imported R is in scope; a foreign one is judged by introducedRRefs.
+	if rImportRE.MatchString(code) {
+		return nil
+	}
+	for _, w := range wildcardImportRE.FindAllStringSubmatch(code, -1) {
+		if w[1] == ns {
+			return nil
+		}
+	}
+	semi := ""
+	if ext == ".java" {
+		semi = ";"
+	}
+	return &patchViolation{
+		Rule: "r-not-imported",
+		Detail: fmt.Sprintf("%s uses %s in package %s, but the build generates R in the module's namespace %s "+
+			"only, so R is unresolved there. Add `import %s.R%s` below the package declaration.",
+			path, ref, m[1], ns, ns, semi),
+	}
+}
+
+// firstNewUnqualifiedR returns the first unqualified R.<kind>.<name> in the
+// patched code that the original code does not already use, or "".
+func firstNewUnqualifiedR(original, patched string, kotlin bool) string {
+	had := map[string]bool{}
+	for _, m := range rRefRE.FindAllStringSubmatch(codeOnly(original, kotlin), -1) {
+		if m[1] == "" {
+			had["R."+m[2]+"."+m[3]] = true
+		}
+	}
+	for _, m := range rRefRE.FindAllStringSubmatch(codeOnly(patched, kotlin), -1) {
+		if ref := "R." + m[2] + "." + m[3]; m[1] == "" && !had[ref] {
+			return ref
+		}
+	}
+	return ""
+}
+
 // checkRReferences rejects a NEWLY ADDED R.<kind>.<name> that this module's
 // resources do not define. The generated R class is judged by what it would
 // contain, never by being on disk -- it never is.
