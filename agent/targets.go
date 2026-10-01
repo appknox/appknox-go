@@ -72,7 +72,8 @@ KnoxIQ worked from the compiled app, not from this source, so it names things in
 - inner and anonymous classes (Foo$3, Foo$Inner) live in Foo's file;
 - package names can be misspelled (seen: "overscured" for "oversecured"), so search by class name when the package does not match;
 - layouts (activity_x, R.layout.activity_x) are res/layout*/activity_x.xml;
-- manifest attributes (exported, permission, taskAffinity, allowBackup, uses-permission) are changed in AndroidManifest.xml.
+- manifest attributes (exported, permission, taskAffinity, allowBackup, uses-permission) are changed in AndroidManifest.xml;
+- on iOS, App Transport Security (NSAppTransportSecurity, NSAllowsArbitraryLoads), usage descriptions and URL schemes live in the app target's Info.plist, capabilities in its .entitlements, and build settings in .xcconfig files. A repository can hold several Info.plist files (extensions, widgets, tests): the target is the app's own, beside its AppDelegate or app sources.
 
 Framework and library classes are NOT targets: android.*, androidx.*, java.*, javax.*, kotlin.*, okhttp3.*, and widgets such as LinearLayout are not the app's code. If KnoxIQ names something you cannot find in this repository, list it under not_found instead of guessing.
 
@@ -87,7 +88,7 @@ The files that must change to USE the new file (the manifest that references it,
 
 Confirm every existing file with grep or glob before listing it.
 
-Every not_found entry states the search that came back empty ("Info.plist: glob *Info.plist returned no files"). Never say a file is absent, or "usually not committed", from general knowledge: report only what your searches showed. The tools list source-like files only, so a file type they never show (.plist, .pbxproj, .xcconfig, .entitlements, .dart) may still exist: write "<name>: not searchable (<type>)" for it, never "not in this repository".
+Every not_found entry states the search that came back empty ("Info.plist: glob *Info.plist returned no files"). Never say a file is absent, or "usually not committed", from general knowledge: report only what your searches showed. The tools list source-like and config files only, so a file type they never show (.dart, .storyboard, .json) may still exist: write "<name>: not searchable (<type>)" for it, never "not in this repository". Info.plist, .entitlements, .xcconfig and project.pbxproj ARE listed: glob for them. An Xcode project file (project.pbxproj) is never a target; when a build setting lives only there, write "<setting>: in project.pbxproj (not editable)" under not_found.
 
 You have about 12 tool calls. Stop searching once every part of the remediation is placed or ruled out, and answer: an answer with not_found entries is always better than no answer.
 

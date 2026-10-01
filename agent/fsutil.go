@@ -30,11 +30,21 @@ var sourceSuffixes = map[string]bool{
 	".c": true, ".cc": true, ".cpp": true, ".h": true, ".hpp": true,
 	".cs": true, ".go": true, ".py": true, ".rb": true, ".php": true, ".xml": true,
 	".gradle": true, ".pro": true,
+	// Apple's text config: App Transport Security, entitlements and build
+	// settings live here, and a locate turn that cannot list them answers
+	// "not searchable" for a file that is right there.
+	".plist": true, ".entitlements": true, ".xcconfig": true, ".pbxproj": true,
 }
 
 // skipDir reports whether a directory should be pruned from the walk.
 func skipDir(name string) bool {
-	return skipDirs[name] || (len(name) > 1 && strings.HasPrefix(name, "."))
+	return skipDirs[name] || (len(name) > 1 && strings.HasPrefix(name, ".")) || vendoredBundle(name)
+}
+
+// vendoredBundle reports a prebuilt Apple framework copied into the tree: its
+// Info.plist and headers belong to the library, not the app.
+func vendoredBundle(name string) bool {
+	return strings.HasSuffix(name, ".framework") || strings.HasSuffix(name, ".xcframework")
 }
 
 // isNestedRepo reports whether dir is a repository in its own right, and so a

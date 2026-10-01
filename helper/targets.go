@@ -113,13 +113,14 @@ func prunedComponent(root, dest string) bool {
 
 // supportedTarget is the set of files a fix call may edit today: Java/Kotlin
 // source, the manifest, resource XML, a module's build script and its
-// proguard-rules.pro.
+// proguard-rules.pro, and Apple's property lists and xcconfig files (each
+// judged by plist_check.go).
 func supportedTarget(rel string) bool {
 	if isModuleBuildScript(rel) || isModuleRulesFile(rel) {
 		return true
 	}
 	switch strings.ToLower(path.Ext(rel)) {
-	case ".java", ".kt":
+	case ".java", ".kt", ".plist", ".entitlements", ".xcconfig":
 		return true
 	case ".xml":
 		if path.Base(rel) == "AndroidManifest.xml" {

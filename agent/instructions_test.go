@@ -281,3 +281,12 @@ func TestFixSystemPrompt_treatsReferenceElisionsAsOmissions(t *testing.T) {
 		}
 	}
 }
+
+// iOS config files are editable: the fixer must keep a plist's key/value pairs
+// in step and hold an xcconfig to settings.
+func TestFixSystemPrompt_PropertyLists(t *testing.T) {
+	for _, want := range []string{"PLIST", "exactly one value", "remove the\n  key together with its value",
+		"NSExceptionDomains", "never invent one", ".xcconfig", "Never add an #include"} {
+		require.Contains(t, fixSystemPrompt, want)
+	}
+}

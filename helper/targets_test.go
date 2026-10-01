@@ -170,3 +170,12 @@ func TestGenuinelyNew_NoEntriesSkipsTheWalk(t *testing.T) {
 	require.Empty(t, newOnes)
 	require.Empty(t, notNew)
 }
+
+// Info.plist, entitlements and xcconfig are editable; the project file is
+// findable but not yet editable.
+func TestSupportedTarget_AppleConfig(t *testing.T) {
+	for _, rel := range []string{"iGoat-Swift/iGoat-Swift/Info.plist", "App/App.entitlements", "Configurations/Release.xcconfig"} {
+		require.True(t, supportedTarget(rel), rel)
+	}
+	require.False(t, supportedTarget("App.xcodeproj/project.pbxproj"))
+}

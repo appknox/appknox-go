@@ -188,6 +188,17 @@ XML - a manifest or resource is a document, not a text file.
   an accessibility service) is exported="true" and carries its binding permission
   (android:permission="android.permission.BIND_INPUT_METHOD" for an input method).
 
+PLIST - an Info.plist or .entitlements file is a property list.
+  Inside every <dict>, a <key> is followed by exactly one value: <string>,
+  <true/>, <false/>, <integer>, <real>, <date>, <data>, <array> or <dict>. Change
+  the value the remediation names in place (<true/> to <false/>), or remove the
+  key together with its value; never leave a key without its value, never write
+  a key twice in one dict, and never touch a key the remediation does not name.
+  Add an exception (NSExceptionDomains) only when the remediation names its
+  domain; never invent one.
+  An .xcconfig file is a list of build settings, NAME = value: change or add only
+  the settings the remediation names. Never add an #include.
+
 MINIMAL - change the named construct, not the call around it.
   Do NOT alter a method signature, argument list, overload, import, or exception
   surface unless the remediation calls for it. Replace a bad argument in place;

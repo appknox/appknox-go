@@ -194,10 +194,20 @@ func TestTargetsSystemPrompt_AnswerTagsBudgetAndEvidence(t *testing.T) {
 	for _, want := range []string{
 		"<answer>", "</answer>", "about 12 tool calls",
 		"states the search that came back empty", "from general knowledge",
-		"not searchable", ".plist", ".pbxproj",
+		"not searchable", ".dart",
 	} {
 		require.Contains(t, targetsSystemPrompt, want)
 	}
+}
+
+// iGoat-Swift and DVIA-v2: Info.plist is searchable now, and locate must be
+// told so and where iOS settings live, not to call it unsearchable.
+func TestTargetsSystemPrompt_AppleConfigIsSearchable(t *testing.T) {
+	for _, want := range []string{"Info.plist", "NSAppTransportSecurity", ".entitlements", ".xcconfig",
+		"ARE listed", "project.pbxproj) is never a target"} {
+		require.Contains(t, targetsSystemPrompt, want)
+	}
+	require.NotContains(t, targetsSystemPrompt, "(.plist, .pbxproj")
 }
 
 func TestParseTargetReply_AnswerTagsAfterScratchpad(t *testing.T) {

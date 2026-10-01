@@ -113,6 +113,12 @@ func verifyPatchWith(root, path, original, patched string, opts gateOpts) *patch
 	if v := checkBraceBalance(path, original, patched); v != nil {
 		return v
 	}
+	if v := checkPlist(path, original, patched); v != nil {
+		return v
+	}
+	if v := checkXcconfig(path, original, patched); v != nil {
+		return v
+	}
 	if !opts.deferRefs {
 		if v := checkResourceRefs(root, path, original, patched); v != nil {
 			return v
