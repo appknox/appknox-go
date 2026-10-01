@@ -42,7 +42,7 @@ func checkResourceRefs(root, path, original, patched string) *patchViolation {
 	}
 	idx := buildResourceIndex(root)
 	for _, r := range refs {
-		if idx.has(r.Kind, r.Name) {
+		if idx.hasFrom(path, r.Kind, r.Name) {
 			continue
 		}
 		return &patchViolation{
@@ -293,7 +293,7 @@ func checkRReferences(root, path, original, patched string) *patchViolation {
 	}
 	idx := buildResourceIndex(root)
 	for _, r := range refs {
-		if idx.has(r.Kind, r.Name) {
+		if idx.hasFrom(path, r.Kind, r.Name) {
 			continue
 		}
 		return &patchViolation{

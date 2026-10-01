@@ -12,12 +12,16 @@ import (
 )
 
 // resourceIndex answers "does this repository define @kind/name, or class X?"
-// for the patch gate and the unit resolve pass (spec 3.1). Lookups are
-// repository-wide, like resourceExists before it: flavour and library source
-// sets count, not only the referencing module's main set.
+// for the patch gate and the unit resolve pass (spec 3.1). Each entry records
+// the Gradle build that owns it (scopeOf): a repository can hold several
+// independent apps (Damn-Vulnerable-React-Native's variant-a/b/c), and one
+// app's resources are invisible to another's build. Within one build,
+// lookups stay build-wide: flavour and library source sets count.
 type resourceIndex struct {
-	defined map[string]bool // resKey(kind, name)
-	classes map[string]bool // fully qualified names declared in .java/.kt sources
+	root    string
+	defined map[string]map[string]bool // resKey(kind, name) -> owning scopes
+	classes map[string]map[string]bool // fully qualified class name -> owning scopes
+	scopes  map[string]string          // directory -> its scope, memoised
 }
 
 // resKey normalises a resource name the way aapt does, so @style/Theme.App
@@ -26,9 +30,61 @@ func resKey(kind, name string) string {
 	return kind + "/" + strings.ReplaceAll(name, ".", "_")
 }
 
-func (x *resourceIndex) has(kind, name string) bool { return x.defined[resKey(kind, name)] }
+// has and hasClass answer repository-wide, in any build.
+func (x *resourceIndex) has(kind, name string) bool { return len(x.defined[resKey(kind, name)]) > 0 }
 
-func (x *resourceIndex) hasClass(fqcn string) bool { return x.classes[fqcn] }
+func (x *resourceIndex) hasClass(fqcn string) bool { return len(x.classes[fqcn]) > 0 }
+
+// hasFrom and hasClassFrom answer for a reference in the file at rel: defined
+// in that file's own Gradle build, or somewhere no build owns.
+func (x *resourceIndex) hasFrom(rel, kind, name string) bool {
+	return x.visible(x.defined[resKey(kind, name)], rel)
+}
+
+func (x *resourceIndex) hasClassFrom(rel, fqcn string) bool { return x.visible(x.classes[fqcn], rel) }
+
+func (x *resourceIndex) visible(owners map[string]bool, rel string) bool {
+	scope := x.scopeOf(rel)
+	if scope == "" {
+		return len(owners) > 0
+	}
+	return owners[scope] || owners[""]
+}
+
+// scopeOf returns the directory of the nearest settings.gradle(.kts) above
+// rel ("." for the repository root), or "" when no Gradle build owns it.
+func (x *resourceIndex) scopeOf(rel string) string {
+	dir := path.Dir(filepath.ToSlash(rel))
+	if s, ok := x.scopes[dir]; ok {
+		return s
+	}
+	scope := ""
+	for d := dir; ; d = path.Dir(d) {
+		if fileExists(filepath.Join(x.root, d, "settings.gradle")) ||
+			fileExists(filepath.Join(x.root, d, "settings.gradle.kts")) {
+			scope = d
+			break
+		}
+		if d == "." || d == "/" {
+			break
+		}
+	}
+	x.scopes[dir] = scope
+	return scope
+}
+
+func fileExists(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
+}
+
+// mark records key as defined in scope.
+func mark(m map[string]map[string]bool, key, scope string) {
+	if m[key] == nil {
+		m[key] = map[string]bool{}
+	}
+	m[key][scope] = true
+}
 
 // resPathRE splits res/<kind>[-qualifier]/<file>.
 var resPathRE = regexp.MustCompile(`(^|/)res/([a-z]+)(-[^/]+)?/([^/]+)$`)
@@ -56,8 +112,9 @@ var valuesKinds = map[string]string{
 // buildResourceIndex walks the checkout once, skipping what agent.PruneDir
 // skips (build output, vendored trees, nested repositories).
 func buildResourceIndex(root string) *resourceIndex {
-	x := &resourceIndex{defined: map[string]bool{}, classes: map[string]bool{}}
-	x.defined[resKey("integer", "google_play_services_version")] = true
+	x := &resourceIndex{root: root, defined: map[string]map[string]bool{},
+		classes: map[string]map[string]bool{}, scopes: map[string]string{}}
+	mark(x.defined, resKey("integer", "google_play_services_version"), "")
 	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
 		if err != nil || info == nil {
 			return nil
@@ -81,17 +138,18 @@ func buildResourceIndex(root string) *resourceIndex {
 // add indexes one file: a source file's classes, a values file's entries, or
 // a file resource by its name, plus the ids an XML resource declares.
 func (x *resourceIndex) add(abs, rel string) {
+	scope := x.scopeOf(rel)
 	switch strings.ToLower(filepath.Ext(rel)) {
 	case ".java", ".kt":
-		x.addClasses(abs)
+		x.addClasses(abs, scope)
 		return
 	}
 	switch path.Base(rel) {
 	case "build.gradle", "build.gradle.kts":
-		x.addScript(abs)
+		x.addScript(abs, scope)
 		return
 	case "google-services.json":
-		x.addGoogleServices()
+		x.addGoogleServices(scope)
 		return
 	}
 	m := resPathRE.FindStringSubmatch(rel)
@@ -100,13 +158,13 @@ func (x *resourceIndex) add(abs, rel string) {
 	}
 	kind, base := m[2], m[4]
 	if kind == "values" {
-		x.addValues(abs)
+		x.addValues(abs, scope)
 		return
 	}
 	// Named before the first dot: bg.9.png is @drawable/bg.
-	x.defined[resKey(kind, strings.SplitN(base, ".", 2)[0])] = true
+	mark(x.defined, resKey(kind, strings.SplitN(base, ".", 2)[0]), scope)
 	if strings.HasSuffix(base, ".xml") {
-		x.addIDs(abs)
+		x.addIDs(abs, scope)
 	}
 }
 
@@ -125,38 +183,38 @@ var googleServicesStrings = []string{"default_web_client_id", "google_app_id", "
 
 // addScript indexes what a module build script generates: its resValue
 // entries, and the google-services strings when it applies that plugin.
-func (x *resourceIndex) addScript(abs string) {
+func (x *resourceIndex) addScript(abs, scope string) {
 	b, err := os.ReadFile(abs)
 	if err != nil {
 		return
 	}
 	for _, m := range resValueRE.FindAllSubmatch(b, -1) {
-		x.defined[resKey(string(m[1]), string(m[2]))] = true
+		mark(x.defined, resKey(string(m[1]), string(m[2])), scope)
 	}
 	if googleServicesPluginRE.Match(b) {
-		x.addGoogleServices()
+		x.addGoogleServices(scope)
 	}
 }
 
 // addGoogleServices marks the google-services strings defined: a repository
 // with a google-services.json, or applying the plugin, gets them generated.
-func (x *resourceIndex) addGoogleServices() {
+func (x *resourceIndex) addGoogleServices(scope string) {
 	for _, n := range googleServicesStrings {
-		x.defined[resKey("string", n)] = true
+		mark(x.defined, resKey("string", n), scope)
 	}
 }
 
-func (x *resourceIndex) addIDs(abs string) {
+func (x *resourceIndex) addIDs(abs, scope string) {
 	b, err := os.ReadFile(abs)
 	if err != nil {
 		return
 	}
 	for _, m := range idDefRE.FindAllSubmatch(b, -1) {
-		x.defined[resKey("id", string(m[1]))] = true
+		mark(x.defined, resKey("id", string(m[1])), scope)
 	}
 }
 
-func (x *resourceIndex) addClasses(abs string) {
+func (x *resourceIndex) addClasses(abs, scope string) {
 	b, err := os.ReadFile(abs)
 	if err != nil {
 		return
@@ -166,7 +224,7 @@ func (x *resourceIndex) addClasses(abs string) {
 		pkg = string(m[1]) + "."
 	}
 	for _, m := range classDeclRE.FindAllSubmatch(b, -1) {
-		x.classes[pkg+string(m[1])] = true
+		mark(x.classes, pkg+string(m[1]), scope)
 	}
 }
 
@@ -174,7 +232,7 @@ func (x *resourceIndex) addClasses(abs string) {
 // strict, so an entity a DOCTYPE declares (&appname;) does not stop it; a
 // file that still stops parsing keeps what was read before the error, and
 // the build judges the rest.
-func (x *resourceIndex) addValues(abs string) {
+func (x *resourceIndex) addValues(abs, scope string) {
 	f, err := os.Open(abs)
 	if err != nil {
 		return
@@ -193,7 +251,7 @@ func (x *resourceIndex) addValues(abs string) {
 		case xml.StartElement:
 			depth++
 			if depth == 2 {
-				x.addValue(t)
+				x.addValue(t, scope)
 			}
 		case xml.EndElement:
 			depth--
@@ -201,7 +259,7 @@ func (x *resourceIndex) addValues(abs string) {
 	}
 }
 
-func (x *resourceIndex) addValue(el xml.StartElement) {
+func (x *resourceIndex) addValue(el xml.StartElement, scope string) {
 	name, typ := "", ""
 	for _, a := range el.Attr {
 		switch a.Name.Local {
@@ -216,7 +274,7 @@ func (x *resourceIndex) addValue(el xml.StartElement) {
 		kind = typ
 	}
 	if kind != "" && name != "" {
-		x.defined[resKey(kind, name)] = true
+		mark(x.defined, resKey(kind, name), scope)
 	}
 }
 

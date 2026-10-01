@@ -56,7 +56,7 @@ func checkThemeAttrs(root, path, original, patched string) *patchViolation {
 		if idx == nil {
 			idx = buildResourceIndex(root)
 		}
-		if idx.has("attr", name) {
+		if idx.hasFrom(path, "attr", name) {
 			continue
 		}
 		return &patchViolation{

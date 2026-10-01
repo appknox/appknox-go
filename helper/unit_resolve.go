@@ -67,10 +67,13 @@ func unresolvedUnitRefs(root string, patched []string, before map[string]string)
 	seen := map[string]bool{}
 	var out []unresolvedRef
 	for _, r := range refs {
-		key, defined := "class/"+r.Name, idx.hasClass(r.Name)
+		// Keyed per Gradle build: each independent app in the repository
+		// needs its own definition, so each gets its own completion.
+		key, defined := "class/"+r.Name, idx.hasClassFrom(r.From, r.Name)
 		if r.Kind != "class" {
-			key, defined = resKey(r.Kind, r.Name), idx.has(r.Kind, r.Name)
+			key, defined = resKey(r.Kind, r.Name), idx.hasFrom(r.From, r.Kind, r.Name)
 		}
+		key = idx.scopeOf(r.From) + "|" + key
 		if defined || seen[key] {
 			continue
 		}
