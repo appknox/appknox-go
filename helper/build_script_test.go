@@ -353,7 +353,7 @@ func TestCheckBuildScriptEdit_AllowsRemediationSettings(t *testing.T) {
 		"android {\n    buildTypes {\n        getByName(\"release\") {\n            isMinifyEnabled = true\n            isDebuggable = false\n            proguardFiles(getDefaultProguardFile(\"proguard-android-optimize.txt\"), \"proguard-rules.pro\")\n        }\n    }\n}\n",
 		"android { buildTypes { release { debuggable false } } } // strip debug\n",
 	} {
-		require.Nil(t, checkBuildScriptEdit("app/build.gradle", mfvaGradle, mfvaGradle+added), added)
+		require.Nil(t, checkBuildScriptEdit(scriptFor(added), mfvaGradle, mfvaGradle+added), added)
 	}
 }
 
@@ -380,7 +380,7 @@ func TestCheckBuildScriptEdit_AllowsSdkAndCreateForms(t *testing.T) {
 		"android { buildTypes { create(\"release\") { isMinifyEnabled = true } } }\n",
 		"// release hardening\n",
 	} {
-		require.Nil(t, checkBuildScriptEdit("app/build.gradle", mfvaGradle, mfvaGradle+added), added)
+		require.Nil(t, checkBuildScriptEdit(scriptFor(added), mfvaGradle, mfvaGradle+added), added)
 	}
 }
 
@@ -443,4 +443,38 @@ func TestRun_RolledBackWhenBuildScriptChangeRefusedThenDeclined(t *testing.T) {
 	require.Empty(t, out.Patches, "the RootBeer source half must not ship without its dependency")
 	got, _ := os.ReadFile(filepath.Join(root, exportedRel))
 	require.Equal(t, exportedJedis, string(got), "rolled back on disk")
+}
+
+// element-x-android, 2026-10-01: the fixer wrote Groovy's `debuggable = false`
+// into app/build.gradle.kts, where only isDebuggable exists ("Unresolved
+// reference 'debuggable'"). Each DSL takes its own spelling of a flag.
+func TestCheckBuildScriptEdit_flagSpellingMatchesDSL(t *testing.T) {
+	kts := "android {\n    buildTypes {\n        getByName(\"release\") {\n        }\n    }\n}\n"
+	ktsGroovy := "android {\n    buildTypes {\n        getByName(\"release\") {\n            debuggable = false\n            minifyEnabled = true\n        }\n    }\n}\n"
+	v := checkBuildScriptEdit("app/build.gradle.kts", kts, ktsGroovy)
+	require.NotNil(t, v)
+	require.Equal(t, "build-script-dsl", v.Rule)
+	require.Contains(t, v.Detail, "isDebuggable")
+
+	ktsOK := "android {\n    buildTypes {\n        getByName(\"release\") {\n            isDebuggable = false\n            isMinifyEnabled = true\n        }\n    }\n}\n"
+	require.Nil(t, checkBuildScriptEdit("app/build.gradle.kts", kts, ktsOK))
+
+	groovy := "android {\n    buildTypes {\n        release {\n        }\n    }\n}\n"
+	groovyKts := "android {\n    buildTypes {\n        release {\n            isMinifyEnabled = true\n        }\n    }\n}\n"
+	v = checkBuildScriptEdit("app/build.gradle", groovy, groovyKts)
+	require.NotNil(t, v)
+	require.Equal(t, "build-script-dsl", v.Rule)
+	require.Contains(t, v.Detail, "minifyEnabled")
+
+	groovyOK := "android {\n    buildTypes {\n        release {\n            minifyEnabled true\n        }\n    }\n}\n"
+	require.Nil(t, checkBuildScriptEdit("app/build.gradle", groovy, groovyOK))
+}
+
+// scriptFor names the build script a test edit belongs in: Kotlin DSL flag
+// spellings (isMinifyEnabled) exist only in a .gradle.kts file.
+func scriptFor(added string) string {
+	if strings.Contains(added, "isMinifyEnabled") {
+		return "app/build.gradle.kts"
+	}
+	return "app/build.gradle"
 }

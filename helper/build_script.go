@@ -142,6 +142,9 @@ func checkBuildScriptEdit(p, original, patched string) *patchViolation {
 			}
 		}
 	}
+	if v := checkFlagSpelling(p, original, patched); v != nil {
+		return v
+	}
 	// Moving a } re-nests a block without adding or removing a line: the
 	// release setting lands in debug { } and the finding looks fixed. Every
 	// line kept by the patch must stay in the block it was in.
@@ -450,4 +453,37 @@ func addedCodeLines(original, patched string) []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+// Each DSL spells a boolean flag its own way: Groovy's minifyEnabled is
+// isMinifyEnabled in Kotlin, and neither name exists in the other.
+var (
+	groovyFlagRE = regexp.MustCompile(`^\s*(debuggable|minifyEnabled|shrinkResources|jniDebuggable|renderscriptDebuggable)\b`)
+	ktsFlagRE    = regexp.MustCompile(`^\s*is(Debuggable|MinifyEnabled|ShrinkResources|JniDebuggable|RenderscriptDebuggable)\b`)
+)
+
+// checkFlagSpelling rejects an added flag spelled for the other DSL, which
+// fails script compilation (element-x-android: "Unresolved reference
+// 'debuggable'" in app/build.gradle.kts).
+func checkFlagSpelling(p, original, patched string) *patchViolation {
+	kts := strings.HasSuffix(p, ".kts")
+	for _, line := range addedCodeLines(original, patched) {
+		for _, part := range buildSplitRE.Split(line, -1) {
+			have, want := "", ""
+			if m := groovyFlagRE.FindStringSubmatch(part); kts && m != nil {
+				have, want = m[1], "is"+strings.ToUpper(m[1][:1])+m[1][1:]
+			} else if m := ktsFlagRE.FindStringSubmatch(part); !kts && m != nil {
+				have, want = "is"+m[1], strings.ToLower(m[1][:1])+m[1][1:]
+			}
+			if have == "" {
+				continue
+			}
+			return &patchViolation{
+				Rule: "build-script-dsl",
+				Detail: fmt.Sprintf("your edit to %s sets %s, which this build script's DSL does not have: "+
+					"write %s instead, in the form the file's existing settings use.", p, have, want),
+			}
+		}
+	}
+	return nil
 }
