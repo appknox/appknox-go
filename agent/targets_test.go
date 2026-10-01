@@ -225,3 +225,9 @@ func TestTargetsSystemPrompt_OptionalFilesAreNotNew(t *testing.T) {
 		require.Contains(t, targetsSystemPrompt, want)
 	}
 }
+
+func TestTargetsSystemPrompt_SwiftClassesAreNotNewFiles(t *testing.T) {
+	for _, want := range []string{"list no .swift file under new_files", "Package.swift, Podfile and Cartfile"} {
+		require.Contains(t, targetsSystemPrompt, want)
+	}
+}

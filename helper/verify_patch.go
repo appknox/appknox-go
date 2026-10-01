@@ -44,7 +44,8 @@ import (
 // aibom-android edited app/build.gradle.kts anyway, twice, under two separate
 // rules forbidding it. A path check does not rely on compliance.
 var buildFileRE = regexp.MustCompile(
-	`(^|/)(build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.properties|pom\.xml|proguard-rules\.pro)$`)
+	`(^|/)(build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.properties|pom\.xml|proguard-rules\.pro|` +
+		`Package\.swift|Podfile|Cartfile)$`)
 
 // resourceRefRE finds Android resource references in XML, e.g.
 // android:networkSecurityConfig="@xml/network_security_config" or
@@ -137,6 +138,9 @@ func verifyPatchWith(root, path, original, patched string, opts gateOpts) *patch
 		return v
 	}
 	if v := checkMissingLibrary(root, path, original, patched); v != nil {
+		return v
+	}
+	if v := checkSwiftImports(root, path, original, patched); v != nil {
 		return v
 	}
 	if v := checkExported(path, original, patched); v != nil {
@@ -244,7 +248,7 @@ func checkXMLWellFormed(path, content string) *patchViolation {
 // rule.
 func checkBraceBalance(path, original, patched string) *patchViolation {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".java", ".kt", ".gradle", ".kts":
+	case ".java", ".kt", ".gradle", ".kts", ".swift":
 	default:
 		return nil
 	}

@@ -17,22 +17,32 @@ var loggingCallRE = regexp.MustCompile(
 // kotlinPrintRE finds Kotlin's top-level println/print, which write to stdout.
 var kotlinPrintRE = regexp.MustCompile(`(?:^|[^\w.])print(?:ln)?\s*\(`)
 
-// checkAddedLogging rejects a Java/Kotlin patch that adds a logging call. No
+// swiftLogRE finds a Swift logging call: print, debugPrint, dump, NSLog,
+// os_log, and a Logger/os.Logger level method.
+var swiftLogRE = regexp.MustCompile(
+	`(?:^|[^\w.])(?:print|debugPrint|dump|NSLog|os_log)\s*\(` +
+		`|\b(?:[lL]ogger|log)\.(?:trace|debug|info|notice|warning|error|critical|fault|log)\s*\(`)
+
+// checkAddedLogging rejects a Java/Kotlin/Swift patch that adds a logging call. No
 // remediation asks for one, and the scanner raises new log calls as the
 // Application Logs finding, so a fix that logs trades one finding for another.
 // It counts calls rather than diffing lines: one more Log.w than the original
 // had is an addition even when an identical call already exists.
 func checkAddedLogging(path, original, patched string) *patchViolation {
 	ext := strings.ToLower(filepath.Ext(path))
-	if ext != ".java" && ext != ".kt" {
+	var res []*regexp.Regexp
+	switch ext {
+	case ".java":
+		res = []*regexp.Regexp{loggingCallRE}
+	case ".kt":
+		res = []*regexp.Regexp{loggingCallRE, kotlinPrintRE}
+	case ".swift":
+		res = []*regexp.Regexp{swiftLogRE}
+	default:
 		return nil
 	}
 	kotlin := ext == ".kt"
 	before, after := codeOnly(original, kotlin), codeOnly(patched, kotlin)
-	res := []*regexp.Regexp{loggingCallRE}
-	if kotlin {
-		res = append(res, kotlinPrintRE)
-	}
 	for _, re := range res {
 		added := len(re.FindAllString(after, -1)) - len(re.FindAllString(before, -1))
 		if added <= 0 {

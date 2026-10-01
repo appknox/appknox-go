@@ -290,3 +290,12 @@ func TestFixSystemPrompt_PropertyLists(t *testing.T) {
 		require.Contains(t, fixSystemPrompt, want)
 	}
 }
+
+// DVIA-v2 and wikipedia-ios: Swift is editable. A new .swift file would not be
+// compiled (it is not in the project), imports must resolve, and invented
+// signatures do not compile.
+func TestFixSystemPrompt_Swift(t *testing.T) {
+	for _, want := range []string{"SWIFT", "never in a new file", "No such module", "signature you write", "NSLog"} {
+		require.Contains(t, fixSystemPrompt, want)
+	}
+}

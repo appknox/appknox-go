@@ -199,6 +199,17 @@ PLIST - an Info.plist or .entitlements file is a property list.
   An .xcconfig file is a list of build settings, NAME = value: change or add only
   the settings the remediation names. Never add an #include.
 
+SWIFT - a .swift file is compiled as part of an Xcode target.
+  Xcode compiles only the files its project lists, so a type the remediation
+  names goes in the file you were given - a private final class, a struct, an
+  enum or an extension at file scope - never in a new file. Import only Apple's
+  system frameworks (Foundation, Security, CryptoKit, LocalAuthentication, ...)
+  and modules this file or the project already imports; a module the project
+  does not use stops the build with "No such module". Call only APIs you are
+  sure exist with the signature you write: an initializer, delegate method or
+  overload written from memory with the wrong labels does not compile. Add no
+  print, debugPrint, NSLog, os_log or Logger calls.
+
 MINIMAL - change the named construct, not the call around it.
   Do NOT alter a method signature, argument list, overload, import, or exception
   surface unless the remediation calls for it. Replace a bad argument in place;

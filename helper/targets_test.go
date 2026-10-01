@@ -179,3 +179,13 @@ func TestSupportedTarget_AppleConfig(t *testing.T) {
 	}
 	require.False(t, supportedTarget("App.xcodeproj/project.pbxproj"))
 }
+
+// wikipedia-ios and DVIA-v2: Swift sources are editable; Swift package and
+// CocoaPods manifests are build files, never targets.
+func TestSupportedTarget_Swift(t *testing.T) {
+	require.True(t, supportedTarget("Wikipedia/Code/AppDelegate.swift"))
+	for _, rel := range []string{"WMFComponents/Package.swift", "Package.swift", "Podfile", "Cartfile"} {
+		require.False(t, supportedTarget(rel), rel)
+		require.True(t, buildFileRE.MatchString(rel), rel)
+	}
+}
