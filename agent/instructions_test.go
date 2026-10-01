@@ -299,3 +299,9 @@ func TestFixSystemPrompt_Swift(t *testing.T) {
 		require.Contains(t, fixSystemPrompt, want)
 	}
 }
+
+// wikipedia-ios: a helper declared private in AppDelegate.swift and called
+// from SceneDelegate.swift does not compile.
+func TestFixSystemPrompt_SharedSwiftHelpersAreNotPrivate(t *testing.T) {
+	require.Contains(t, fixSystemPrompt, "never private or fileprivate")
+}

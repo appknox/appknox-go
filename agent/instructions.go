@@ -208,7 +208,10 @@ SWIFT - a .swift file is compiled as part of an Xcode target.
   does not use stops the build with "No such module". Call only APIs you are
   sure exist with the signature you write: an initializer, delegate method or
   overload written from memory with the wrong labels does not compile. Add no
-  print, debugPrint, NSLog, os_log or Logger calls.
+  print, debugPrint, NSLog, os_log or Logger calls. A helper that another file
+  in this remediation calls is never private or fileprivate - Swift hides those
+  outside their own file; declare it at file scope with no access modifier.
+  Call such a helper from another file only when it is declared that way.
 
 MINIMAL - change the named construct, not the call around it.
   Do NOT alter a method signature, argument list, overload, import, or exception

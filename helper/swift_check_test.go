@@ -88,3 +88,44 @@ func TestVerifyPatchRoutesSwift(t *testing.T) {
 	require.NotNil(t, v)
 	require.Equal(t, "missing-library", v.Rule)
 }
+
+// wikipedia-ios, 2026-10-01: the AppDelegate call declared
+// `private func evaluateDeviceIntegrity()` at file scope and the SceneDelegate
+// call called it -- "inaccessible due to 'private' protection level".
+func TestCheckPrivateSwiftCalls(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+	}
+	write("App/AppDelegate.swift", "import UIKit\n\nprivate func evaluateDeviceIntegrity() {}\n"+
+		"fileprivate func probe() -> Bool { false }\nfunc sharedCheck() {}\n"+
+		"final class Helper {\n    private func onlyHere() {}\n}\n")
+	write("App/Other.swift", "final class Other {\n    private func twice() {}\n}\nfunc twice() {}\n")
+	orig := "final class SceneDelegate {\n    func sceneDidBecomeActive() {\n        resume()\n    }\n    func resume() {}\n}\n"
+	call := func(stmt string) string {
+		return replaceOnce(t, orig, "        resume()\n", "        "+stmt+"\n        resume()\n")
+	}
+	path := "App/SceneDelegate.swift"
+
+	for _, stmt := range []string{"evaluateDeviceIntegrity()", "if probe() { return }", "onlyHere()"} {
+		v := checkPrivateSwiftCalls(root, path, orig, call(stmt))
+		require.NotNil(t, v, stmt)
+		require.Equal(t, "private-symbol", v.Rule, stmt)
+		require.Contains(t, v.Detail, "AppDelegate.swift")
+	}
+	for _, stmt := range []string{
+		"sharedCheck()",          // internal
+		"twice()",                // one declaration is internal
+		"unknownElsewhere()",     // not found: cannot judge
+		"resume()",               // declared in this file
+		"if guardCheck() { }",    // not found
+		"self.helper.onlyHere()", // member call through an instance: not a bare call
+	} {
+		require.Nil(t, checkPrivateSwiftCalls(root, path, orig, call(stmt)), stmt)
+	}
+	// Declared privately in the patched file itself: fine.
+	selfDecl := call("localCheck()") + "private func localCheck() {}\n"
+	require.Nil(t, checkPrivateSwiftCalls(root, path, orig, selfDecl))
+}

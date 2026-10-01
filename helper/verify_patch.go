@@ -143,6 +143,9 @@ func verifyPatchWith(root, path, original, patched string, opts gateOpts) *patch
 	if v := checkSwiftImports(root, path, original, patched); v != nil {
 		return v
 	}
+	if v := checkPrivateSwiftCalls(root, path, original, patched); v != nil {
+		return v
+	}
 	if v := checkExported(path, original, patched); v != nil {
 		return v
 	}

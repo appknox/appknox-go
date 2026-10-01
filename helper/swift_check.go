@@ -63,20 +63,38 @@ func swiftDependencyFile(name string) bool {
 }
 
 // swiftModuleAvailable reports whether another first-party source file imports
-// module, or a dependency manifest names it. The walk skips what locate skips
-// (Pods, build output, vendored frameworks) and never follows a symlink; the
-// patched file itself does not count.
+// module, or a dependency manifest names it. The patched file itself does not
+// count.
 func swiftModuleAvailable(root, self, module string) bool {
 	importRE := regexp.MustCompile(`(?m)^\s*(?:@\w+\s+)*import\s+(?:\w+\s+)?` + regexp.QuoteMeta(module) +
 		`\b|@import\s+` + regexp.QuoteMeta(module) + `\b|#import\s+<` + regexp.QuoteMeta(module) + `/`)
 	nameRE := regexp.MustCompile(`\b` + regexp.QuoteMeta(module) + `\b`)
 	found := false
+	walkAppleSources(root, self, func(rel, body string) bool {
+		name := path.Base(rel)
+		switch {
+		case swiftDependencyFile(name):
+			found = nameRE.MatchString(body)
+		case sourceFileForImports(name):
+			found = importRE.MatchString(codeOnly(body, false))
+		}
+		return found
+	})
+	return found
+}
+
+// walkAppleSources calls fn(rel, body) for every regular file under root
+// except self, skipping what locate skips (Pods, build output, vendored
+// frameworks, nested repositories) and never following a symlink. fn returns
+// true to stop the walk.
+func walkAppleSources(root, self string, fn func(rel, body string) bool) {
+	stop := false
 	_ = filepath.WalkDir(root, func(abs string, d fs.DirEntry, err error) error {
-		if found {
+		if stop {
 			return filepath.SkipAll
 		}
 		if err != nil {
-			return nil // an unreadable entry cannot vouch for the module; keep looking
+			return nil // an unreadable entry cannot answer; keep looking
 		}
 		if d.IsDir() {
 			if abs != root && agent.PruneDir(root, abs) {
@@ -84,32 +102,110 @@ func swiftModuleAvailable(root, self, module string) bool {
 			}
 			return nil
 		}
-		if !d.Type().IsRegular() {
+		if !d.Type().IsRegular() || !(swiftDependencyFile(d.Name()) || sourceFileForImports(d.Name())) {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, abs)
-		if filepath.ToSlash(rel) == filepath.ToSlash(self) {
-			return nil
-		}
-		re := importRE
-		switch {
-		case swiftDependencyFile(d.Name()):
-			re = nameRE
-		case !sourceFileForImports(d.Name()):
+		rel = filepath.ToSlash(rel)
+		if rel == filepath.ToSlash(self) {
 			return nil
 		}
 		body, readErr := os.ReadFile(abs)
 		if readErr != nil {
 			return nil
 		}
-		text := string(body)
-		if re == importRE {
-			text = codeOnly(text, false)
-		}
-		found = re.MatchString(text)
+		stop = fn(rel, string(body))
 		return nil
 	})
-	return found
+}
+
+// swiftBareCallRE finds a call to a free function or an implicit-self method:
+// a lowercase name not preceded by '.', followed by '('.
+var swiftBareCallRE = regexp.MustCompile(`(?:^|[^\w.$])([a-z_]\w*)\s*\(`)
+
+// swiftKeywords look like calls before a parenthesis but are not.
+var swiftKeywords = map[string]bool{
+	"if": true, "guard": true, "while": true, "for": true, "switch": true, "return": true, "func": true,
+	"init": true, "super": true, "self": true, "case": true, "catch": true, "throw": true, "try": true,
+	"await": true, "repeat": true, "in": true, "where": true, "let": true, "var": true, "else": true,
+	"defer": true, "do": true, "is": true, "as": true, "some": true, "any": true, "get": true, "set": true,
+	"willSet": true, "didSet": true, "subscript": true, "deinit": true,
+}
+
+// checkPrivateSwiftCalls rejects a Swift patch that adds a bare call to a
+// function this file does not declare and every other Swift file declares
+// only as private or fileprivate: Swift hides those outside their own file
+// ("inaccessible due to 'private' protection level"). A name declared nowhere
+// is not judged -- it may be a framework function or an inherited method.
+func checkPrivateSwiftCalls(root, p, original, patched string) *patchViolation {
+	if !strings.EqualFold(filepath.Ext(p), ".swift") {
+		return nil
+	}
+	before, after := codeOnly(original, false), codeOnly(patched, false)
+	count := func(code string) map[string]int {
+		n := map[string]int{}
+		for _, m := range swiftBareCallRE.FindAllStringSubmatch(code, -1) {
+			if !swiftKeywords[m[1]] {
+				n[m[1]]++
+			}
+		}
+		return n
+	}
+	had, have := count(before), count(after)
+	for name, n := range have {
+		if n <= had[name] || swiftDeclares(after, name) {
+			continue
+		}
+		if where := onlyPrivatelyDeclared(root, p, name); where != "" {
+			return &patchViolation{
+				Rule: "private-symbol",
+				Detail: fmt.Sprintf("%s calls %s(), which %s declares private or fileprivate, so this file "+
+					"cannot see it. Do not call it from here; if this file needs the check, the remediation "+
+					"must declare it without private, or make no edit and report it.", p, name, where),
+			}
+		}
+	}
+	return nil
+}
+
+// swiftFuncDeclRE builds the matcher for a function declaration line.
+func swiftFuncDeclRE(name string) *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^[^\n]*\bfunc\s+` + regexp.QuoteMeta(name) + `\s*[(<]`)
+}
+
+// swiftDeclares reports whether code declares a function called name.
+func swiftDeclares(code, name string) bool {
+	return swiftFuncDeclRE(name).MatchString(code)
+}
+
+var swiftPrivateRE = regexp.MustCompile(`\b(?:private|fileprivate)\b`)
+
+// onlyPrivatelyDeclared returns the first Swift file declaring name when every
+// declaration of it outside self is private or fileprivate, or "" when one is
+// visible or there is none.
+func onlyPrivatelyDeclared(root, self, name string) string {
+	declRE := swiftFuncDeclRE(name)
+	first, visible := "", false
+	walkAppleSources(root, self, func(rel, body string) bool {
+		if !strings.EqualFold(path.Ext(rel), ".swift") {
+			return false
+		}
+		for _, line := range declRE.FindAllString(codeOnly(body, false), -1) {
+			decl := line[:strings.Index(line, "func")]
+			if !swiftPrivateRE.MatchString(decl) {
+				visible = true
+				return true
+			}
+			if first == "" {
+				first = rel
+			}
+		}
+		return false
+	})
+	if visible {
+		return ""
+	}
+	return first
 }
 
 // sourceFileForImports is a Swift or Objective-C file whose imports count.
