@@ -127,6 +127,9 @@ func verifyPatchWith(root, path, original, patched string, opts gateOpts) *patch
 	if v := checkAddedLogging(path, original, patched); v != nil {
 		return v
 	}
+	if v := checkThemeAttrs(root, path, original, patched); v != nil {
+		return v
+	}
 	if v := checkExported(path, original, patched); v != nil {
 		return v
 	}
