@@ -267,3 +267,17 @@ func TestFixSystemPrompt_newComponentsResolveAndDeclareExported(t *testing.T) {
 		}
 	}
 }
+
+// ionic-conference-app: KnoxIQ's reference fix ended in
+// "//... other necessary InputMethodService overrides" and the fixer invented
+// onStartInput(InputConnection, EditorInfo), which overrides nothing.
+// OpenNutriTracker: an optional "(if settingsActivity is used)" class was
+// written on a library the app lacks.
+func TestFixSystemPrompt_treatsReferenceElisionsAsOmissions(t *testing.T) {
+	for _, want := range []string{"//...", "only the members the reference shows",
+		"never add an override", "optional", "leave it out"} {
+		if !strings.Contains(fixSystemPrompt, want) {
+			t.Errorf("NEW FILE rules should say %q", want)
+		}
+	}
+}

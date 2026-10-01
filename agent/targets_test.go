@@ -206,3 +206,12 @@ func TestParseTargetReply_AnswerTagsAfterScratchpad(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, r.Targets, 1)
 }
+
+// OpenNutriTracker: "create SecureInputMethodSettingsActivity.kt (if
+// settingsActivity is used)" was located as a new file, written on
+// AppCompatActivity, and broke the build. A conditional file is not a new file.
+func TestTargetsSystemPrompt_OptionalFilesAreNotNew(t *testing.T) {
+	for _, want := range []string{"only if", "optional", "never a new file"} {
+		require.Contains(t, targetsSystemPrompt, want)
+	}
+}

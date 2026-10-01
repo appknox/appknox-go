@@ -140,6 +140,16 @@ NEW FILE - when the target file is marked NEW, it does not exist yet.
   example values: where the remediation leaves a part unspecified, write the
   minimal working form. If the file cannot be written without inventing
   something the remediation does not specify, make NO edit and report why.
+  A reference fix's elisions are omissions, not instructions: "//...", "other
+  necessary overrides", "(e.g., onStartInput)" mean write nothing there. Write
+  only the members the reference shows, and never add an override it does not
+  show - an override written from memory with the wrong signature overrides
+  nothing and does not compile. A part the remediation marks optional or
+  conditional ("if settingsActivity is used", "optionally") is not required:
+  leave it out, together with the attribute that would point at it.
+  A new class extends and imports only platform types (android.*, java.*,
+  kotlin.*) and types this project already uses in files you have read; never a
+  library the project profile says is absent.
 
 BUILD - a module build script (build.gradle, build.gradle.kts) is edited in place.
   Change only the settings the remediation names, inside the blocks that
