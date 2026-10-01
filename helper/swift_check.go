@@ -132,40 +132,75 @@ var swiftKeywords = map[string]bool{
 	"willSet": true, "didSet": true, "subscript": true, "deinit": true,
 }
 
-// checkPrivateSwiftCalls rejects a Swift patch that adds a bare call to a
-// function this file does not declare and every other Swift file declares
-// only as private or fileprivate: Swift hides those outside their own file
-// ("inaccessible due to 'private' protection level"). A name declared nowhere
-// is not judged -- it may be a framework function or an inherited method.
+// checkPrivateSwiftCalls rejects a Swift patch that adds a bare call the
+// build cannot resolve:
+//   - private-symbol: a function this file does not declare and every other
+//     Swift file declares only private or fileprivate ("inaccessible due to
+//     'private' protection level", wikipedia-ios);
+//   - undeclared-symbol: a camelCase name declared nowhere, called bare
+//     nowhere else, and not a standard-library function ("cannot find in
+//     scope", wikipedia-ios). Lowercase names are C and Darwin functions
+//     (stat, fork, dlopen) a fix may call for the first time, and are not judged.
 func checkPrivateSwiftCalls(root, p, original, patched string) *patchViolation {
 	if !strings.EqualFold(filepath.Ext(p), ".swift") {
 		return nil
 	}
 	before, after := codeOnly(original, false), codeOnly(patched, false)
-	count := func(code string) map[string]int {
-		n := map[string]int{}
-		for _, m := range swiftBareCallRE.FindAllStringSubmatch(code, -1) {
-			if !swiftKeywords[m[1]] {
-				n[m[1]]++
-			}
-		}
-		return n
-	}
-	had, have := count(before), count(after)
+	had, have := countBareCalls(before), countBareCalls(after)
 	for name, n := range have {
 		if n <= had[name] || swiftDeclares(after, name) {
 			continue
 		}
-		if where := onlyPrivatelyDeclared(root, p, name); where != "" {
+		use := swiftSymbolUse(root, p, name)
+		switch {
+		case use.visible:
+		case use.privateIn != "":
 			return &patchViolation{
 				Rule: "private-symbol",
 				Detail: fmt.Sprintf("%s calls %s(), which %s declares private or fileprivate, so this file "+
 					"cannot see it. Do not call it from here; if this file needs the check, the remediation "+
-					"must declare it without private, or make no edit and report it.", p, name, where),
+					"must declare it without private, or make no edit and report it.", p, name, use.privateIn),
+			}
+		case !use.calledElsewhere && camelCase(name) && !swiftStdlibFuncs[name]:
+			return &patchViolation{
+				Rule: "undeclared-symbol",
+				Detail: fmt.Sprintf("%s calls %s(), but nothing in this project declares it, so the build "+
+					"reports \"cannot find in scope\". Declare it in this file with the body the remediation "+
+					"gives, or do not call it.", p, name),
 			}
 		}
 	}
 	return nil
+}
+
+// countBareCalls counts each bare call name in code, keywords excepted.
+func countBareCalls(code string) map[string]int {
+	n := map[string]int{}
+	for _, m := range swiftBareCallRE.FindAllStringSubmatch(code, -1) {
+		if !swiftKeywords[m[1]] {
+			n[m[1]]++
+		}
+	}
+	return n
+}
+
+// camelCase reports a name with an upper-case letter after its first: an app
+// or framework method, not a C function.
+func camelCase(name string) bool {
+	return strings.ToLower(name[1:]) != name[1:]
+}
+
+// swiftStdlibFuncs are camelCase global functions the Swift standard library
+// and Foundation provide.
+var swiftStdlibFuncs = map[string]bool{
+	"debugPrint": true, "fatalError": true, "assertionFailure": true, "preconditionFailure": true,
+	"withExtendedLifetime": true, "withUnsafePointer": true, "withUnsafeMutablePointer": true,
+	"withUnsafeBytes": true, "withUnsafeMutableBytes": true, "withoutActuallyEscaping": true,
+	"unsafeBitCast": true, "unsafeDowncast": true, "numericCast": true, "isKnownUniquelyReferenced": true,
+	"dispatchPrecondition": true, "readLine": true, "repeatElement": true, "autoreleasepool": true,
+	"withCheckedContinuation": true, "withCheckedThrowingContinuation": true, "withTaskGroup": true,
+	"withThrowingTaskGroup": true, "NSLocalizedString": true, "NSStringFromClass": true,
+	"NSClassFromString": true, "NSSelectorFromString": true, "NSHomeDirectory": true, "NSTemporaryDirectory": true,
 }
 
 // swiftFuncDeclRE builds the matcher for a function declaration line.
@@ -180,32 +215,42 @@ func swiftDeclares(code, name string) bool {
 
 var swiftPrivateRE = regexp.MustCompile(`\b(?:private|fileprivate)\b`)
 
-// onlyPrivatelyDeclared returns the first Swift file declaring name when every
-// declaration of it outside self is private or fileprivate, or "" when one is
-// visible or there is none.
-func onlyPrivatelyDeclared(root, self, name string) string {
+// symbolUse is what the rest of the project says about a function name.
+type symbolUse struct {
+	visible         bool   // declared without private/fileprivate somewhere
+	privateIn       string // first file declaring it private, when none is visible
+	calledElsewhere bool   // called bare in another Swift file
+}
+
+// swiftSymbolUse scans every Swift file but self for declarations of name and
+// bare calls to it.
+func swiftSymbolUse(root, self, name string) symbolUse {
 	declRE := swiftFuncDeclRE(name)
-	first, visible := "", false
+	callRE := regexp.MustCompile(`(?:^|[^\w.$])` + regexp.QuoteMeta(name) + `\s*\(`)
+	var use symbolUse
 	walkAppleSources(root, self, func(rel, body string) bool {
 		if !strings.EqualFold(path.Ext(rel), ".swift") {
 			return false
 		}
-		for _, line := range declRE.FindAllString(codeOnly(body, false), -1) {
-			decl := line[:strings.Index(line, "func")]
-			if !swiftPrivateRE.MatchString(decl) {
-				visible = true
+		code := codeOnly(body, false)
+		for _, line := range declRE.FindAllString(code, -1) {
+			if !swiftPrivateRE.MatchString(line[:strings.Index(line, "func")]) {
+				use.visible = true
 				return true
 			}
-			if first == "" {
-				first = rel
+			if use.privateIn == "" {
+				use.privateIn = rel
 			}
+		}
+		if callRE.MatchString(declRE.ReplaceAllString(code, "")) {
+			use.calledElsewhere = true
 		}
 		return false
 	})
-	if visible {
-		return ""
+	if use.visible {
+		use.privateIn = ""
 	}
-	return first
+	return use
 }
 
 // sourceFileForImports is a Swift or Objective-C file whose imports count.

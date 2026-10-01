@@ -305,3 +305,12 @@ func TestFixSystemPrompt_Swift(t *testing.T) {
 func TestFixSystemPrompt_SharedSwiftHelpersAreNotPrivate(t *testing.T) {
 	require.Contains(t, fixSystemPrompt, "never private or fileprivate")
 }
+
+// DVIA-v2, 2026-10-01: a Hardcoded Secrets fix deleted pinnedPublicKeyHash and
+// made the pinning path always cancel -- a public pin is not a secret, and
+// removing it removes a security control.
+func TestFixSystemPrompt_PinsAreNotSecrets(t *testing.T) {
+	for _, want := range []string{"pin", "public data, not a secret", "never remove a pin"} {
+		require.Contains(t, fixSystemPrompt, want)
+	}
+}

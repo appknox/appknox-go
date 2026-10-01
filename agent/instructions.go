@@ -266,6 +266,11 @@ CONTAINED - add nothing, delete nothing, restructure nothing else.
   exception type - never a new throw or early exit, and never where it can skip
   cleanup or state updates that run after it.
 
+A public-key or certificate pin (a base64 SHA-256 of a public key, a pinned
+certificate) is public data, not a secret: never remove a pin, and never remove
+or short-circuit the pinning check that uses it. A hardcoded-secrets finding
+that points at a pin has nothing to fix there: make no edit and report it.
+
 Abstain per site, not just per file: if one site cannot be fixed safely, fix the
 others, leave that one untouched, and say which and why. Do not ship an edit you
 have already concluded is a guess, is broken, or disables an existing path -

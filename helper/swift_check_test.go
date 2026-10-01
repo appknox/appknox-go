@@ -118,9 +118,9 @@ func TestCheckPrivateSwiftCalls(t *testing.T) {
 	for _, stmt := range []string{
 		"sharedCheck()",          // internal
 		"twice()",                // one declaration is internal
-		"unknownElsewhere()",     // not found: cannot judge
+		"getppid()",              // a C function declared nowhere here: not judged
 		"resume()",               // declared in this file
-		"if guardCheck() { }",    // not found
+		"if isatty(0) == 1 { }",  // lowercase C function: not judged
 		"self.helper.onlyHere()", // member call through an instance: not a bare call
 	} {
 		require.Nil(t, checkPrivateSwiftCalls(root, path, orig, call(stmt)), stmt)
@@ -128,4 +128,39 @@ func TestCheckPrivateSwiftCalls(t *testing.T) {
 	// Declared privately in the patched file itself: fine.
 	selfDecl := call("localCheck()") + "private func localCheck() {}\n"
 	require.Nil(t, checkPrivateSwiftCalls(root, path, orig, selfDecl))
+}
+
+// wikipedia-ios, 2026-10-01 (second run): the AppDelegate retry called
+// evaluateDeviceIntegrity() and declared it nowhere -- "cannot find in scope".
+func TestCheckUndeclaredSwiftCalls(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+	}
+	write("App/Util.swift", "func sharedCheck() {}\n")
+	write("App/VC.swift", "final class VC: UIViewController {\n    func go() { setNeedsLayout() }\n}\n")
+	orig := "final class AppDelegate {\n    func launch() {\n        start()\n    }\n    func start() {}\n}\n"
+	call := func(stmt string) string {
+		return replaceOnce(t, orig, "        start()\n", "        "+stmt+"\n        start()\n")
+	}
+	path := "App/AppDelegate.swift"
+
+	v := checkPrivateSwiftCalls(root, path, orig, call("evaluateDeviceIntegrity()"))
+	require.NotNil(t, v)
+	require.Equal(t, "undeclared-symbol", v.Rule)
+	require.Contains(t, v.Detail, "evaluateDeviceIntegrity")
+
+	for _, stmt := range []string{
+		"sharedCheck()",                      // declared in another file
+		"setNeedsLayout()",                   // called elsewhere: an inherited method
+		"fatalError(\"x\")",                  // standard library
+		"if stat(\"/bin/bash\", &s) == 0 {}", // lowercase C function: not judged
+		"start()",                            // declared here
+	} {
+		require.Nil(t, checkPrivateSwiftCalls(root, path, orig, call(stmt)), stmt)
+	}
+	declaredHere := call("checkIntegrity()") + "func checkIntegrity() {}\n"
+	require.Nil(t, checkPrivateSwiftCalls(root, path, orig, declaredHere))
 }
