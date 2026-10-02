@@ -212,6 +212,11 @@ SWIFT - a .swift file is compiled as part of an Xcode target.
   in this remediation calls is never private or fileprivate - Swift hides those
   outside their own file; declare it at file scope with no access modifier.
   Call such a helper from another file only when it is declared that way.
+  When the remediation's reference uses a library this project does not have
+  (a jailbreak-detection or keychain wrapper), write the checks it describes
+  directly with Apple frameworks - FileManager.default.fileExists(atPath:),
+  canOpenURL, a write outside the sandbox, Security's SecItem calls. That is
+  ordinary API use and is not security machinery: do not decline it.
 
 MINIMAL - change the named construct, not the call around it.
   Do NOT alter a method signature, argument list, overload, import, or exception

@@ -314,3 +314,12 @@ func TestFixSystemPrompt_PinsAreNotSecrets(t *testing.T) {
 		require.Contains(t, fixSystemPrompt, want)
 	}
 }
+
+// wikipedia-ios, 2026-10-01: KnoxIQ's jailbreak fix used IOSSecuritySuite,
+// which the project lacks; the gate refused the import and the fixer gave up.
+// Checks the remediation describes as plain platform calls are writable in place.
+func TestFixSystemPrompt_SwiftLibraryFallback(t *testing.T) {
+	for _, want := range []string{"library this project does not have", "FileManager", "is not security machinery"} {
+		require.Contains(t, fixSystemPrompt, want)
+	}
+}

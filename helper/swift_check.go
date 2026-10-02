@@ -49,9 +49,10 @@ func checkSwiftImports(root, p, original, patched string) *patchViolation {
 		return &patchViolation{
 			Rule: "missing-library",
 			Detail: fmt.Sprintf("%s adds `import %s`, but this project neither imports %s anywhere else nor "+
-				"declares it as a dependency, so the build reports \"No such module\". Use Apple's system "+
+				"declares it as a dependency, so the build reports \"No such module\". Do not import it: "+
+				"implement the check the remediation describes directly in this file with Apple's system "+
 				"frameworks (Foundation, Security, CryptoKit, LocalAuthentication) or a module this project "+
-				"already uses.", p, module, module),
+				"already uses, and declare every helper you call.", p, module, module),
 		}
 	}
 	return nil

@@ -76,6 +76,7 @@ func TestCheckSwiftImports(t *testing.T) {
 		require.NotNil(t, v, module)
 		require.Equal(t, "missing-library", v.Rule, module)
 		require.Contains(t, v.Detail, module)
+		require.Contains(t, v.Detail, "implement the check the remediation describes")
 	}
 	require.Nil(t, checkSwiftImports(root, path, swiftVC, swiftVC), "an existing import is not judged")
 }
