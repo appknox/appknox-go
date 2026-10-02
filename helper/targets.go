@@ -201,6 +201,33 @@ func genuinelyNew(root string, entries []string) (newOnes []string, notNew []str
 	return newOnes, notNew
 }
 
+// carriedInSwift splits needs_new_file entries for a remediation whose
+// targets include a Swift file: an entry naming a type (no extension, or
+// .swift) is carried by that file -- Xcode compiles only files its project
+// lists, so the fixer writes the type in place -- and is no reason to skip.
+// Entries for other files, and every entry of a non-Swift remediation, are kept.
+func carriedInSwift(targets []agent.Target, entries []string) (kept, carried []string) {
+	swift := false
+	for _, t := range targets {
+		if strings.EqualFold(path.Ext(t.Path), ".swift") {
+			swift = true
+			break
+		}
+	}
+	for _, e := range entries {
+		name := needsNewFileName(e)
+		if f := strings.Fields(name); len(f) > 0 {
+			name = f[0] // "A or B: why" names A first
+		}
+		if ext := strings.ToLower(path.Ext(name)); swift && (ext == "" || ext == ".swift") {
+			carried = append(carried, e)
+			continue
+		}
+		kept = append(kept, e)
+	}
+	return kept, carried
+}
+
 // needsNewFileName extracts the file or class name from a needs_new_file
 // entry ("<name>: <why>", the shape the locate prompt asks for). An entry
 // with no ": " is used whole, trimmed.

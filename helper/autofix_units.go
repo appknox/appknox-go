@@ -58,6 +58,11 @@ func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit
 	// A file listed under both new_files and needs_new_file is placed: it is
 	// created, not a reason to skip the finding.
 	reply.NeedsNewFile = withoutNamed(reply.NeedsNewFile, created)
+	var carried []string
+	reply.NeedsNewFile, carried = carriedInSwift(reply.Targets, reply.NeedsNewFile)
+	for _, c := range carried {
+		extraNotes = append(extraNotes, "written in place (Swift): "+needsNewFileName(c))
+	}
 	if len(reply.NeedsNewFile) > 0 {
 		// The locate model's claim is never trusted as-is: code validates it
 		// against the checkout before a whole finding is skipped on it (a
@@ -82,7 +87,7 @@ func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit
 		}
 		// Every claim was false: carry on with normal validation, locate-only
 		// output and fixing, but keep the false claim visible on the line.
-		extraNotes = notNewNotes(notNew)
+		extraNotes = append(extraNotes, notNewNotes(notNew)...)
 	}
 	if len(badNew) > 0 {
 		// The rest of the remediation refers to the file it creates, so

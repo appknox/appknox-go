@@ -189,3 +189,24 @@ func TestSupportedTarget_Swift(t *testing.T) {
 		require.True(t, buildFileRE.MatchString(rel), rel)
 	}
 }
+
+// wikipedia-ios, 2026-10-02: locate listed "AppEnvironment or
+// DeviceIntegrityManager: shared state" under needs_new_file and the whole
+// Jailbreak Detection finding was skipped. Xcode compiles only files its
+// project lists, so a Swift remediation's new type lives in a Swift target.
+func TestCarriedInSwift(t *testing.T) {
+	swift := []agent.Target{{Path: "Wikipedia/Code/AppDelegate.swift"}, {Path: "App/Info.plist"}}
+	entries := []string{
+		"AppEnvironment or DeviceIntegrityManager: shared state for device compromise",
+		"JailbreakDetector.swift: the detection helper",
+		"Settings.bundle/Root.plist: a toggle",
+	}
+	kept, carried := carriedInSwift(swift, entries)
+	require.Equal(t, entries[2:], kept)
+	require.Equal(t, entries[:2], carried)
+
+	kotlin := []agent.Target{{Path: "app/src/main/java/com/x/Main.kt"}}
+	kept, carried = carriedInSwift(kotlin, entries)
+	require.Equal(t, entries, kept, "only a Swift remediation carries new types in place")
+	require.Empty(t, carried)
+}
