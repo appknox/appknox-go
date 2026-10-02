@@ -114,6 +114,9 @@ func verifyPatchWith(root, path, original, patched string, opts gateOpts) *patch
 	if v := checkBraceBalance(path, original, patched); v != nil {
 		return v
 	}
+	if v := checkAddedPins(path, original, patched); v != nil {
+		return v
+	}
 	if v := checkPlist(path, original, patched); v != nil {
 		return v
 	}
