@@ -601,6 +601,25 @@ func (s fixSession) produceFixFor(
 	}
 }
 
+// applySettingsFix is attemptFix for an Xcode project file: the hardening
+// settings the remediation names are set by code, never by a model. No named
+// setting is no edit, which the caller reports as declined.
+func (s fixSession) applySettingsFix(path string, in FindingInputs) (fixservice.Result, error) {
+	names := namedBuildSettings(strings.Join(append([]string{in.Remediation, in.DeveloperPrompt}, in.Criteria...), "\n"))
+	if len(names) == 0 {
+		return fixservice.Result{}, nil
+	}
+	content, err := readUnderRoot(s.root, path)
+	if err != nil {
+		return fixservice.Result{}, err
+	}
+	patched, edits := applyBuildSettings(content, names)
+	if len(edits) == 0 {
+		return fixservice.Result{}, nil
+	}
+	return fixservice.Result{Changed: true, PatchedContent: patched, UnifiedDiff: settingsDiff(path, edits)}, nil
+}
+
 // attemptFix runs one fix turn, client-side via the agent's Edit tool
 // (--fix-mode agent — NO upload), or server-side via /v1/fix (default).
 // priorViolation is the fact the previous attempt got wrong, empty on the first.
@@ -608,6 +627,9 @@ func (s fixSession) produceFixFor(
 func (s fixSession) attemptFix(
 	ctx context.Context, path string, in FindingInputs, tc targetContext, priorViolation string,
 ) (fixservice.Result, error) {
+	if isProjectFile(path) {
+		return s.applySettingsFix(path, in)
+	}
 	if tc.Create && s.opts.FixMode != "agent" {
 		// /v1/fix rewrites an uploaded file; it has nothing to upload here.
 		return fixservice.Result{}, fmt.Errorf("creating %s needs --fix-mode agent", path)

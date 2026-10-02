@@ -204,7 +204,7 @@ func TestTargetsSystemPrompt_AnswerTagsBudgetAndEvidence(t *testing.T) {
 // told so and where iOS settings live, not to call it unsearchable.
 func TestTargetsSystemPrompt_AppleConfigIsSearchable(t *testing.T) {
 	for _, want := range []string{"Info.plist", "NSAppTransportSecurity", ".entitlements", ".xcconfig",
-		"ARE listed", "project.pbxproj) is never a target"} {
+		"ARE listed", "project.pbxproj, never Pods/Pods.xcodeproj) IS a target"} {
 		require.Contains(t, targetsSystemPrompt, want)
 	}
 	require.NotContains(t, targetsSystemPrompt, "(.plist, .pbxproj")

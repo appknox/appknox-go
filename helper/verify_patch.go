@@ -120,6 +120,9 @@ func verifyPatchWith(root, path, original, patched string, opts gateOpts) *patch
 	if v := checkXcconfig(path, original, patched); v != nil {
 		return v
 	}
+	if v := checkPbxproj(path, original, patched); v != nil {
+		return v
+	}
 	if !opts.deferRefs {
 		if v := checkResourceRefs(root, path, original, patched); v != nil {
 			return v

@@ -171,13 +171,12 @@ func TestGenuinelyNew_NoEntriesSkipsTheWalk(t *testing.T) {
 	require.Empty(t, notNew)
 }
 
-// Info.plist, entitlements and xcconfig are editable; the project file is
-// findable but not yet editable.
+// Info.plist, entitlements and xcconfig are editable (the project file too,
+// by code: see pbxproj_settings_test.go).
 func TestSupportedTarget_AppleConfig(t *testing.T) {
 	for _, rel := range []string{"iGoat-Swift/iGoat-Swift/Info.plist", "App/App.entitlements", "Configurations/Release.xcconfig"} {
 		require.True(t, supportedTarget(rel), rel)
 	}
-	require.False(t, supportedTarget("App.xcodeproj/project.pbxproj"))
 }
 
 // wikipedia-ios and DVIA-v2: Swift sources are editable; Swift package and

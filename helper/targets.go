@@ -114,13 +114,17 @@ func prunedComponent(root, dest string) bool {
 // supportedTarget is the set of files a fix call may edit today: Java/Kotlin
 // source, the manifest, resource XML, a module's build script and its
 // proguard-rules.pro, Apple's property lists and xcconfig files (judged by
-// plist_check.go), and Swift source -- never a Package.swift manifest.
+// plist_check.go), Swift source -- never a Package.swift manifest -- and an
+// Xcode project file, whose build settings code sets (pbxproj_settings.go).
 func supportedTarget(rel string) bool {
 	if isModuleBuildScript(rel) || isModuleRulesFile(rel) {
 		return true
 	}
 	if buildFileRE.MatchString(rel) {
 		return false
+	}
+	if isProjectFile(rel) {
+		return true // edited by code, never by a model: pbxproj_settings.go
 	}
 	switch strings.ToLower(path.Ext(rel)) {
 	case ".java", ".kt", ".swift", ".plist", ".entitlements", ".xcconfig":
