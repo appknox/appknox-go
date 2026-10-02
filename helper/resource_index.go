@@ -86,8 +86,10 @@ func mark(m map[string]map[string]bool, key, scope string) {
 	m[key][scope] = true
 }
 
-// resPathRE splits res/<kind>[-qualifier]/<file>.
-var resPathRE = regexp.MustCompile(`(^|/)res/([a-z]+)(-[^/]+)?/([^/]+)$`)
+// resPathRE splits res/<kind>[-qualifier]/<file>. A .NET MAUI app keeps its
+// Android resources in Platforms/Android/Resources/, which its build hands to
+// aapt as res/.
+var resPathRE = regexp.MustCompile(`(^|/)(?:res|Platforms/Android/Resources)/([a-z]+)(-[^/]+)?/([^/]+)$`)
 
 // idDefRE finds an id a layout or menu declares.
 var idDefRE = regexp.MustCompile(`@\+id/([A-Za-z0-9_.]+)`)

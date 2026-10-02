@@ -231,3 +231,11 @@ func TestTargetsSystemPrompt_SwiftClassesAreNotNewFiles(t *testing.T) {
 		require.Contains(t, targetsSystemPrompt, want)
 	}
 }
+
+// eShop: a .NET MAUI app keeps its Android manifest and resources under
+// Platforms/Android/, and a repository can hold several such apps.
+func TestTargetsSystemPrompt_MauiAndroidLayout(t *testing.T) {
+	for _, want := range []string{"Platforms/Android/AndroidManifest.xml", "Platforms/Android/Resources/<type>/<name>.xml"} {
+		require.Contains(t, targetsSystemPrompt, want)
+	}
+}

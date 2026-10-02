@@ -133,6 +133,9 @@ func supportedTarget(rel string) bool {
 		if path.Base(rel) == "AndroidManifest.xml" {
 			return true
 		}
+		if strings.Contains("/"+path.Dir(rel)+"/", "/Platforms/Android/Resources/") {
+			return true // a .NET MAUI app's Android res/
+		}
 		for _, part := range strings.Split(path.Dir(rel), "/") {
 			if part == "res" {
 				return true

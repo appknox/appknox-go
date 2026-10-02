@@ -206,12 +206,16 @@ func depClosure(root, module string, g gradleSettings) (map[string]bool, bool) {
 
 // mergesWith reports whether AGP merges the manifest at other with the one at
 // patched: the same module (any source set), or a library module either one
-// pulls in, transitively, through project(':x') or a projects.x accessor. A
-// manifest outside any Gradle module, or a module whose dependencies cannot
-// all be resolved, is assumed to merge with everything -- the conservative
-// behaviour (spec 3.3).
+// pulls in, transitively, through project(':x') or a projects.x accessor.
+// Two manifests outside Gradle in different .NET projects (.csproj) merge only
+// when one project references the other. A manifest outside any build, or a
+// module whose dependencies cannot all be resolved, is assumed to merge with
+// everything -- the conservative behaviour (spec 3.3).
 func mergesWith(root, patched, other string) bool {
 	pm, om := moduleRoot(root, patched), moduleRoot(root, other)
+	if pm == "" && om == "" {
+		return dotnetMerges(root, patched, other)
+	}
 	if pm == "" || om == "" || pm == om {
 		return true
 	}
@@ -219,4 +223,52 @@ func mergesWith(root, patched, other string) bool {
 	pdeps, pok := depClosure(root, pm, g)
 	odeps, ook := depClosure(root, om, g)
 	return !pok || !ook || pdeps[om] || odeps[pm]
+}
+
+// dotnetProject returns the nearest .csproj above rel, relative to root, or ""
+// when none does.
+func dotnetProject(root, rel string) string {
+	dir := path.Dir(filepath.ToSlash(rel))
+	for {
+		if matches, _ := filepath.Glob(filepath.Join(root, filepath.FromSlash(dir), "*.csproj")); len(matches) == 1 {
+			p, _ := filepath.Rel(root, matches[0])
+			return filepath.ToSlash(p)
+		} else if len(matches) > 1 {
+			return "" // several projects share the directory; cannot tell which owns rel
+		}
+		if dir == "." || dir == "/" {
+			return ""
+		}
+		dir = path.Dir(dir)
+	}
+}
+
+// projectReferenceRE finds a ProjectReference's Include path.
+var projectReferenceRE = regexp.MustCompile(`<ProjectReference\s+Include\s*=\s*"([^"]+)"`)
+
+// dotnetMerges reports whether the manifests at a and b build into one app:
+// the same .csproj, or one project referencing the other. Without a .csproj
+// for either, it assumes they do.
+func dotnetMerges(root, a, b string) bool {
+	pa, pb := dotnetProject(root, a), dotnetProject(root, b)
+	if pa == "" || pb == "" || pa == pb {
+		return true
+	}
+	return referencesProject(root, pa, pb) || referencesProject(root, pb, pa)
+}
+
+// referencesProject reports whether project from names project to in a
+// ProjectReference. An unreadable project is assumed to.
+func referencesProject(root, from, to string) bool {
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(from)))
+	if err != nil {
+		return true
+	}
+	for _, m := range projectReferenceRE.FindAllSubmatch(b, -1) {
+		ref := path.Clean(path.Join(path.Dir(from), strings.ReplaceAll(string(m[1]), "\\", "/")))
+		if ref == to {
+			return true
+		}
+	}
+	return false
 }

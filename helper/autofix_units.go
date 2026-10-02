@@ -320,9 +320,14 @@ func unanchoredNewFiles(created, existing []agent.Target) []rejection {
 	return bad
 }
 
-// sourceSetOf returns "<module>/src/<set>" for a path inside a source set.
+// sourceSetOf returns "<module>/src/<set>" for a path inside a source set, or
+// "<project>/Platforms/Android" for a file of a .NET MAUI app's Android build.
 func sourceSetOf(rel string) string {
-	parts := strings.Split(filepath.ToSlash(rel), "/")
+	rel = filepath.ToSlash(rel)
+	if i := strings.Index("/"+rel, "/Platforms/Android/"); i >= 0 {
+		return rel[:i+len("Platforms/Android")]
+	}
+	parts := strings.Split(rel, "/")
 	for i := len(parts) - 2; i >= 0; i-- {
 		if parts[i] == "src" && i+1 < len(parts)-1 {
 			return strings.Join(parts[:i+2], "/")
