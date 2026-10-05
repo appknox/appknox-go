@@ -198,8 +198,7 @@ func runStandardRiskCheck(ctx context.Context, client *appknox.Client, fileID in
 }
 
 // ProcessHealthScoreCiCheck gates on the file health score, plus the optional
-// exploit-likelihood gate when configured. When the file has KnoxIQ triage it
-// waits for it first, so the gate uses the KnoxIQ-adjusted score.
+// exploit-likelihood gate when configured.
 func ProcessHealthScoreCiCheck(fileID int, policy CiPolicy) {
 	waitForStaticScan(fileID, policy.Budget)
 	ctx := context.Background()
@@ -218,8 +217,6 @@ func ProcessHealthScoreCiCheck(fileID int, policy CiPolicy) {
 	decideHealthScore(fileID, policy, score, likelihoodCount, triage.scoreReady)
 }
 
-// fetchHealthScore returns the file's current health score, exiting the
-// process if it can't be fetched.
 func fetchHealthScore(ctx context.Context, client *appknox.Client, fileID int) int {
 	options := &appknox.HealthScoreOptions{
 		EventType: string(enums.EventTypeSASTCompleted),
@@ -234,7 +231,7 @@ func fetchHealthScore(ctx context.Context, client *appknox.Client, fileID int) i
 
 // decideHealthScore prints the health-score (and optional likelihood) verdict
 // and exits non-zero when the score is below threshold or the likelihood gate
-// is breached. afterTriage labels a score recalculated from KnoxIQ triage.
+// is breached.
 func decideHealthScore(fileID int, policy CiPolicy, score, likelihoodCount int, afterTriage bool) {
 	verdict := buildHealthScoreVerdict(policy, score, likelihoodCount, afterTriage)
 	for _, line := range verdict.stdout {
@@ -249,19 +246,12 @@ func decideHealthScore(fileID int, policy CiPolicy, score, likelihoodCount int, 
 	}
 }
 
-// healthScoreVerdict is the text decideHealthScore prints and whether the
-// build fails, kept apart from the printing and exit so it can be tested.
 type healthScoreVerdict struct {
 	stdout []string
 	stderr []string
 	failed bool
 }
 
-// buildHealthScoreVerdict words the health-score verdict. "Build passed." or
-// "Build failed." appears exactly once. When the score is the only gate that
-// matters it keeps the original single-line wording of the health-score gate;
-// when the likelihood gate fails, each reason is listed and "Build failed."
-// comes last.
 func buildHealthScoreVerdict(policy CiPolicy, score, likelihoodCount int, afterTriage bool) healthScoreVerdict {
 	label := ""
 	if afterTriage {

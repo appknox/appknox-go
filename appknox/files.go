@@ -125,22 +125,19 @@ type HealthScoreOptions struct {
 }
 
 // HealthScoreAuditEntry is one recalculation in a file's health score history.
-// KnoxIQRan marks a recalculation triggered by a completed KnoxIQ triage.
 type HealthScoreAuditEntry struct {
 	EventType string `json:"event_type"`
 	KnoxIQRan bool   `json:"knoxiq_ran"`
 	Score     int    `json:"score"`
 }
 
-// HealthScoreAuditCurrent is the file's current health score as reported by
-// the audit endpoint (the score of its most recent recalculation).
+// HealthScoreAuditCurrent is the file's current health score.
 type HealthScoreAuditCurrent struct {
 	Score int `json:"score"`
 }
 
 // HealthScoreAudit represents the response returned by the API endpoint
-// /api/v3/files/{id}/health_score_audit. CurrentScore is nil when the file
-// has no recalculations yet.
+// /api/v3/files/{id}/health_score_audit.
 type HealthScoreAudit struct {
 	CurrentScore *HealthScoreAuditCurrent `json:"current_score"`
 	AuditTrail   []HealthScoreAuditEntry  `json:"audit_trail"`
@@ -202,9 +199,8 @@ func (s *FilesService) GetScansStatusSummary(ctx context.Context, fileID int) (*
 }
 
 // GetHealthScore fetches the security health score for the given file using
-// the v3 endpoint /api/v3/files/{id}/health_score. The backend returns the
-// file's latest stored score; opt.EventType is sent as a query parameter when
-// provided, but current backends do not use it to select a score.
+// the v3 endpoint /api/v3/files/{id}/health_score.
+// If opt.EventType is provided, it is sent as a query parameter and stores an audit entry.
 func (s *FilesService) GetHealthScore(ctx context.Context, fileID int, opt *HealthScoreOptions) (*HealthScore, *Response, error) {
 	u := fmt.Sprintf("api/v3/files/%v/health_score", fileID)
 	URL, err := addOptions(u, opt)
@@ -220,8 +216,7 @@ func (s *FilesService) GetHealthScore(ctx context.Context, fileID int, opt *Heal
 	return &healthScore, resp, err
 }
 
-// GetHealthScoreAudit fetches the recalculation history of a file's health
-// score using the v3 endpoint /api/v3/files/{id}/health_score_audit.
+// GetHealthScoreAudit fetches the health score history for the given file.
 func (s *FilesService) GetHealthScoreAudit(ctx context.Context, fileID int) (*HealthScoreAudit, *Response, error) {
 	u := fmt.Sprintf("api/v3/files/%v/health_score_audit", fileID)
 	req, err := s.client.NewRequest("GET", u, nil)

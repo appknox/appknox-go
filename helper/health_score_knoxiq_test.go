@@ -14,15 +14,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// healthScoreServer mocks the endpoints the health-score gate talks to and
-// counts requests per path, so tests can assert what was (not) called.
 type healthScoreServer struct {
-	statusCode int    // HTTP status for knoxiq_scan/status; 0 means 200
-	sastStatus int    // sast_status in the knoxiq_scan/status body
-	statusSeq  []int  // if set, successive sast_status values (last one repeats)
-	auditCode  int    // HTTP status for health_score_audit; 0 means 200
-	auditJSON  string // health_score_audit body
-	cicdJSON   string // cicd_analyses body
+	statusCode int
+	sastStatus int
+	statusSeq  []int
+	auditCode  int
+	auditJSON  string
+	cicdJSON   string
 
 	mu       sync.Mutex
 	requests map[string]int
@@ -80,8 +78,7 @@ func (s *healthScoreServer) start(t *testing.T) (*appknox.Client, func()) {
 }
 
 const (
-	// current_score is deliberately different from the health_score endpoint's
-	// 34, so a test can tell which of the two responses a score came from.
+	// Differs from the health_score endpoint's 34 so tests can tell the sources apart.
 	auditRecalculated = `{"current_score":{"score":47},"audit_trail":[` +
 		`{"event_type":"sast_completed","knoxiq_ran":false,"score":34},` +
 		`{"event_type":"sast_completed","knoxiq_ran":true,"score":47}]}`
@@ -89,7 +86,6 @@ const (
 		`{"event_type":"sast_completed","knoxiq_ran":false,"score":34}]}`
 )
 
-// withGrace shrinks knoxIQHealthScoreGrace for one test.
 func withGrace(t *testing.T, d time.Duration) {
 	t.Helper()
 	old := knoxIQHealthScoreGrace
@@ -97,9 +93,6 @@ func withGrace(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { knoxIQHealthScoreGrace = old })
 }
 
-// TestAwaitKnoxIQHealthScore_PendingThenRecalculated is the CI case: triage is
-// still running when the static scan finishes, so the gate must wait for it
-// and report the score it replaced.
 func TestAwaitKnoxIQHealthScore_PendingThenRecalculated(t *testing.T) {
 	srv := &healthScoreServer{statusSeq: []int{2, 4}, auditJSON: auditRecalculated}
 	client, teardown := srv.start(t)
@@ -116,9 +109,6 @@ func TestAwaitKnoxIQHealthScore_PendingThenRecalculated(t *testing.T) {
 		"only the pre-triage score is fetched; the final one comes from the audit response")
 }
 
-// TestAwaitKnoxIQHealthScore_AlreadyCompleted checks a file whose triage
-// finished earlier: its stored score may already be the adjusted one, so it
-// must not be labelled "before triage".
 func TestAwaitKnoxIQHealthScore_AlreadyCompleted(t *testing.T) {
 	srv := &healthScoreServer{sastStatus: 4, auditJSON: auditRecalculated}
 	client, teardown := srv.start(t)
@@ -134,8 +124,6 @@ func TestAwaitKnoxIQHealthScore_AlreadyCompleted(t *testing.T) {
 	assert.Zero(t, srv.hits("/api/v3/files/1/health_score"))
 }
 
-// TestAwaitKnoxIQHealthScore_NotAvailable is the "no KnoxIQ" guarantee: an org
-// without KnoxIQ must get today's health-score flow with no extra calls.
 func TestAwaitKnoxIQHealthScore_NotAvailable(t *testing.T) {
 	srv := &healthScoreServer{statusCode: 403}
 	client, teardown := srv.start(t)
@@ -170,9 +158,6 @@ func TestAwaitKnoxIQHealthScore_TimesOut(t *testing.T) {
 	assert.Zero(t, srv.hits("/api/v3/files/1/health_score_audit"))
 }
 
-// TestAwaitKnoxIQHealthScore_NeverRecalculated covers triage that completed
-// without the backend ever writing the KnoxIQ-adjusted score (seen on staging):
-// fall back to the current score with a warning instead of waiting forever.
 func TestAwaitKnoxIQHealthScore_NeverRecalculated(t *testing.T) {
 	withGrace(t, 0)
 	srv := &healthScoreServer{sastStatus: 4, auditJSON: auditNotRecalculated}
@@ -190,8 +175,6 @@ func TestAwaitKnoxIQHealthScore_NeverRecalculated(t *testing.T) {
 	assert.Contains(t, errOut, "has not been recalculated")
 }
 
-// TestKnoxIQHealthScoreReady_BackendWithoutAudit checks an older backend with
-// no audit endpoint fails fast rather than burning the whole grace period.
 func TestKnoxIQHealthScoreReady_BackendWithoutAudit(t *testing.T) {
 	srv := &healthScoreServer{auditCode: 404}
 	client, teardown := srv.start(t)
@@ -204,8 +187,6 @@ func TestKnoxIQHealthScoreReady_BackendWithoutAudit(t *testing.T) {
 	assert.Less(t, time.Since(start), 2*time.Second)
 }
 
-// TestKnoxIQHealthScoreReady_NoCurrentScore guards the nil current_score case
-// (no recalculations recorded): treated as not ready, never a nil dereference.
 func TestKnoxIQHealthScoreReady_NoCurrentScore(t *testing.T) {
 	srv := &healthScoreServer{auditJSON: `{"current_score":null,"audit_trail":[` +
 		`{"event_type":"sast_completed","knoxiq_ran":true,"score":47}]}`}
@@ -217,9 +198,6 @@ func TestKnoxIQHealthScoreReady_NoCurrentScore(t *testing.T) {
 	assert.False(t, ready)
 }
 
-// TestCountLikelihoodOffenders_UsesCompletedTriage checks the likelihood gate
-// reads the triage the health-score flow already waited for, instead of
-// polling KnoxIQ a second time.
 func TestCountLikelihoodOffenders_UsesCompletedTriage(t *testing.T) {
 	old := viper.GetBool(ConfigKeyIncludeNeedsReview)
 	viper.Set(ConfigKeyIncludeNeedsReview, false)
@@ -256,10 +234,6 @@ func TestCountLikelihoodOffenders_SkipsIncompleteTriage(t *testing.T) {
 	assert.Zero(t, srv.hits("/api/knoxiq/file/1/cicd_analyses"))
 }
 
-// TestBuildHealthScoreVerdict pins the verdict wording. The score-only cases
-// must match the original health-score gate exactly (single line ending in
-// "Build passed." / "Build failed."), which CI plugins and the README rely
-// on; "Build failed." must never be missing when the build fails.
 func TestBuildHealthScoreVerdict(t *testing.T) {
 	healthOnly := CiPolicy{RiskThreshold: -1, LikelihoodThreshold: -1, HealthScoreThreshold: 60}
 	withLikelihood := CiPolicy{RiskThreshold: -1, LikelihoodThreshold: 4, HealthScoreThreshold: 60}
