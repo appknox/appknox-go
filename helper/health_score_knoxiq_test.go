@@ -255,3 +255,66 @@ func TestCountLikelihoodOffenders_SkipsIncompleteTriage(t *testing.T) {
 	assert.Contains(t, errOut, "skipping exploit-likelihood gate")
 	assert.Zero(t, srv.hits("/api/knoxiq/file/1/cicd_analyses"))
 }
+
+// TestBuildHealthScoreVerdict pins the verdict wording. The score-only cases
+// must match the original health-score gate exactly (single line ending in
+// "Build passed." / "Build failed."), which CI plugins and the README rely
+// on; "Build failed." must never be missing when the build fails.
+func TestBuildHealthScoreVerdict(t *testing.T) {
+	healthOnly := CiPolicy{RiskThreshold: -1, LikelihoodThreshold: -1, HealthScoreThreshold: 60}
+	withLikelihood := CiPolicy{RiskThreshold: -1, LikelihoodThreshold: 4, HealthScoreThreshold: 60}
+
+	tests := []struct {
+		name            string
+		policy          CiPolicy
+		score           int
+		likelihoodCount int
+		afterTriage     bool
+		want            healthScoreVerdict
+	}{
+		{
+			name: "pass, no KnoxIQ (original wording)", policy: healthOnly, score: 85,
+			want: healthScoreVerdict{stdout: []string{
+				"\nHealth score 85 is greater than or equal to threshold 60. Build passed.\n"}},
+		},
+		{
+			name: "fail, no KnoxIQ (original wording)", policy: healthOnly, score: 50,
+			want: healthScoreVerdict{failed: true, stderr: []string{
+				"Health score 50 is below the threshold 60. Build failed.\n"}},
+		},
+		{
+			name: "pass after triage", policy: healthOnly, score: 85, afterTriage: true,
+			want: healthScoreVerdict{stdout: []string{
+				"\nHealth score 85 (after KnoxIQ triage) is greater than or equal to threshold 60. Build passed.\n"}},
+		},
+		{
+			name: "fail after triage", policy: healthOnly, score: 50, afterTriage: true,
+			want: healthScoreVerdict{failed: true, stderr: []string{
+				"Health score 50 (after KnoxIQ triage) is below the threshold 60. Build failed.\n"}},
+		},
+		{
+			name: "score passes, likelihood fails", policy: withLikelihood, score: 85, likelihoodCount: 2, afterTriage: true,
+			want: healthScoreVerdict{failed: true,
+				stdout: []string{"\nHealth score 85 (after KnoxIQ triage) is greater than or equal to threshold 60.\n"},
+				stderr: []string{"Found 2 vulnerabilities with exploit likelihood >= High", "Build failed."}},
+		},
+		{
+			name: "score and likelihood both fail", policy: withLikelihood, score: 50, likelihoodCount: 2, afterTriage: true,
+			want: healthScoreVerdict{failed: true, stderr: []string{
+				"Health score 50 (after KnoxIQ triage) is below the threshold 60.",
+				"Found 2 vulnerabilities with exploit likelihood >= High",
+				"Build failed."}},
+		},
+		{
+			name: "likelihood gate on, nothing breaches", policy: withLikelihood, score: 85, afterTriage: true,
+			want: healthScoreVerdict{stdout: []string{
+				"\nHealth score 85 (after KnoxIQ triage) is greater than or equal to threshold 60. Build passed.\n"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildHealthScoreVerdict(tt.policy, tt.score, tt.likelihoodCount, tt.afterTriage)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

@@ -236,28 +236,65 @@ func fetchHealthScore(ctx context.Context, client *appknox.Client, fileID int) i
 // and exits non-zero when the score is below threshold or the likelihood gate
 // is breached. afterTriage labels a score recalculated from KnoxIQ triage.
 func decideHealthScore(fileID int, policy CiPolicy, score, likelihoodCount int, afterTriage bool) {
-	msg := fmt.Sprintf("\nCheck file ID %d on appknox dashboard for more details.\n", fileID)
+	verdict := buildHealthScoreVerdict(policy, score, likelihoodCount, afterTriage)
+	for _, line := range verdict.stdout {
+		fmt.Print(line)
+	}
+	for _, line := range verdict.stderr {
+		PrintError(line)
+	}
+	fmt.Printf("\nCheck file ID %d on appknox dashboard for more details.\n", fileID)
+	if verdict.failed {
+		os.Exit(1)
+	}
+}
+
+// healthScoreVerdict is the text decideHealthScore prints and whether the
+// build fails, kept apart from the printing and exit so it can be tested.
+type healthScoreVerdict struct {
+	stdout []string
+	stderr []string
+	failed bool
+}
+
+// buildHealthScoreVerdict words the health-score verdict. "Build passed." or
+// "Build failed." appears exactly once. When the score is the only gate that
+// matters it keeps the original single-line wording of the health-score gate;
+// when the likelihood gate fails, each reason is listed and "Build failed."
+// comes last.
+func buildHealthScoreVerdict(policy CiPolicy, score, likelihoodCount int, afterTriage bool) healthScoreVerdict {
 	label := ""
 	if afterTriage {
 		label = " (after KnoxIQ triage)"
 	}
-	healthFail := score < policy.HealthScoreThreshold
+	threshold := policy.HealthScoreThreshold
+	healthFail := score < threshold
 	likelihoodFail := policy.LikelihoodThreshold >= 0 && likelihoodCount > 0
-	if healthFail {
-		PrintError(fmt.Sprintf("Health score %d%s is below the threshold %d.",
-			score, label, policy.HealthScoreThreshold))
-	} else {
-		fmt.Printf("\nHealth score %d%s is greater than or equal to threshold %d.\n",
-			score, label, policy.HealthScoreThreshold)
+
+	var verdict healthScoreVerdict
+	switch {
+	case !healthFail && !likelihoodFail:
+		verdict.stdout = append(verdict.stdout, fmt.Sprintf(
+			"\nHealth score %d%s is greater than or equal to threshold %d. Build passed.\n",
+			score, label, threshold))
+		return verdict
+	case healthFail && !likelihoodFail:
+		verdict.stderr = append(verdict.stderr, fmt.Sprintf(
+			"Health score %d%s is below the threshold %d. Build failed.\n",
+			score, label, threshold))
+	default:
+		if healthFail {
+			verdict.stderr = append(verdict.stderr, fmt.Sprintf(
+				"Health score %d%s is below the threshold %d.", score, label, threshold))
+		} else {
+			verdict.stdout = append(verdict.stdout, fmt.Sprintf(
+				"\nHealth score %d%s is greater than or equal to threshold %d.\n", score, label, threshold))
+		}
+		verdict.stderr = append(verdict.stderr,
+			fmt.Sprintf("Found %d vulnerabilities with exploit likelihood >= %s",
+				likelihoodCount, enums.ExploitabilityType(policy.LikelihoodThreshold)),
+			"Build failed.")
 	}
-	if likelihoodFail {
-		PrintError(fmt.Sprintf("Found %d vulnerabilities with exploit likelihood >= %s",
-			likelihoodCount, enums.ExploitabilityType(policy.LikelihoodThreshold)))
-	}
-	if healthFail || likelihoodFail {
-		fmt.Print(msg)
-		os.Exit(1)
-	}
-	fmt.Println("Build passed.")
-	fmt.Print(msg)
+	verdict.failed = true
+	return verdict
 }
