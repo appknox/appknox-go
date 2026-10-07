@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/appknox/appknox-go/agent"
+	"github.com/appknox/appknox-go/workspace"
 )
 
 // Static checks run against a produced patch BEFORE it is applied.
@@ -442,7 +442,7 @@ func findManifestConflict(root, path string, attrs map[string]bool) (string, str
 			return nil
 		}
 		if info.IsDir() {
-			if agent.PruneDir(root, p) {
+			if workspace.PruneDir(root, p) {
 				return filepath.SkipDir
 			}
 			return nil

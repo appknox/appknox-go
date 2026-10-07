@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/appknox/appknox-go/agent"
+	"github.com/appknox/appknox-go/workspace"
 )
 
 // Module build scripts are editable, within limits.
@@ -360,7 +360,7 @@ func firstSourceReferencing(root, pkg string) string {
 			return err
 		}
 		if d.IsDir() {
-			if p != root && agent.PruneDir(root, p) {
+			if p != root && workspace.PruneDir(root, p) {
 				return filepath.SkipDir
 			}
 			return nil

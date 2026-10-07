@@ -129,17 +129,19 @@ type AutofixPRCommitRecord struct {
 // CommitSHA and PatchedFiles are write-only on POST; the response lists them
 // under Commits as AutofixPRCommitRecord rows.
 type AutofixPR struct {
-	ID           int                     `json:"id,omitempty"`
-	File         int                     `json:"file,omitempty"`
-	Repo         string                  `json:"repo"`
-	BaseBranch   string                  `json:"base_branch"`
-	Branch       string                  `json:"branch"`
-	PRURL        string                  `json:"pr_url"`
-	CommitSHA    string                  `json:"commit_sha,omitempty"`
-	PatchedFiles []string                `json:"patched_files,omitempty"`
-	Commits      []AutofixPRCommitRecord `json:"commits,omitempty"`
-	CreatedOn    *time.Time              `json:"created_on,omitempty"`
-	UpdatedOn    *time.Time              `json:"updated_on,omitempty"`
+	ID           int      `json:"id,omitempty"`
+	File         int      `json:"file,omitempty"`
+	Repo         string   `json:"repo"`
+	BaseBranch   string   `json:"base_branch"`
+	Branch       string   `json:"branch"`
+	PRURL        string   `json:"pr_url"`
+	CommitSHA    string   `json:"commit_sha,omitempty"`
+	PatchedFiles []string `json:"patched_files,omitempty"`
+	// AutofixRequest is the job this delivery closes (write-only).
+	AutofixRequest int                     `json:"autofix_request,omitempty"`
+	Commits        []AutofixPRCommitRecord `json:"commits,omitempty"`
+	CreatedOn      *time.Time              `json:"created_on,omitempty"`
+	UpdatedOn      *time.Time              `json:"updated_on,omitempty"`
 }
 
 // CreateAutofixPR records a delivered autofix: upserts the PR, appends a commit.
@@ -154,31 +156,125 @@ func (s *KnoxIQService) CreateAutofixPR(ctx context.Context, fileID int, pr *Aut
 	return &out, resp, err
 }
 
-// Autofix job status labels from GET /api/knoxiq/file/{id}/autofix/status/.
+// Autofix job status labels.
 const (
-	AutofixStatusPending    = "Pending"
-	AutofixStatusProcessing = "Processing"
-	AutofixStatusProcessed  = "Processed"
-	AutofixStatusErrored    = "Errored"
-	AutofixStatusTimedOut   = "Timed Out"
+	AutofixStatusPending     = "Pending"
+	AutofixStatusProcessing  = "Processing"
+	AutofixStatusAwaitingCLI = "Awaiting CLI"
+	AutofixStatusReady       = "Ready"
+	AutofixStatusProcessed   = "Processed"
+	AutofixStatusErrored     = "Errored"
+	AutofixStatusTimedOut    = "Timed Out"
 )
+
+// AutofixToolCall is one call Appknox asks the CLI to run on its checkout.
+type AutofixToolCall struct {
+	ID   string                 `json:"id"`
+	Name string                 `json:"name"`
+	Args map[string]interface{} `json:"args"`
+}
+
+// AutofixToolResult answers one AutofixToolCall: Content for file tools,
+// Data for the structured validation and gate calls.
+type AutofixToolResult struct {
+	ID      string                 `json:"id"`
+	Content string                 `json:"content"`
+	IsError bool                   `json:"is_error"`
+	Data    map[string]interface{} `json:"data,omitempty"`
+}
+
+// AutofixTargetOutcome is what happened to one file of one finding.
+type AutofixTargetOutcome struct {
+	Path    string `json:"path"`
+	Patched bool   `json:"patched"`
+	Reason  string `json:"reason"`
+	New     bool   `json:"new"`
+}
+
+// AutofixOutcome is one KnoxIQ finding's result.
+type AutofixOutcome struct {
+	UnitID          string                 `json:"unit_id"`
+	VulnerabilityID int                    `json:"vulnerability_id"`
+	Finding         string                 `json:"finding"`
+	Title           string                 `json:"title"`
+	Status          string                 `json:"status"`
+	Detail          string                 `json:"detail"`
+	Files           []AutofixTargetOutcome `json:"files"`
+}
+
+// AutofixPRText is the pull request title and body Appknox wrote.
+type AutofixPRText struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
 
 // AutofixRequest is one autofix job for a scanned file.
 type AutofixRequest struct {
-	ID           int        `json:"id,omitempty"`
-	File         int        `json:"file,omitempty"`
-	Project      int        `json:"project,omitempty"`
-	Status       string     `json:"status"`
-	PRURL        string     `json:"pr_url"`
-	ErrorMessage string     `json:"error_message,omitempty"`
-	CreatedOn    *time.Time `json:"created_on,omitempty"`
-	UpdatedOn    *time.Time `json:"updated_on,omitempty"`
+	ID           int               `json:"id,omitempty"`
+	File         int               `json:"file,omitempty"`
+	Project      int               `json:"project,omitempty"`
+	Status       string            `json:"status"`
+	Step         int               `json:"step"`
+	ToolCalls    []AutofixToolCall `json:"tool_calls"`
+	Outcomes     []AutofixOutcome  `json:"outcomes"`
+	PR           *AutofixPRText    `json:"pr"`
+	PRURL        string            `json:"pr_url"`
+	ErrorMessage string            `json:"error_message,omitempty"`
+	CreatedOn    *time.Time        `json:"created_on,omitempty"`
+	UpdatedOn    *time.Time        `json:"updated_on,omitempty"`
 }
 
-// StartAutofix registers an autofix job for the file (PENDING) and enqueues
-// it. The CLI waits until Processing, then locates, fixes, and records the PR.
-func (s *KnoxIQService) StartAutofix(ctx context.Context, fileID int) (*AutofixRequest, *Response, error) {
+// AutofixStart describes the CI checkout a job runs against.
+type AutofixStart struct {
+	Repo          string `json:"repo"`
+	BaseRef       string `json:"base_ref"`
+	HeadRef       string `json:"head_ref,omitempty"`
+	CommitSHA     string `json:"commit_sha,omitempty"`
+	RiskThreshold int    `json:"risk_threshold"`
+}
+
+// StartAutofix registers an autofix job for the file and queues it. Any older
+// job for the file is superseded.
+func (s *KnoxIQService) StartAutofix(ctx context.Context, fileID int, start *AutofixStart) (*AutofixRequest, *Response, error) {
 	u := fmt.Sprintf("api/knoxiq/file/%d/autofix", fileID)
+	req, err := s.client.NewRequest("POST", u, start)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out AutofixRequest
+	resp, err := s.client.Do(ctx, req, &out)
+	return &out, resp, err
+}
+
+// GetAutofixRequest returns one job, with the tool calls it is waiting on.
+func (s *KnoxIQService) GetAutofixRequest(ctx context.Context, fileID, requestID int) (*AutofixRequest, *Response, error) {
+	u := fmt.Sprintf("api/knoxiq/file/%d/autofix/%d", fileID, requestID)
+	req, err := s.client.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out AutofixRequest
+	resp, err := s.client.Do(ctx, req, &out)
+	return &out, resp, err
+}
+
+// SubmitAutofixToolResults answers the tool calls of one step.
+func (s *KnoxIQService) SubmitAutofixToolResults(ctx context.Context, fileID, requestID, step int, results []AutofixToolResult) (*Response, error) {
+	u := fmt.Sprintf("api/knoxiq/file/%d/autofix/%d/tool_results", fileID, requestID)
+	body := struct {
+		Step    int                 `json:"step"`
+		Results []AutofixToolResult `json:"results"`
+	}{Step: step, Results: results}
+	req, err := s.client.NewRequest("POST", u, body)
+	if err != nil {
+		return nil, err
+	}
+	return s.client.Do(ctx, req, nil)
+}
+
+// MarkAutofixRequestTimedOut gives up on one job.
+func (s *KnoxIQService) MarkAutofixRequestTimedOut(ctx context.Context, fileID, requestID int) (*AutofixRequest, *Response, error) {
+	u := fmt.Sprintf("api/knoxiq/file/%d/autofix/%d/timeout", fileID, requestID)
 	req, err := s.client.NewRequest("POST", u, nil)
 	if err != nil {
 		return nil, nil, err

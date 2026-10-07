@@ -37,9 +37,10 @@ type Delivery struct {
 	PRCreated bool // true when GitHub opened a new PR; false when an open PR was reused
 }
 
-// deliverBranch pushes patched files to a new branch, opens a GitHub PR, and
-// returns the PR URL for Mycroft's KnoxIQ AutofixPR row.
-func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch) (Delivery, error) {
+// deliverBranch pushes patched files to a new branch off the base, opens a
+// GitHub PR with the title and body Appknox wrote, and returns the PR URL for
+// Mycroft's KnoxIQ AutofixPR row.
+func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch, pr *appknox.AutofixPRText) (Delivery, error) {
 	opts = applyCIDefaults(opts)
 	if forkPRFromCI() {
 		return Delivery{}, errForkPR
@@ -60,18 +61,26 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 	for i, p := range patches {
 		files[i] = ghpr.FileChange{Path: p.Path, Content: p.Content}
 	}
+	title, body := prTitle(opts), prBody(opts, patches)
+	if pr != nil && strings.TrimSpace(pr.Title) != "" {
+		title = pr.Title
+	}
+	if pr != nil && strings.TrimSpace(pr.Body) != "" {
+		body = pr.Body + fmt.Sprintf("\n\n---\nAppknox file id: `%d`\n", opts.FileID)
+	}
 	cfg := ghpr.Config{Owner: owner, Repo: name, BaseRef: opts.Ref, Token: token, APIBase: os.Getenv("GITHUB_API_URL")}
-	res, err := ghpr.PushFiles(ctx, cfg, branch, files, prTitle(opts))
+	res, err := ghpr.PushFiles(ctx, cfg, branch, files, title)
 	if err != nil {
 		return Delivery{}, err
 	}
-	prURL, created, err := ghpr.OpenPullRequest(ctx, cfg, res.Base, res.Branch, prTitle(opts), prBody(opts, patches))
+	prURL, created, err := ghpr.OpenPullRequest(ctx, cfg, res.Base, res.Branch, title, body)
 	if err != nil {
-		return Delivery{}, fmt.Errorf("pushed branch %s but failed to open a pull request: %w\nGITHUB_TOKEN cannot open PRs unless the workflow has pull-requests: write and the repo allows Actions to create PRs (Settings → Actions → General). Or set APPKNOX_GITHUB_TOKEN to a PAT with repo scope", res.Branch, err)
+		return Delivery{}, fmt.Errorf("pushed branch %s but failed to open a pull request: %w\nGITHUB_TOKEN cannot open PRs unless the workflow has pull-requests: write and the repo allows Actions to create PRs (Settings → Actions → General), or pass --github-token with a PAT that has repo scope", res.Branch, err)
 	}
 	return Delivery{URL: prURL, Branch: res.Branch, Base: res.Base, CommitSHA: res.CommitSHA, PRCreated: created}, nil
 }
 
+// prTitle and prBody are the fallback when Appknox sent no PR text.
 func prTitle(opts AutofixOptions) string {
 	if opts.HeadRef != "" {
 		return "fix(autofix): " + strings.TrimSpace(opts.HeadRef)
@@ -114,17 +123,19 @@ func uniqueFindings(patches []filePatch) []string {
 	return out
 }
 
-// reportAutofixPR POSTs the pushed branch to KnoxIQ so the dashboard can list it.
-// Skipped when --file-id is not set (manual --finding has nothing to attach to).
-func reportAutofixPR(ctx context.Context, opts AutofixOptions, d Delivery, patches []filePatch) error {
-	return reportAutofixPRWith(ctx, getClient(), opts, d, patches)
+// reportAutofixPR POSTs the pushed branch to KnoxIQ so the dashboard can list
+// it; naming the job closes it.
+func reportAutofixPR(ctx context.Context, opts AutofixOptions, requestID int, d Delivery, patches []filePatch) error {
+	return reportAutofixPRWith(ctx, getClient(), opts, requestID, d, patches)
 }
 
-func reportAutofixPRWith(ctx context.Context, client *appknox.Client, opts AutofixOptions, d Delivery, patches []filePatch) error {
+func reportAutofixPRWith(ctx context.Context, client *appknox.Client, opts AutofixOptions, requestID int, d Delivery, patches []filePatch) error {
 	if opts.FileID <= 0 {
 		return nil
 	}
-	_, _, err := client.KnoxIQ.CreateAutofixPR(ctx, opts.FileID, buildAutofixPR(opts, d, patches))
+	pr := buildAutofixPR(opts, d, patches)
+	pr.AutofixRequest = requestID
+	_, _, err := client.KnoxIQ.CreateAutofixPR(ctx, opts.FileID, pr)
 	return err
 }
 

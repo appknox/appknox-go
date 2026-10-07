@@ -85,11 +85,11 @@ func TestCommitMessage(t *testing.T) {
 func TestDeliverBranch_RequiresRepoAndToken(t *testing.T) {
 	clearCIRepoEnv(t)
 	patches := []filePatch{{Path: "app/A.java", Content: "c"}}
-	_, err := deliverBranch(context.Background(), AutofixOptions{}, patches)
+	_, err := deliverBranch(context.Background(), AutofixOptions{}, patches, nil)
 	require.Error(t, err) // no CI repo
 
 	t.Setenv("GITHUB_TOKEN", "")
-	_, err = deliverBranch(context.Background(), AutofixOptions{Repo: "o/r"}, patches)
+	_, err = deliverBranch(context.Background(), AutofixOptions{Repo: "o/r"}, patches, nil)
 	require.Error(t, err) // repo but no token
 }
 
@@ -97,7 +97,7 @@ func TestDeliverBranch_RequiresHeadRef(t *testing.T) {
 	clearCIRepoEnv(t)
 	_, err := deliverBranch(context.Background(),
 		AutofixOptions{Repo: "o/r", GithubToken: "t"},
-		[]filePatch{{Path: "app/A.java", Content: "c"}})
+		[]filePatch{{Path: "app/A.java", Content: "c"}}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "--head-ref")
 }
@@ -112,7 +112,7 @@ func TestDeliverBranch_RejectsForkPR(t *testing.T) {
 	}`))
 	_, err := deliverBranch(context.Background(),
 		AutofixOptions{Repo: "appknox/mfva", HeadRef: "feat/login", GithubToken: "t"},
-		[]filePatch{{Path: "app/A.java", Content: "c"}})
+		[]filePatch{{Path: "app/A.java", Content: "c"}}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does not support fork PRs")
 }
@@ -122,7 +122,7 @@ func TestDeliverBranch_UsesGitHubRepository(t *testing.T) {
 	t.Setenv("GITHUB_REPOSITORY", "appknox/mfva")
 	t.Setenv("GITHUB_TOKEN", "")
 	_, err := deliverBranch(context.Background(), AutofixOptions{HeadRef: "feat/login"},
-		[]filePatch{{Path: "app/A.java", Content: "c"}})
+		[]filePatch{{Path: "app/A.java", Content: "c"}}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "GitHub token") // repo came from CI; token is the remaining gap
 }
@@ -147,8 +147,8 @@ func TestBuildAutofixPR(t *testing.T) {
 
 func TestReportAutofixPR_SkipsWithoutFileID(t *testing.T) {
 	err := reportAutofixPRWith(context.Background(), nil,
-		AutofixOptions{Finding: "weak PRNG"}, Delivery{}, nil)
-	require.NoError(t, err) // manual --finding has nothing to attach to
+		AutofixOptions{}, 0, Delivery{}, nil)
+	require.NoError(t, err) // no file id: nothing to attach to
 }
 
 func TestReportAutofixPR_PostsPayload(t *testing.T) {
@@ -161,7 +161,7 @@ func TestReportAutofixPR_PostsPayload(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "file": 118})
 	})
 	err := reportAutofixPRWith(context.Background(), client,
-		AutofixOptions{FileID: 118, Repo: "appknox/mfva", HeadRef: "feat/login"},
+		AutofixOptions{FileID: 118, Repo: "appknox/mfva", HeadRef: "feat/login"}, 12,
 		Delivery{
 			URL:    "https://github.com/appknox/mfva/pull/42",
 			Branch: "appknox-autofix/feat/login", Base: "master",
@@ -176,6 +176,7 @@ func TestReportAutofixPR_PostsPayload(t *testing.T) {
 	require.Equal(t, []string{"app/src/Main.java"}, got.PatchedFiles)
 	require.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", got.CommitSHA)
 	require.Zero(t, got.File) // request body does not send file; it is the URL
+	require.Equal(t, 12, got.AutofixRequest)
 }
 
 func testAppknoxClient(t *testing.T, h http.HandlerFunc) *appknox.Client {

@@ -1,14 +1,11 @@
 package helper
 
 import (
-	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/appknox/appknox-go/agent"
 	"github.com/stretchr/testify/require"
 )
 
@@ -178,156 +175,6 @@ func TestCheckRemovedDependency_AllowedOnceSourceIsClean(t *testing.T) {
 	require.Nil(t, checkRemovedDependency(root, "app/build.gradle", mfvaGradle, withoutJedis()))
 }
 
-// jedisSession is mfva 37: KnoxIQ marks jedis third-party and the locate agent
-// names app/build.gradle and ExportedActivity.java.
-func jedisSession(root string, fix func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error)) fixSession {
-	d := autofixDeps{locateTargets: targetsAt("app/build.gradle", exportedRel), agentFix: fix}
-	return dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "Redis library", VulnerabilityID: 37, Remediation: "r",
-		Units: []FindingUnit{{Title: "jedis", Remediation: "remove jedis", ThirdParty: true}},
-	}})
-}
-
-// The Java fix runs first, and the dependency removal passes the gate because
-// no source uses jedis any more.
-func TestRun_ThirdPartyDependencyRemovedWithItsUse(t *testing.T) {
-	root := writeRepo(t, map[string]string{"app/build.gradle": mfvaGradle, exportedRel: exportedJedis})
-	var order []string
-	s := jedisSession(root, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-		order = append(order, req.Path)
-		if req.Path == exportedRel {
-			return agent.FixResult{Changed: true, PatchedContent: exportedNoJedis}, nil
-		}
-		return agent.FixResult{Changed: true, PatchedContent: withoutJedis()}, nil
-	})
-	out, err := s.run(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, []string{exportedRel, "app/build.gradle"}, order, "source first, build script last")
-	require.Equal(t, statusFixed, out.Findings[0].Status, out.Findings[0].Detail)
-	require.Len(t, out.Patches, 2)
-}
-
-// The Java fixer declines: the dependency must stay, or the build breaks.
-func TestRun_DependencyKeptWhenItsUseWasNotRemoved(t *testing.T) {
-	root := writeRepo(t, map[string]string{"app/build.gradle": mfvaGradle, exportedRel: exportedJedis})
-	s := jedisSession(root, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-		if req.Path == exportedRel {
-			return agent.FixResult{}, nil
-		}
-		return agent.FixResult{Changed: true, PatchedContent: withoutJedis()}, nil
-	})
-	out, err := s.run(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, statusSkipped, out.Findings[0].Status)
-	require.Contains(t, out.Findings[0].Detail, "rejected by patch gate (dependency-still-used)")
-	require.Empty(t, out.Patches)
-}
-
-// The backstop: okhttp's group (com.squareup.okhttp3) is not its package
-// (okhttp3), so checkRemovedDependency cannot see the use. The source fix is
-// refused by the gate, the build-script edit lands, and the unit is rolled
-// back so nothing half-applied ships.
-func TestRun_BuildScriptUnitRolledBackWhenAnotherTargetFails(t *testing.T) {
-	const src = "app/src/main/java/com/x/Net.java"
-	root := writeRepo(t, map[string]string{"app/build.gradle": mfvaGradle, src: "class Net { void f() { } }\n"})
-	patchedGradle := strings.Replace(mfvaGradle, "    api 'com.squareup.okhttp3:okhttp:3.8.0'\n", "", 1)
-	d := autofixDeps{
-		locateTargets: targetsAt(src, "app/build.gradle"),
-		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-			if req.Path == src {
-				return agent.FixResult{Changed: true, PatchedContent: "class Net { void f() { \n"}, nil // unbalanced
-			}
-			return agent.FixResult{Changed: true, PatchedContent: patchedGradle}, nil
-		},
-	}
-	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "OkHttp", VulnerabilityID: 7, Remediation: "r",
-		Units: []FindingUnit{{Title: "okhttp", Remediation: "remove okhttp", ThirdParty: true}},
-	}})
-	out, err := s.run(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, statusSkipped, out.Findings[0].Status, out.Findings[0].Detail)
-	require.Contains(t, out.Findings[0].Detail, reasonRolledBack)
-	require.Empty(t, out.Patches)
-	got, err := readUnderRoot(root, "app/build.gradle")
-	require.NoError(t, err)
-	require.Equal(t, mfvaGradle, got, "the build script is back as it was")
-}
-
-// Review finding: a run that stops mid-unit (here the manual path, where any
-// fix error is fatal) still rolls the unit back before returning.
-func TestRun_RollbackAlsoOnEarlyReturn(t *testing.T) {
-	root := writeRepo(t, map[string]string{"app/build.gradle": mfvaGradle, "lib/build.gradle": mfvaGradle})
-	d := autofixDeps{
-		locateTargets: targetsAt("app/build.gradle", "lib/build.gradle"),
-		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-			if req.Path == "lib/build.gradle" {
-				return agent.FixResult{}, errors.New("gateway down")
-			}
-			return agent.FixResult{Changed: true, PatchedContent: withoutJedis()}, nil
-		},
-	}
-	s := dryAgentSession(root, d)
-	s.opts.FileID = 0
-	res, err := s.runUnit(context.Background(), FindingInputs{Finding: "Redis library"},
-		FindingUnit{Title: "jedis", Remediation: "remove jedis"})
-	require.Error(t, err)
-	require.Empty(t, res.patches)
-	require.Contains(t, res.outcome.Detail, reasonRolledBack)
-	got, readErr := readUnderRoot(root, "app/build.gradle")
-	require.NoError(t, readErr)
-	require.Equal(t, mfvaGradle, got)
-}
-
-// A declined target does not roll back: 3 (debuggable) locates a manifest
-// that has no debuggable attribute; only the build script needs the change.
-func TestRun_DeclinedTargetDoesNotRollBackBuildScript(t *testing.T) {
-	const manifest = "app/src/main/AndroidManifest.xml"
-	root := writeRepo(t, map[string]string{"app/build.gradle": mfvaGradle, manifest: "<manifest><application/></manifest>\n"})
-	patchedGradle := strings.Replace(mfvaGradle, "minifyEnabled false\n",
-		"minifyEnabled false\n            debuggable false\n", 1)
-	d := autofixDeps{
-		locateTargets: targetsAt(manifest, "app/build.gradle"),
-		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-			if req.Path == manifest {
-				return agent.FixResult{}, nil
-			}
-			return agent.FixResult{Changed: true, PatchedContent: patchedGradle}, nil
-		},
-	}
-	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "Debug enabled", VulnerabilityID: 3, Remediation: "r",
-		Units: []FindingUnit{{Title: "debuggable", Remediation: "debuggable false"}},
-	}})
-	out, err := s.run(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, statusPartial, out.Findings[0].Status, out.Findings[0].Detail)
-	require.Len(t, out.Patches, 1)
-	require.Equal(t, "app/build.gradle", out.Patches[0].Path)
-}
-
-// Third-party with nothing in this repository to change: skipped with the
-// reason, and the locate turn was told the finding is third-party.
-func TestRun_ThirdPartyWithNoSourceIsSkipped(t *testing.T) {
-	var sawThirdParty bool
-	d := autofixDeps{
-		locateTargets: func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
-			sawThirdParty = req.ThirdParty
-			return agent.TargetReply{Targets: []agent.Target{},
-				NotFound: []string{"com.vendor.Sdk: library class"}}, nil
-		},
-	}
-	s := dryAgentSession(t.TempDir(), d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "Vendored SDK", VulnerabilityID: 5, Remediation: "r",
-		Units: []FindingUnit{{Title: "sdk", Remediation: "patch the sdk", ThirdParty: true}},
-	}})
-	out, err := s.run(context.Background())
-	require.NoError(t, err)
-	require.True(t, sawThirdParty, "the locate turn is told the finding is third-party")
-	require.Equal(t, statusSkipped, out.Findings[0].Status)
-	require.Contains(t, out.Findings[0].Detail, reasonThirdPartyNoSource)
-}
-
 // Review bypass: the blocklist missed script plugins and code that runs at
 // Gradle configuration time. Added lines are now held to an allowlist of the
 // settings a remediation changes.
@@ -406,41 +253,4 @@ func TestCheckBuildScriptEdit_RefusesActivationByDeletion(t *testing.T) {
 	require.NotNil(t, checkBuildScriptEdit("app/build.gradle", nested, renested))
 	// Removing a // comment line is harmless.
 	require.Nil(t, checkBuildScriptEdit("app/build.gradle", mfvaGradle+"// old note\n", mfvaGradle))
-}
-
-// mfva verify run 36091852012 (116, root detection): the source fix used
-// RootBeer, the build-script edit that added the dependency was refused by the
-// gate, and the retry abstained. Recorded as a plain decline, that let the
-// source half ship and the build failed on `package com.scottyab.rootbeer
-// does not exist`. A decline after a refusal is a refusal, and a finding whose
-// build-script change was refused is rolled back.
-func TestRun_RolledBackWhenBuildScriptChangeRefusedThenDeclined(t *testing.T) {
-	root := writeRepo(t, map[string]string{"app/build.gradle": mfvaGradle, exportedRel: exportedJedis})
-	attempts := 0
-	d := autofixDeps{
-		locateTargets: targetsAt(exportedRel, "app/build.gradle"),
-		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-			if req.Path == exportedRel {
-				return agent.FixResult{Changed: true, PatchedContent: "import com.scottyab.rootbeer.RootBeer;\n" + exportedJedis}, nil
-			}
-			attempts++
-			if req.PriorViolation == "" {
-				return agent.FixResult{Changed: true,
-					PatchedContent: mfvaGradle + "dependencies { implementation 'com.scottyab:rootbeer-lib:0.1.0' }\n"}, nil
-			}
-			return agent.FixResult{}, nil // the retry abstains
-		},
-	}
-	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "Root detection", VulnerabilityID: 116, Remediation: "r",
-		Units: []FindingUnit{{Title: "root", Remediation: "add RootBeer and check isRooted()"}},
-	}})
-	out, err := s.run(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, 2, attempts, "refused once, retried once")
-	require.Equal(t, statusSkipped, out.Findings[0].Status, out.Findings[0].Detail)
-	require.Contains(t, out.Findings[0].Detail, "rejected by patch gate (build-script-addition), then declined")
-	require.Empty(t, out.Patches, "the RootBeer source half must not ship without its dependency")
-	got, _ := os.ReadFile(filepath.Join(root, exportedRel))
-	require.Equal(t, exportedJedis, string(got), "rolled back on disk")
 }

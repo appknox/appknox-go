@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/appknox/appknox-go/agent"
+	"github.com/appknox/appknox-go/workspace"
 )
 
 // New files: a remediation that creates a file (mfva 113's
@@ -44,18 +44,18 @@ var resourceNameRE = regexp.MustCompile(`^[a-z0-9_]+$`)
 // exist is not refused: it is handed back in existing, to be fixed as an
 // ordinary target (the second of mfva 16's findings names the
 // SecureCryptoManager the first one already created).
-func validateNewFiles(root string, entries []agent.Target) (created, existing []agent.Target, rejected []rejection) {
+func validateNewFiles(root string, entries []workspace.Target) (created, existing []workspace.Target, rejected []rejection) {
 	seen := map[string]bool{}
 	for _, t := range entries {
 		rel, reason := checkNewTarget(root, t.Path)
 		switch {
 		case reason == reasonNewExists:
-			existing = append(existing, agent.Target{Path: rel, Why: t.Why})
+			existing = append(existing, workspace.Target{Path: rel, Why: t.Why})
 		case reason != "":
 			rejected = append(rejected, rejection{Path: t.Path, Reason: reason})
 		case !seen[rel]:
 			seen[rel] = true
-			created = append(created, agent.Target{Path: rel, Why: t.Why, New: true})
+			created = append(created, workspace.Target{Path: rel, Why: t.Why, New: true})
 		}
 	}
 	return created, existing, rejected

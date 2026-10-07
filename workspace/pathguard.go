@@ -1,4 +1,4 @@
-package agent
+package workspace
 
 import (
 	"fmt"
@@ -14,11 +14,11 @@ import (
 // not exist yet.
 func resolveUnderRoot(root, rel string) (string, error) {
 	if rel == "" || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("agent: non-relative path %q rejected", rel)
+		return "", fmt.Errorf("workspace: non-relative path %q rejected", rel)
 	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return "", fmt.Errorf("agent: resolve root %q: %w", root, err)
+		return "", fmt.Errorf("workspace: resolve root %q: %w", root, err)
 	}
 	absRoot = canonicalDir(absRoot)
 
@@ -31,7 +31,7 @@ func resolveUnderRoot(root, rel string) (string, error) {
 		target = resolved
 	}
 	if !underRoot(absRoot, target) {
-		return "", fmt.Errorf("agent: path %q escapes repo root", rel)
+		return "", fmt.Errorf("workspace: path %q escapes repo root", rel)
 	}
 	return target, nil
 }

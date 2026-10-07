@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/appknox/appknox-go/agent"
+	"github.com/appknox/appknox-go/workspace"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,7 +52,7 @@ func TestValidateTargets_RejectsEachReason(t *testing.T) {
 		"app/src/main/assets/config.json": reasonUnsupported,
 	}
 	for path, want := range cases {
-		accepted, rejected := validateTargets(root, []agent.Target{{Path: path, Why: "w"}})
+		accepted, rejected := validateTargets(root, []workspace.Target{{Path: path, Why: "w"}})
 		require.Empty(t, accepted, path)
 		require.Equal(t, []rejection{{Path: path, Reason: want}}, rejected, path)
 	}
@@ -62,7 +62,7 @@ func TestValidateTargets_RejectsEachReason(t *testing.T) {
 // and goes LAST, after the source that used the dependency has been fixed.
 func TestValidateTargets_AcceptsModuleBuildScriptLast(t *testing.T) {
 	root := targetRepo(t)
-	accepted, rejected := validateTargets(root, []agent.Target{
+	accepted, rejected := validateTargets(root, []workspace.Target{
 		{Path: "app/build.gradle.kts", Why: "drop dependency"},
 		{Path: "app/src/main/java/com/x/Main.java", Why: "src"},
 		{Path: "app/src/main/AndroidManifest.xml", Why: "manifest"},
@@ -74,14 +74,14 @@ func TestValidateTargets_AcceptsModuleBuildScriptLast(t *testing.T) {
 
 func TestValidateTargets_AcceptsAndOrdersManifestResSource(t *testing.T) {
 	root := targetRepo(t)
-	accepted, rejected := validateTargets(root, []agent.Target{
+	accepted, rejected := validateTargets(root, []workspace.Target{
 		{Path: "app/src/main/java/com/x/Main.java", Why: "src"},
 		{Path: "app/src/main/res/layout/activity_main.xml", Why: "res"},
 		{Path: "app/src/main/java/com/x/Util.kt", Why: "kt"},
 		{Path: "./app/src/main/AndroidManifest.xml", Why: "manifest"},
 	})
 	require.Empty(t, rejected)
-	require.Equal(t, []agent.Target{
+	require.Equal(t, []workspace.Target{
 		{Path: "app/src/main/AndroidManifest.xml", Why: "manifest"},
 		{Path: "app/src/main/res/layout/activity_main.xml", Why: "res"},
 		{Path: "app/src/main/java/com/x/Main.java", Why: "src"},
@@ -89,14 +89,14 @@ func TestValidateTargets_AcceptsAndOrdersManifestResSource(t *testing.T) {
 	}, accepted)
 }
 
-// TestValidateTargets_PruneCheckIsCaseInsensitive is F3: agent.PruneDir's own
+// TestValidateTargets_PruneCheckIsCaseInsensitive is F3: workspace.PruneDir's own
 // component check is exact-case, so a differently-cased build directory
 // (seen from a compiled app that does not preserve the checkout's casing)
 // slipped the prune check.
 func TestValidateTargets_PruneCheckIsCaseInsensitive(t *testing.T) {
 	root := targetRepo(t)
 	writeSource(t, root, "app/Build/intermediates/AndroidManifest.xml", "x\n")
-	accepted, rejected := validateTargets(root, []agent.Target{
+	accepted, rejected := validateTargets(root, []workspace.Target{
 		{Path: "app/Build/intermediates/AndroidManifest.xml", Why: "w"},
 	})
 	require.Empty(t, accepted)
@@ -114,7 +114,7 @@ func TestValidateTargets_PruneCheckFollowsSymlinkedDirectory(t *testing.T) {
 		filepath.Join(root, "build/generated"),
 		filepath.Join(root, "app/link")))
 
-	accepted, rejected := validateTargets(root, []agent.Target{
+	accepted, rejected := validateTargets(root, []workspace.Target{
 		{Path: "app/link/AndroidManifest.xml", Why: "w"},
 	})
 	require.Empty(t, accepted)
@@ -123,12 +123,12 @@ func TestValidateTargets_PruneCheckFollowsSymlinkedDirectory(t *testing.T) {
 
 func TestValidateTargets_MergesDuplicateWhy(t *testing.T) {
 	root := targetRepo(t)
-	accepted, rejected := validateTargets(root, []agent.Target{
+	accepted, rejected := validateTargets(root, []workspace.Target{
 		{Path: "app/src/main/AndroidManifest.xml", Why: "exported=false on A"},
 		{Path: "app/src/main/./AndroidManifest.xml", Why: "exported=false on B"},
 	})
 	require.Empty(t, rejected)
-	require.Equal(t, []agent.Target{{
+	require.Equal(t, []workspace.Target{{
 		Path: "app/src/main/AndroidManifest.xml",
 		Why:  "exported=false on A; exported=false on B",
 	}}, accepted)

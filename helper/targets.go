@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/appknox/appknox-go/agent"
+	"github.com/appknox/appknox-go/workspace"
 )
 
 // Target validation (spec 3.2). The locate agent chooses the files; this only
@@ -31,8 +31,8 @@ type rejection struct {
 // validateTargets returns the accepted targets, cleaned, with duplicates
 // merged (a duplicate's why is appended to the first), ordered
 // manifest → res → source with the agent's order kept inside each group.
-func validateTargets(root string, targets []agent.Target) ([]agent.Target, []rejection) {
-	var accepted []agent.Target
+func validateTargets(root string, targets []workspace.Target) ([]workspace.Target, []rejection) {
+	var accepted []workspace.Target
 	var rejected []rejection
 	index := map[string]int{}
 	for _, t := range targets {
@@ -42,11 +42,11 @@ func validateTargets(root string, targets []agent.Target) ([]agent.Target, []rej
 			continue
 		}
 		if i, dup := index[rel]; dup {
-			accepted[i] = agent.Target{Path: rel, Why: joinNonEmpty([]string{accepted[i].Why, t.Why}, "; ")}
+			accepted[i] = workspace.Target{Path: rel, Why: joinNonEmpty([]string{accepted[i].Why, t.Why}, "; ")}
 			continue
 		}
 		index[rel] = len(accepted)
-		accepted = append(accepted, agent.Target{Path: rel, Why: t.Why})
+		accepted = append(accepted, workspace.Target{Path: rel, Why: t.Why})
 	}
 	return orderTargets(accepted), rejected
 }
@@ -84,7 +84,7 @@ func checkTarget(root, raw string) (string, string) {
 // code, hidden directories, nested repositories. Using the RESOLVED path,
 // rather than the one the agent sent, catches a symlinked directory that
 // lands inside a pruned directory even when its own name gives no hint.
-// Component names are also compared case-insensitively: agent.PruneDir's own
+// Component names are also compared case-insensitively: workspace.PruneDir's own
 // check is exact-case, and a compiled app's finding text does not promise to
 // preserve the checkout's casing.
 func prunedComponent(root, dest string) bool {
@@ -100,11 +100,11 @@ func prunedComponent(root, dest string) bool {
 	rel = filepath.ToSlash(rel)
 	for dir := path.Dir(rel); dir != "."; dir = path.Dir(dir) {
 		abs := filepath.Join(resolvedRoot, filepath.FromSlash(dir))
-		if agent.PruneDir(resolvedRoot, abs) {
+		if workspace.PruneDir(resolvedRoot, abs) {
 			return true
 		}
 		lowerAbs := filepath.Join(filepath.Dir(abs), strings.ToLower(filepath.Base(abs)))
-		if agent.PruneDir(resolvedRoot, lowerAbs) {
+		if workspace.PruneDir(resolvedRoot, lowerAbs) {
 			return true
 		}
 	}
@@ -153,9 +153,9 @@ func targetRank(rel string) int {
 }
 
 // orderTargets returns a sorted copy, stable within each rank.
-func orderTargets(targets []agent.Target) []agent.Target {
-	out := append([]agent.Target(nil), targets...)
-	rank := func(t agent.Target) int {
+func orderTargets(targets []workspace.Target) []workspace.Target {
+	out := append([]workspace.Target(nil), targets...)
+	rank := func(t workspace.Target) int {
 		if t.New {
 			return -1 // created before anything that refers to it
 		}
@@ -222,7 +222,7 @@ func existsAsPath(root, name string) bool {
 }
 
 // findBaseNames walks root once, pruning the same directories validation
-// prunes (agent.PruneDir), and returns which of wanted's base names exist as
+// prunes (workspace.PruneDir), and returns which of wanted's base names exist as
 // a regular file anywhere in the tree.
 func findBaseNames(root string, wanted map[string]bool) map[string]bool {
 	found := map[string]bool{}
@@ -231,7 +231,7 @@ func findBaseNames(root string, wanted map[string]bool) map[string]bool {
 			return nil // unreadable entry: skip, never abort the whole walk
 		}
 		if d.IsDir() {
-			if agent.PruneDir(root, abs) {
+			if workspace.PruneDir(root, abs) {
 				return filepath.SkipDir
 			}
 			return nil
