@@ -230,6 +230,33 @@ func TestFilesService_GetScansStatusSummary(t *testing.T) {
     }
 }
 
+func TestFilesService_GetHealthScoreAudit(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/v3/files/37/health_score_audit", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		fmt.Fprint(w, `{"current_score":{"score":47},"audit_trail":[
+			{"event_type":"sast_completed","knoxiq_ran":false,"score":34},
+			{"event_type":"sast_completed","knoxiq_ran":true,"score":47}]}`)
+	})
+
+	audit, _, err := client.Files.GetHealthScoreAudit(context.Background(), 37)
+	if err != nil {
+		t.Fatalf("Files.GetHealthScoreAudit returned error: %v", err)
+	}
+	want := &HealthScoreAudit{
+		CurrentScore: &HealthScoreAuditCurrent{Score: 47},
+		AuditTrail: []HealthScoreAuditEntry{
+			{EventType: "sast_completed", KnoxIQRan: false, Score: 34},
+			{EventType: "sast_completed", KnoxIQRan: true, Score: 47},
+		},
+	}
+	if !reflect.DeepEqual(audit, want) {
+		t.Errorf("Files.GetHealthScoreAudit returned %+v, want %+v", audit, want)
+	}
+}
+
 func TestFilesService_GetHealthScore(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()
