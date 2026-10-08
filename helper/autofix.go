@@ -20,10 +20,23 @@ import (
 )
 
 var (
+	// Polling starts fast right after results are sent, when the next step is
+	// due within seconds, and backs off to autofixPollInterval while the job
+	// is queued or the model is working.
+	autofixFastPoll     = 250 * time.Millisecond
 	autofixPollInterval = 2 * time.Second
 	autofixHardLimit    = 2 * time.Hour
 	autofixSleep        = time.Sleep
 )
+
+// nextPollInterval backs off by half again each idle poll, up to the cap.
+func nextPollInterval(current time.Duration) time.Duration {
+	next := current + current/2
+	if next > autofixPollInterval {
+		return autofixPollInterval
+	}
+	return next
+}
 
 // AutofixOptions carries the flags for an autofix run.
 type AutofixOptions struct {
@@ -61,8 +74,6 @@ type filePatch struct {
 	Path       string
 	Content    string
 	Diff       string
-	Confidence float64
-	Applied    bool
 	Finding    string
 	// Formatting is cosmetic advice about the patch -- tabs in a space-indented
 	// file, say. Reported on the run and never enforced: see formatting.go.
@@ -187,6 +198,7 @@ func runJob(ctx context.Context, client *appknox.Client, opts AutofixOptions, se
 	}
 	fmt.Println("\nAutofix status:")
 	answered, last := 0, ""
+	interval := autofixPollInterval
 	for {
 		if job.Status != last {
 			fmt.Printf("  %s\n", job.Status)
@@ -211,12 +223,14 @@ func runJob(ctx context.Context, client *appknox.Client, opts AutofixOptions, se
 					return nil, fmt.Errorf("autofix: sending results failed: %w", err)
 				}
 				answered = job.Step
+				interval = autofixFastPoll
 			}
 		}
 		if ctx.Err() != nil {
 			return nil, giveUp(client, opts.FileID, job.ID)
 		}
-		autofixSleep(autofixPollInterval)
+		autofixSleep(interval)
+		interval = nextPollInterval(interval)
 		next, _, err := client.KnoxIQ.GetAutofixRequest(ctx, opts.FileID, job.ID)
 		if err != nil {
 			if isAutofixTimeout(ctx, err) {
@@ -405,14 +419,6 @@ func (w *workingTree) track(path string) error {
 		return err
 	}
 	return nil
-}
-
-// apply writes a patch to the tree, remembering the original content once.
-func (w *workingTree) apply(path, content string) error {
-	if err := w.track(path); err != nil {
-		return err
-	}
-	return applyPatch(w.root, path, content)
 }
 
 // remove deletes a file this run created. The path stays recorded as

@@ -74,8 +74,6 @@ type patchViolation struct {
 	Detail string // the specific fact, handed back on retry
 }
 
-func (v patchViolation) Error() string { return v.Rule + ": " + v.Detail }
-
 // verifyPatch reports the first reason the patch cannot be applied, or nil.
 //
 // Cheapest check first, and stops at the first violation: the fixer gets one

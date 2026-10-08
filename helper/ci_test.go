@@ -1,10 +1,20 @@
 package helper
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+// writeEvent writes a GitHub event payload and returns its path.
+func writeEvent(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "event.json")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
 
 func clearCIRepoEnv(t *testing.T) {
 	t.Helper()

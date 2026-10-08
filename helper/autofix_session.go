@@ -48,13 +48,24 @@ type fixUnit struct {
 	patchStart int // index of the unit's first patch in autofixSession.patches
 }
 
+// verdict is what the last verify_target decided, for a finish_unit sent in
+// the same batch.
+type verdict struct {
+	path     string
+	create   bool
+	changed  bool
+	accepted bool
+	rule     string // the gate rule that refused the patch, if any
+}
+
 // autofixSession executes one job's tool calls against root.
 type autofixSession struct {
-	root    string
-	work    *workingTree
-	target  *fixTarget
-	unit    *fixUnit
-	patches []filePatch
+	root        string
+	work        *workingTree
+	target      *fixTarget
+	unit        *fixUnit
+	lastVerdict *verdict
+	patches     []filePatch
 }
 
 func newAutofixSession(root string) *autofixSession {
@@ -212,6 +223,7 @@ func (s *autofixSession) beginTarget(args map[string]interface{}) (string, map[s
 func (s *autofixSession) verifyTarget(args map[string]interface{}) (string, map[string]interface{}, error) {
 	t := s.target
 	path := workspace.CleanRel(strArg(args, "path"))
+	s.lastVerdict = nil
 	if t == nil || t.path != path {
 		return "", nil, fmt.Errorf("%s is not the file being fixed", path)
 	}
@@ -226,18 +238,21 @@ func (s *autofixSession) verifyTarget(args map[string]interface{}) (string, map[
 		return "", nil, err
 	}
 	if boolArg(args, "discard") || !changed {
+		s.lastVerdict = &verdict{path: path, create: t.create}
 		return "", map[string]interface{}{"changed": false}, nil
 	}
 	if v := verifyPatch(s.root, path, t.before, patched); v != nil {
 		fmt.Printf("   .. %s rejected (%s)\n", path, v.Rule)
+		s.lastVerdict = &verdict{path: path, create: t.create, changed: true, rule: v.Rule}
 		return "", map[string]interface{}{"changed": true, "accepted": false,
 			"violation": map[string]interface{}{"rule": v.Rule, "detail": v.Detail}}, nil
 	}
 	if err := applyPatch(s.root, path, patched); err != nil {
 		return "", nil, err
 	}
+	s.lastVerdict = &verdict{path: path, create: t.create, changed: true, accepted: true}
 	patch := filePatch{Path: path, Content: patched, Diff: unifiedDiff(path, t.before, patched),
-		Finding: s.unit.id, Applied: true}
+		Finding: s.unit.id}
 	if !t.create {
 		patch.Formatting = formattingAdvice(path, t.before, patched)
 	}
@@ -256,16 +271,31 @@ func (s *autofixSession) revert(t *fixTarget) error {
 // finishUnit closes a finding. A finding that must land whole -- one that
 // edits a module build script, or creates a file -- and did not, is undone:
 // every file it patched goes back to what it held before the finding.
+//
+// With after_verify, finish_unit rides in the same batch as the last target's
+// verify_target, so that target's result is taken from the verdict just
+// given. When that verdict calls for a retry, the finding is not finished:
+// the answer is "deferred" and the unit stays open.
 func (s *autofixSession) finishUnit(args map[string]interface{}) (string, map[string]interface{}, error) {
 	u := s.unit
 	if u == nil {
 		return "", nil, errors.New("finish_unit before validate_targets")
 	}
-	s.unit = nil
 	var results []targetResult
 	if err := fromData(args["results"], &results); err != nil {
 		return "", nil, fmt.Errorf("finish_unit results: %w", err)
 	}
+	if boolArg(args, "after_verify") {
+		v := s.lastVerdict
+		if v == nil {
+			return "", nil, errors.New("finish_unit: the verify it follows did not complete")
+		}
+		if v.rule != "" && boolArg(args, "retry_allowed") {
+			return "", map[string]interface{}{"deferred": true}, nil
+		}
+		results = append(results, verdictResult(v, strArg(args, "refused")))
+	}
+	s.unit = nil
 	if needsRollback(results) {
 		for _, r := range results {
 			if !r.Patched {
@@ -289,6 +319,25 @@ func (s *autofixSession) finishUnit(args map[string]interface{}) (string, map[st
 		results = rolledBack(results)
 	}
 	return "", map[string]interface{}{"results": asData(results)}, nil
+}
+
+// verdictResult turns a final verdict into the target's result line. The
+// reasons are the ones Appknox gives when it records a verify itself.
+func verdictResult(v *verdict, refused string) targetResult {
+	r := targetResult{Path: v.path, New: v.create}
+	switch {
+	case v.accepted:
+		r.Patched = true
+	case v.rule != "":
+		r.Reason = "rejected by patch gate (" + v.rule + ")"
+	case refused != "":
+		// After a refusal this is still a refusal: the file needed a change
+		// the gate would not allow, which is not the same as needing none.
+		r.Reason = "rejected by patch gate (" + refused + "), then declined"
+	default:
+		r.Reason = "declined: no edit made"
+	}
+	return r
 }
 
 // result is every file the job changed, one patch per path.

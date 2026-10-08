@@ -68,11 +68,6 @@ type Result struct {
 	CommitSHA string // SHA of the single commit that contains every patched file
 }
 
-// PushBranch pushes a single patched file to a new branch (thin wrapper).
-func PushBranch(ctx context.Context, cfg Config, ch Change) (Result, error) {
-	return PushFiles(ctx, cfg, ch.Branch, []FileChange{{Path: ch.Path, Content: ch.Content}}, ch.Message)
-}
-
 // PushFiles creates a branch off the base ref and writes every patched file in
 // one git commit (Git Database API). Idempotent: an existing branch is reused.
 // The Result URL is a compare link; OpenPullRequest replaces it with the opened PR.

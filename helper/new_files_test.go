@@ -66,8 +66,8 @@ func TestCheckNewFilePackage(t *testing.T) {
 func TestWorkingTree_CreatedFileIsDeletedOnRestore(t *testing.T) {
 	root := writeRepo(t, map[string]string{manifestRel: manifestBody})
 	w := newWorkingTree(root)
-	require.NoError(t, w.apply(nscRel, nscBody))
-	require.NoError(t, w.apply(manifestRel, manifestNSC))
+	applyTracked(t, w, nscRel, nscBody)
+	applyTracked(t, w, manifestRel, manifestNSC)
 	require.True(t, w.created[nscRel])
 	require.Equal(t, "", w.original[nscRel])
 	require.NoError(t, w.restore())

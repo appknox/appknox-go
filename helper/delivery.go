@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -213,13 +212,4 @@ func capGitRef(branch, original string) string {
 		truncated = strings.TrimRight(autofixBranchPrefix, "/")
 	}
 	return truncated + suffix
-}
-
-// commitMessage is a conventional-commit subject for the fix.
-func commitMessage(p filePatch) string {
-	name := p.Finding
-	if name == "" {
-		name = "security finding"
-	}
-	return fmt.Sprintf("fix(autofix): %s in %s", name, filepath.Base(p.Path))
 }

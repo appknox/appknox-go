@@ -74,12 +74,19 @@ func writeSource(t *testing.T, root, rel, content string) {
 	require.NoError(t, os.WriteFile(abs, []byte(content), 0o644))
 }
 
+// applyTracked writes content the way a session does: tracked, then written.
+func applyTracked(t *testing.T, w *workingTree, path, content string) {
+	t.Helper()
+	require.NoError(t, w.track(path))
+	require.NoError(t, applyPatch(w.root, path, content))
+}
+
 // A run must leave the checkout exactly as it found it.
 func TestWorkingTree_RestoreUndoesEveryEdit(t *testing.T) {
 	root := writeRepo(t, map[string]string{"app/A.java": "original\n"})
 	w := newWorkingTree(root)
-	require.NoError(t, w.apply("app/A.java", "patched once\n"))
-	require.NoError(t, w.apply("app/A.java", "patched twice\n"))
+	applyTracked(t, w, "app/A.java", "patched once\n")
+	applyTracked(t, w, "app/A.java", "patched twice\n")
 	require.NoError(t, w.restore())
 	got, err := readUnderRoot(root, "app/A.java")
 	require.NoError(t, err)
@@ -236,6 +243,49 @@ func TestSession_NewFileRolledBackWhenItsUserIsRefused(t *testing.T) {
 	_, err := os.Stat(filepath.Join(s.root, nscRel))
 	require.True(t, os.IsNotExist(err))
 	require.Empty(t, s.result())
+}
+
+// finish_unit in the same batch as the last verify takes that target's
+// result from the verdict, or holds back when Appknox will retry it.
+func TestSession_FinishAfterVerify(t *testing.T) {
+	s := newAutofixSession(writeRepo(t, map[string]string{mainRel: mainBody}))
+	validate(t, s, map[string]interface{}{"path": mainRel})
+	broken := map[string]interface{}{"path": mainRel, "old_string": "nextInt(); }", "new_string": "nextInt(); { }"}
+	finish := map[string]interface{}{"unit_id": "a1-F-0", "results": []interface{}{},
+		"after_verify": true, "retry_allowed": true}
+
+	call(t, s, toolBeginTarget, map[string]interface{}{"path": mainRel})
+	call(t, s, toolEdit, broken)
+	call(t, s, toolVerifyTarget, map[string]interface{}{"path": mainRel})
+	require.Equal(t, true, asJSON(t, call(t, s, toolFinishUnit, finish).Data)["deferred"])
+	require.NotNil(t, s.unit, "a deferred finish leaves the finding open")
+
+	// The retry is refused too, and no retry is left: the finding finishes.
+	call(t, s, toolBeginTarget, map[string]interface{}{"path": mainRel})
+	call(t, s, toolEdit, broken)
+	call(t, s, toolVerifyTarget, map[string]interface{}{"path": mainRel})
+	finish["retry_allowed"] = false
+	data := asJSON(t, call(t, s, toolFinishUnit, finish).Data)
+	results := data["results"].([]interface{})
+	require.Len(t, results, 1)
+	require.Equal(t, "rejected by patch gate (unbalanced-braces)", results[0].(map[string]interface{})["reason"])
+	require.Nil(t, s.unit)
+}
+
+func TestVerdictResult(t *testing.T) {
+	require.True(t, verdictResult(&verdict{path: "a", accepted: true}, "").Patched)
+	require.Equal(t, "rejected by patch gate (xml)", verdictResult(&verdict{rule: "xml", changed: true}, "").Reason)
+	require.Equal(t, "rejected by patch gate (xml), then declined", verdictResult(&verdict{}, "xml").Reason)
+	require.Equal(t, "declined: no edit made", verdictResult(&verdict{}, "").Reason)
+}
+
+func TestNextPollInterval_BacksOffToTheCap(t *testing.T) {
+	d := autofixFastPoll
+	for i := 0; i < 20; i++ {
+		d = nextPollInterval(d)
+	}
+	require.Equal(t, autofixPollInterval, d)
+	require.Greater(t, nextPollInterval(autofixFastPoll), autofixFastPoll)
 }
 
 func TestSession_BeginRefusesANewFileThatExists(t *testing.T) {

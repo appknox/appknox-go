@@ -76,12 +76,6 @@ func TestPrBranch_SanitizesAndCapsLength(t *testing.T) {
 	require.Regexp(t, `-[0-9a-f]{8}$`, got)
 }
 
-func TestCommitMessage(t *testing.T) {
-	msg := commitMessage(filePatch{Finding: "Weak PRNG", Path: "app/src/Main.java"})
-	require.Contains(t, msg, "Weak PRNG")
-	require.Contains(t, msg, "Main.java") // basename, not the full path
-}
-
 func TestDeliverBranch_RequiresRepoAndToken(t *testing.T) {
 	clearCIRepoEnv(t)
 	patches := []filePatch{{Path: "app/A.java", Content: "c"}}
