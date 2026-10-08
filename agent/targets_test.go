@@ -159,7 +159,7 @@ func TestLocateTargetsWith_PropagatesRunnerError(t *testing.T) {
 
 func TestTargetsParams_AppliesDefaults(t *testing.T) {
 	p := targetsParams(Config{}, TargetRequest{Finding: "y"})
-	require.Equal(t, sdk.ModelClaudeHaiku4_5, p.Model)
+	require.Equal(t, sdk.Model(defaultModel), p.Model)
 	require.Equal(t, int64(defaultTargetsMaxTokens), p.MaxTokens)
 	require.Equal(t, defaultMaxIterations, p.MaxIterations)
 	require.Equal(t, targetsSystemPrompt, p.System[0].Text)

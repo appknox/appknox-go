@@ -61,3 +61,13 @@ func TestNewAutofixSDK_PostsToKnoxIQAutofix(t *testing.T) {
 	require.Equal(t, "Token pat", gotAuth)
 	require.Empty(t, gotAPIKey)
 }
+
+// A blank --model runs Claude Haiku 5.5 (released 2026-10-07); an explicit
+// model still wins.
+func TestRunnerParams_DefaultModelIsHaiku55(t *testing.T) {
+	p := runnerParamsWithBudget(Config{}, "sys", "user", 100)
+	require.Equal(t, sdk.Model("claude-haiku-5-5"), p.Model)
+
+	p = runnerParamsWithBudget(Config{Model: "claude-opus-5-5"}, "sys", "user", 100)
+	require.Equal(t, sdk.Model("claude-opus-5-5"), p.Model)
+}

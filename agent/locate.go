@@ -81,10 +81,14 @@ const (
 type Config struct {
 	Host          string // APPKNOX_API_HOST; messages go to {Host}/api/knoxiq/autofix/
 	Token         string // Appknox PAT presented to Mycroft (not a provider key)
-	Model         string // optional; defaults to Claude Haiku 4.5
+	Model         string // optional; defaults to defaultModel
 	MaxTokens     int64  // optional; each turn has its own default (locate: defaultTargetsMaxTokens, fix: defaultFixMaxTokens)
 	MaxIterations int    // optional; defaults to defaultMaxIterations
 }
+
+// defaultModel runs when no model is given: Claude Haiku 5.5. The pinned SDK
+// predates it, so the id is spelled out rather than taken from an sdk constant.
+const defaultModel = "claude-haiku-5-5"
 
 // runnerParamsWithBudget builds Tool Runner params with cfg's model/token/iteration
 // defaults and the given system + user prompts, with an explicit output-token budget.
@@ -93,7 +97,7 @@ type Config struct {
 func runnerParamsWithBudget(cfg Config, system, user string, fallbackMaxTokens int64) sdk.BetaToolRunnerParams {
 	model := cfg.Model
 	if model == "" {
-		model = string(sdk.ModelClaudeHaiku4_5)
+		model = defaultModel
 	}
 	maxTokens := cfg.MaxTokens
 	if maxTokens <= 0 {
