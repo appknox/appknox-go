@@ -170,3 +170,42 @@ func TestGenuinelyNew_NoEntriesSkipsTheWalk(t *testing.T) {
 	require.Empty(t, newOnes)
 	require.Empty(t, notNew)
 }
+
+// Info.plist, entitlements and xcconfig are editable (the project file too,
+// by code: see pbxproj_settings_test.go).
+func TestSupportedTarget_AppleConfig(t *testing.T) {
+	for _, rel := range []string{"iGoat-Swift/iGoat-Swift/Info.plist", "App/App.entitlements", "Configurations/Release.xcconfig"} {
+		require.True(t, supportedTarget(rel), rel)
+	}
+}
+
+// wikipedia-ios and DVIA-v2: Swift sources are editable; Swift package and
+// CocoaPods manifests are build files, never targets.
+func TestSupportedTarget_Swift(t *testing.T) {
+	require.True(t, supportedTarget("Wikipedia/Code/AppDelegate.swift"))
+	for _, rel := range []string{"WMFComponents/Package.swift", "Package.swift", "Podfile", "Cartfile"} {
+		require.False(t, supportedTarget(rel), rel)
+		require.True(t, buildFileRE.MatchString(rel), rel)
+	}
+}
+
+// wikipedia-ios, 2026-10-02: locate listed "AppEnvironment or
+// DeviceIntegrityManager: shared state" under needs_new_file and the whole
+// Jailbreak Detection finding was skipped. Xcode compiles only files its
+// project lists, so a Swift remediation's new type lives in a Swift target.
+func TestCarriedInSwift(t *testing.T) {
+	swift := []workspace.Target{{Path: "Wikipedia/Code/AppDelegate.swift"}, {Path: "App/Info.plist"}}
+	entries := []string{
+		"AppEnvironment or DeviceIntegrityManager: shared state for device compromise",
+		"JailbreakDetector.swift: the detection helper",
+		"Settings.bundle/Root.plist: a toggle",
+	}
+	kept, carried := carriedInSwift(swift, entries)
+	require.Equal(t, entries[2:], kept)
+	require.Equal(t, entries[:2], carried)
+
+	kotlin := []workspace.Target{{Path: "app/src/main/java/com/x/Main.kt"}}
+	kept, carried = carriedInSwift(kotlin, entries)
+	require.Equal(t, entries, kept, "only a Swift remediation carries new types in place")
+	require.Empty(t, carried)
+}

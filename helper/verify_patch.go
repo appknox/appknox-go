@@ -44,11 +44,16 @@ import (
 // aibom-android edited app/build.gradle.kts anyway, twice, under two separate
 // rules forbidding it. A path check does not rely on compliance.
 var buildFileRE = regexp.MustCompile(
-	`(^|/)(build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.properties|pom\.xml|proguard-rules\.pro)$`)
+	`(^|/)(build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.properties|pom\.xml|proguard-rules\.pro|` +
+		`Package\.swift|Podfile|Cartfile)$`)
 
-// resourceRefRE finds Android resource references, e.g.
-// android:networkSecurityConfig="@xml/network_security_config".
-var resourceRefRE = regexp.MustCompile(`@(xml|drawable|layout|raw|menu|anim)/([A-Za-z0-9_]+)`)
+// resourceRefRE finds Android resource references in XML, e.g.
+// android:networkSecurityConfig="@xml/network_security_config" or
+// android:label="@string/app_name". The framework's @android:string/… never
+// matches (the character after @ is not a kind), and ids are not judged.
+var resourceRefRE = regexp.MustCompile(
+	`@(xml|drawable|layout|raw|menu|anim|animator|interpolator|mipmap|font|navigation|transition|` +
+		`color|string|dimen|style|bool|integer|array|plurals|fraction)/([A-Za-z0-9_.]+)`)
 
 // buildConfigImportRE matches an import of BuildConfig, the one generated
 // symbol whose absence is both common and fatal: it exists only if the build
@@ -74,11 +79,27 @@ type patchViolation struct {
 	Detail string // the specific fact, handed back on retry
 }
 
-// verifyPatch reports the first reason the patch cannot be applied, or nil.
+func (v patchViolation) Error() string { return v.Rule + ": " + v.Detail }
+
+// gateOpts are the per-call switches of the patch gate.
+type gateOpts struct {
+	// deferRefs leaves missing-resource and missing-r-reference to the unit's
+	// resolve pass: inside a unit the file that defines a reference may not
+	// be written yet, and completion needs the referencing file on disk to
+	// know what to complete (spec 3.2).
+	deferRefs bool
+}
+
+// verifyPatch is verifyPatchWith outside a unit: every check enforced.
+func verifyPatch(root, path, original, patched string) *patchViolation {
+	return verifyPatchWith(root, path, original, patched, gateOpts{})
+}
+
+// verifyPatchWith reports the first reason the patch cannot be applied, or nil.
 //
 // Cheapest check first, and stops at the first violation: the fixer gets one
 // retry, so one precise fact beats a list it has to triage.
-func verifyPatch(root, path, original, patched string) *patchViolation {
+func verifyPatchWith(root, path, original, patched string, opts gateOpts) *patchViolation {
 	if v := checkEditablePath(root, path); v != nil {
 		return v
 	}
@@ -93,7 +114,45 @@ func verifyPatch(root, path, original, patched string) *patchViolation {
 	if v := checkBraceBalance(path, original, patched); v != nil {
 		return v
 	}
-	if v := checkResourceRefs(root, path, original, patched); v != nil {
+	if v := checkAddedPins(path, original, patched); v != nil {
+		return v
+	}
+	if v := checkPlist(path, original, patched); v != nil {
+		return v
+	}
+	if v := checkXcconfig(path, original, patched); v != nil {
+		return v
+	}
+	if v := checkPbxproj(path, original, patched); v != nil {
+		return v
+	}
+	if !opts.deferRefs {
+		if v := checkResourceRefs(root, path, original, patched); v != nil {
+			return v
+		}
+		if v := checkRReferences(root, path, original, patched); v != nil {
+			return v
+		}
+	}
+	if v := checkRInScope(root, path, original, patched); v != nil {
+		return v
+	}
+	if v := checkAddedLogging(path, original, patched); v != nil {
+		return v
+	}
+	if v := checkThemeAttrs(root, path, original, patched); v != nil {
+		return v
+	}
+	if v := checkMissingLibrary(root, path, original, patched); v != nil {
+		return v
+	}
+	if v := checkSwiftImports(root, path, original, patched); v != nil {
+		return v
+	}
+	if v := checkPrivateSwiftCalls(root, path, original, patched); v != nil {
+		return v
+	}
+	if v := checkExported(path, original, patched); v != nil {
 		return v
 	}
 	if v := checkBuildConfigImport(original, patched); v != nil {
@@ -198,7 +257,7 @@ func checkXMLWellFormed(path, content string) *patchViolation {
 // rule.
 func checkBraceBalance(path, original, patched string) *patchViolation {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".java", ".kt", ".gradle", ".kts":
+	case ".java", ".kt", ".gradle", ".kts", ".swift":
 	default:
 		return nil
 	}
@@ -280,61 +339,6 @@ func skipQuoted(src string, i int) int {
 		i++
 	}
 	return i
-}
-
-// checkResourceRefs rejects a NEWLY ADDED reference to a resource not on disk.
-//
-// A remediation whose first step is "create res/xml/network_security_config.xml"
-// can otherwise leave the manifest pointing at a file never written -- an AAPT
-// error that broke kgb_messenger and playstore-auth identically. A file this
-// remediation creates is on disk before the manifest's call (new files run
-// first), so it passes here; one that was never created does not.
-func checkResourceRefs(root, path, original, patched string) *patchViolation {
-	for _, m := range introduced(resourceRefRE, original, patched) {
-		kind, name := m[1], m[2]
-		if resourceExists(root, kind, name) {
-			continue
-		}
-		return &patchViolation{
-			Rule: "missing-resource",
-			Detail: fmt.Sprintf("%s adds a reference to @%s/%s, but no res/%s/%s.* exists "+
-				"in this repository, and nothing in this remediation creates it. Achieve the "+
-				"fix without it (a manifest attribute often has an equivalent), or make no edit.",
-				path, kind, name, kind, name),
-		}
-	}
-	return nil
-}
-
-// resourceDirRE matches a resource directory of the given kind, INCLUDING its
-// qualified variants -- res/drawable-nodpi, res/values-night, res/layout-land.
-//
-// Matching only the bare directory is what cost Fossify Calendar every one of
-// its fixes: the drawable it referenced was real, and sitting in drawable-nodpi.
-func resourceDirRE(kind string) *regexp.Regexp {
-	return regexp.MustCompile(`(^|/)res/` + regexp.QuoteMeta(kind) + `(-[^/]+)?/`)
-}
-
-// resourceExists looks for res/<kind>[-qualifier]/<name>.* anywhere in the
-// checkout, so flavour and library source sets count, not only the main one.
-func resourceExists(root, kind, name string) bool {
-	dir := resourceDirRE(kind)
-	found := false
-	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() || found {
-			return nil
-		}
-		slash := filepath.ToSlash(p)
-		if !dir.MatchString(slash) {
-			return nil
-		}
-		base := filepath.Base(slash)
-		if strings.TrimSuffix(base, filepath.Ext(base)) == name {
-			found = true
-		}
-		return nil
-	})
-	return found
 }
 
 // checkBuildConfigImport rejects a newly added BuildConfig import.
@@ -446,6 +450,10 @@ func findManifestConflict(root, path string, attrs map[string]bool) (string, str
 			return nil
 		}
 		if filepath.Base(p) != "AndroidManifest.xml" || sameFile(p, root, path) {
+			return nil
+		}
+		// ndk-samples: thirty independent sample apps are not one merge.
+		if rel, relErr := filepath.Rel(root, p); relErr != nil || !mergesWith(root, path, filepath.ToSlash(rel)) {
 			return nil
 		}
 		b, readErr := os.ReadFile(p)

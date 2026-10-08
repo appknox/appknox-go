@@ -113,17 +113,28 @@ func prunedComponent(root, dest string) bool {
 
 // supportedTarget is the set of files a fix call may edit today: Java/Kotlin
 // source, the manifest, resource XML, a module's build script and its
-// proguard-rules.pro.
+// proguard-rules.pro, Apple's property lists and xcconfig files (judged by
+// plist_check.go), Swift source -- never a Package.swift manifest -- and an
+// Xcode project file, whose build settings code sets (pbxproj_settings.go).
 func supportedTarget(rel string) bool {
 	if isModuleBuildScript(rel) || isModuleRulesFile(rel) {
 		return true
 	}
+	if buildFileRE.MatchString(rel) {
+		return false
+	}
+	if isProjectFile(rel) {
+		return true // edited by code, never by a model: pbxproj_settings.go
+	}
 	switch strings.ToLower(path.Ext(rel)) {
-	case ".java", ".kt":
+	case ".java", ".kt", ".swift", ".plist", ".entitlements", ".xcconfig":
 		return true
 	case ".xml":
 		if path.Base(rel) == "AndroidManifest.xml" {
 			return true
+		}
+		if strings.Contains("/"+path.Dir(rel)+"/", "/Platforms/Android/Resources/") {
+			return true // a .NET MAUI app's Android res/
 		}
 		for _, part := range strings.Split(path.Dir(rel), "/") {
 			if part == "res" {
@@ -195,6 +206,33 @@ func genuinelyNew(root string, entries []string) (newOnes []string, notNew []str
 		newOnes = append(newOnes, e)
 	}
 	return newOnes, notNew
+}
+
+// carriedInSwift splits needs_new_file entries for a remediation whose
+// targets include a Swift file: an entry naming a type (no extension, or
+// .swift) is carried by that file -- Xcode compiles only files its project
+// lists, so the fixer writes the type in place -- and is no reason to skip.
+// Entries for other files, and every entry of a non-Swift remediation, are kept.
+func carriedInSwift(targets []workspace.Target, entries []string) (kept, carried []string) {
+	swift := false
+	for _, t := range targets {
+		if strings.EqualFold(path.Ext(t.Path), ".swift") {
+			swift = true
+			break
+		}
+	}
+	for _, e := range entries {
+		name := needsNewFileName(e)
+		if f := strings.Fields(name); len(f) > 0 {
+			name = f[0] // "A or B: why" names A first
+		}
+		if ext := strings.ToLower(path.Ext(name)); swift && (ext == "" || ext == ".swift") {
+			carried = append(carried, e)
+			continue
+		}
+		kept = append(kept, e)
+	}
+	return kept, carried
 }
 
 // needsNewFileName extracts the file or class name from a needs_new_file

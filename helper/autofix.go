@@ -71,10 +71,10 @@ func defaultDeps() autofixDeps {
 
 // filePatch is one file's final fixed content.
 type filePatch struct {
-	Path       string
-	Content    string
-	Diff       string
-	Finding    string
+	Path    string
+	Content string
+	Diff    string
+	Finding string
 	// Formatting is cosmetic advice about the patch -- tabs in a space-indented
 	// file, say. Reported on the run and never enforced: see formatting.go.
 	Formatting string

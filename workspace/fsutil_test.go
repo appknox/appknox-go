@@ -104,3 +104,17 @@ func TestWalkSourceFiles_IncludesGradleBuildScripts(t *testing.T) {
 
 	require.Contains(t, collectWalked(root), filepath.ToSlash(rel))
 }
+
+// iGoat-Swift and DVIA-v2, 2026-10-01: App Transport Security lives in
+// Info.plist, and locate answered "not searchable" because grep and glob never
+// listed property lists. Apple's text config files are searchable; a vendored
+// framework's own Info.plist is not the app's.
+func TestAppleConfigFilesAreSearchable(t *testing.T) {
+	for _, rel := range []string{"App/Info.plist", "App/App.entitlements", "Configs/Release.xcconfig",
+		"App.xcodeproj/project.pbxproj"} {
+		require.True(t, isSource(rel), rel)
+	}
+	require.True(t, skipDir("CouchbaseLite.framework"))
+	require.True(t, skipDir("Sentry.xcframework"))
+	require.False(t, skipDir("App.xcodeproj"))
+}

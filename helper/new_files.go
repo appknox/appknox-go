@@ -20,7 +20,7 @@ import (
 
 const (
 	reasonNewExists      = "already exists"
-	reasonNewPlacement   = "not in a module source set (src/<set>/res/<type>/ or src/<set>/java|kotlin/)"
+	reasonNewPlacement   = "not in a module source set (src/<set>/res/<type>/ or src/<set>/java|kotlin/) or a MAUI app's Platforms/Android/Resources/<type>/"
 	reasonNewResName     = "resource file name must be lowercase letters, digits and underscores"
 	reasonNewUnsupported = "new files may only be resource XML, Java or Kotlin"
 
@@ -91,7 +91,11 @@ func checkNewTarget(root, raw string) (string, string) {
 // newPlacementReason checks where a new file sits inside a module:
 // <module>/src/<set>/res/<type>/<name>.xml, or a Java/Kotlin file under
 // <module>/src/<set>/java/ or kotlin/ with at least one package directory.
+// A .NET MAUI app's resource goes in <project>/Platforms/Android/Resources/<type>/<name>.xml.
 func newPlacementReason(rel string) string {
+	if m := mauiResRE.FindStringSubmatch(rel); m != nil {
+		return resourcePlacementReason(m[1], m[2])
+	}
 	parts := strings.Split(rel, "/")
 	src := -1
 	for i, p := range parts {
@@ -106,13 +110,10 @@ func newPlacementReason(rel string) string {
 	kind, name := parts[src+2], parts[len(parts)-1]
 	switch strings.ToLower(path.Ext(name)) {
 	case ".xml":
-		if kind != "res" || len(parts) != src+5 || !xmlResourceTypes[strings.SplitN(parts[src+3], "-", 2)[0]] {
+		if kind != "res" || len(parts) != src+5 {
 			return reasonNewPlacement
 		}
-		if !resourceNameRE.MatchString(strings.TrimSuffix(name, path.Ext(name))) {
-			return reasonNewResName
-		}
-		return ""
+		return resourcePlacementReason(parts[src+3], name)
 	case ".java", ".kt":
 		if kind != "java" && kind != "kotlin" {
 			return reasonNewPlacement
@@ -120,6 +121,23 @@ func newPlacementReason(rel string) string {
 		return ""
 	}
 	return reasonNewUnsupported
+}
+
+// mauiResRE splits <project>/Platforms/Android/Resources/<type dir>/<file>.
+var mauiResRE = regexp.MustCompile(`^(?:.+/)?Platforms/Android/Resources/([^/]+)/([^/]+)$`)
+
+// resourcePlacementReason checks a new resource's type directory and name.
+func resourcePlacementReason(typeDir, name string) string {
+	if !strings.EqualFold(path.Ext(name), ".xml") {
+		return reasonNewUnsupported
+	}
+	if !xmlResourceTypes[strings.SplitN(typeDir, "-", 2)[0]] {
+		return reasonNewPlacement
+	}
+	if !resourceNameRE.MatchString(strings.TrimSuffix(name, path.Ext(name))) {
+		return reasonNewResName
+	}
+	return ""
 }
 
 // packageDeclRE matches a Java or Kotlin package declaration.

@@ -35,6 +35,9 @@ type buildProfile struct {
 	// buildConfigKnown separates "checked, and it is off" from "not checked".
 	// Only the first is safe to state as a fact.
 	buildConfigKnown bool
+	// NoAppCompat: Gradle/Android, and no build file puts androidx.appcompat
+	// on the classpath, directly or through a library that brings it.
+	NoAppCompat bool
 }
 
 // describeBuild reads the project's build files and returns its profile.
@@ -55,6 +58,7 @@ func describeBuild(root string) buildProfile {
 	if p.BuildSystem == "Gradle" {
 		p.BuildConfig = buildConfigEnabled(root)
 		p.buildConfigKnown = true
+		p.NoAppCompat = p.Android && !libraryDeclared(root, optionalLibraries[0].Markers)
 	}
 	return p
 }
@@ -101,6 +105,14 @@ func (p buildProfile) String() string {
 			"BuildConfig is NOT generated here: no module sets "+
 				"buildFeatures { buildConfig true }, and AGP 8 leaves it off by "+
 				"default. Do not reference BuildConfig.")
+	}
+	// OpenNutriTracker (Flutter): a new settings activity extended
+	// AppCompatActivity and kotlinc answered "Unresolved reference".
+	if p.NoAppCompat {
+		lines = append(lines,
+			"androidx.appcompat is NOT a dependency here (nor Material): a new class extends "+
+				"android.app.Activity, never AppCompatActivity, and imports no androidx.appcompat or "+
+				"com.google.android.material class.")
 	}
 	if p.BuildSystem == "Maven" && !p.Android {
 		lines = append(lines,
