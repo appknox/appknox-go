@@ -71,10 +71,10 @@ func defaultDeps() autofixDeps {
 
 // filePatch is one file's final fixed content.
 type filePatch struct {
-	Path       string
-	Content    string
-	Diff       string
-	Finding    string
+	Path    string
+	Content string
+	Diff    string
+	Finding string
 	// Formatting is cosmetic advice about the patch -- tabs in a space-indented
 	// file, say. Reported on the run and never enforced: see formatting.go.
 	Formatting string
@@ -180,8 +180,9 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	return out, nil
 }
 
-// runJob starts the job and answers its tool calls until it is Ready (a PR to
-// open) or Processed (nothing to deliver).
+// runJob starts the job, waits for Appknox's worker to take it, drives its
+// findings on the checkout, and completes it: Ready (a PR to open) or
+// Processed (nothing to deliver).
 func runJob(ctx context.Context, client *appknox.Client, opts AutofixOptions, sess *autofixSession) (*appknox.AutofixRequest, error) {
 	job, _, err := client.KnoxIQ.StartAutofix(ctx, opts.FileID, &appknox.AutofixStart{
 		Repo:          opts.Repo,
@@ -197,49 +198,76 @@ func runJob(ctx context.Context, client *appknox.Client, opts AutofixOptions, se
 		return nil, fmt.Errorf("autofix start failed: %w", err)
 	}
 	fmt.Println("\nAutofix status:")
-	answered, last := 0, ""
-	interval := autofixPollInterval
+	job, err = awaitWorker(ctx, client, opts.FileID, job)
+	if err != nil {
+		return nil, err
+	}
+
+	drv := newAutofixDriver(sess, func(ctx context.Context, req *appknox.AutofixTurnRequest) (*appknox.AutofixTurnResponse, error) {
+		resp, _, err := client.KnoxIQ.AutofixTurn(ctx, opts.FileID, job.ID, req)
+		return resp, err
+	})
+	outcomes, err := drv.run(ctx, job.Units)
+	if err != nil {
+		return nil, jobFailed(ctx, client, opts.FileID, job.ID, err)
+	}
+	done, _, err := client.KnoxIQ.CompleteAutofix(ctx, opts.FileID, job.ID, outcomes)
+	if err != nil {
+		return nil, jobFailed(ctx, client, opts.FileID, job.ID, err)
+	}
+	if len(done.Outcomes) == 0 {
+		done.Outcomes = outcomes
+	}
+	fmt.Printf("  %s\n", done.Status)
+	return done, nil
+}
+
+// awaitWorker polls the job until Appknox's worker has taken it and built its
+// findings. The worker usually picks a job up within a second, so polling
+// starts fast and backs off.
+func awaitWorker(ctx context.Context, client *appknox.Client, fileID int, job *appknox.AutofixRequest) (*appknox.AutofixRequest, error) {
+	last := ""
+	interval := autofixFastPoll
 	for {
 		if job.Status != last {
 			fmt.Printf("  %s\n", job.Status)
 			last = job.Status
 		}
 		switch job.Status {
-		case appknox.AutofixStatusReady, appknox.AutofixStatusProcessed:
-			return job, nil
-		case appknox.AutofixStatusErrored:
-			return nil, fmt.Errorf("autofix errored for file %d: %s", opts.FileID, firstNonEmpty(job.ErrorMessage, "autofix failed"))
-		case appknox.AutofixStatusTimedOut:
-			return nil, fmt.Errorf("autofix timed out for file %d: %s", opts.FileID, firstNonEmpty(job.ErrorMessage, "no answer in time"))
-		case appknox.AutofixStatusAwaitingCLI:
-			if job.Step > answered && len(job.ToolCalls) > 0 {
-				fmt.Printf("    step %d: %s\n", job.Step, callSummary(job.ToolCalls))
-				_, err := client.KnoxIQ.SubmitAutofixToolResults(ctx, opts.FileID, job.ID, job.Step, sess.runAll(job.ToolCalls))
-				// 409: the job moved on (timed out or superseded); the next poll says so.
-				if err != nil && appknox.StatusCodeOf(err) != 409 {
-					if isAutofixTimeout(ctx, err) {
-						return nil, giveUp(client, opts.FileID, job.ID)
-					}
-					return nil, fmt.Errorf("autofix: sending results failed: %w", err)
-				}
-				answered = job.Step
-				interval = autofixFastPoll
+		case appknox.AutofixStatusProcessing:
+			if job.Units != nil {
+				fmt.Printf("  %d finding(s)\n", len(job.Units))
+				return job, nil
 			}
+		case appknox.AutofixStatusPending:
+		case appknox.AutofixStatusTimedOut:
+			return nil, fmt.Errorf("autofix timed out for file %d: %s", fileID, firstNonEmpty(job.ErrorMessage, "no answer in time"))
+		default:
+			return nil, fmt.Errorf("autofix errored for file %d: %s", fileID, firstNonEmpty(job.ErrorMessage, "autofix failed"))
 		}
 		if ctx.Err() != nil {
-			return nil, giveUp(client, opts.FileID, job.ID)
+			return nil, giveUp(client, fileID, job.ID)
 		}
 		autofixSleep(interval)
 		interval = nextPollInterval(interval)
-		next, _, err := client.KnoxIQ.GetAutofixRequest(ctx, opts.FileID, job.ID)
+		next, _, err := client.KnoxIQ.GetAutofixRequest(ctx, fileID, job.ID)
 		if err != nil {
 			if isAutofixTimeout(ctx, err) {
-				return nil, giveUp(client, opts.FileID, job.ID)
+				return nil, giveUp(client, fileID, job.ID)
 			}
 			return nil, fmt.Errorf("autofix status check failed: %w", err)
 		}
 		job = next
 	}
+}
+
+// jobFailed reports why the run stopped; on a deadline it also tells Appknox,
+// so the job does not sit in flight.
+func jobFailed(ctx context.Context, client *appknox.Client, fileID, jobID int, err error) error {
+	if isAutofixTimeout(ctx, err) {
+		return giveUp(client, fileID, jobID)
+	}
+	return fmt.Errorf("autofix failed for file %d: %w", fileID, err)
 }
 
 // callSummary names a step's calls without their arguments, which may carry code.

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/appknox/appknox-go/appknox/enums"
@@ -196,46 +198,111 @@ func TestKnoxIQService_GetAutofixRequest(t *testing.T) {
 
 	mux.HandleFunc("/api/knoxiq/file/118/autofix/12", func(w http.ResponseWriter, r *http.Request) {
 		testMethod(t, r, "GET")
-		fmt.Fprint(w, `{"id":12,"file":118,"status":"Awaiting CLI","step":3,`+
-			`"tool_calls":[{"id":"t1","name":"read_file","args":{"path":"a.java"}}],"outcomes":[],"pr":null}`)
+		fmt.Fprint(w, `{"id":12,"file":118,"status":"Processing","step":3,`+
+			`"units":[{"unit_id":"a1-F-0","vulnerability_id":null,"finding":"Weak hash","skip_reason":null}],"outcomes":[],"pr":null}`)
 	})
 
 	got, _, err := client.KnoxIQ.GetAutofixRequest(context.Background(), 118, 12)
 	if err != nil {
 		t.Fatalf("GetAutofixRequest returned error: %v", err)
 	}
-	if got.Status != AutofixStatusAwaitingCLI || got.Step != 3 || len(got.ToolCalls) != 1 {
+	if got.Status != AutofixStatusProcessing || got.Step != 3 || len(got.Units) != 1 {
 		t.Fatalf("GetAutofixRequest returned %+v", got)
 	}
-	if got.ToolCalls[0].Name != "read_file" || got.ToolCalls[0].Args["path"] != "a.java" {
-		t.Errorf("tool call = %+v", got.ToolCalls[0])
+	if got.Units[0].UnitID != "a1-F-0" || got.Units[0].VulnerabilityID != 0 || got.Units[0].SkipReason != "" {
+		t.Errorf("unit = %+v", got.Units[0])
 	}
 }
 
-func TestKnoxIQService_SubmitAutofixToolResults(t *testing.T) {
+func TestKnoxIQService_GetAutofixRequestBeforeUnitsAreBuilt(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()
 
-	mux.HandleFunc("/api/knoxiq/file/118/autofix/12/tool_results", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/12", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"id":12,"status":"Pending","step":0,"units":null,"outcomes":[]}`)
+	})
+	got, _, err := client.KnoxIQ.GetAutofixRequest(context.Background(), 118, 12)
+	if err != nil {
+		t.Fatalf("GetAutofixRequest returned error: %v", err)
+	}
+	if got.Units != nil {
+		t.Errorf("units before the worker built them = %+v, want nil", got.Units)
+	}
+}
+
+func TestKnoxIQService_AutofixTurn(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/12/turn", func(w http.ResponseWriter, r *http.Request) {
 		testMethod(t, r, "POST")
-		var got struct {
-			Step    int                 `json:"step"`
-			Results []AutofixToolResult `json:"results"`
-		}
+		var got map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		if got.Step != 3 || len(got.Results) != 1 || got.Results[0].Content != "class A {}" {
-			t.Errorf("results body = %+v", got)
+		start := got["start"].(map[string]interface{})
+		target := start["target"].(map[string]interface{})
+		if got["unit_id"] != "a1-F-0" || start["kind"] != "fix" || target["path"] != "a.java" {
+			t.Errorf("turn body = %+v", got)
 		}
-		w.WriteHeader(http.StatusAccepted)
-		fmt.Fprint(w, `{"detail":"Accepted."}`)
+		if _, ok := got["tool_results"]; ok {
+			t.Errorf("an opening call sends no tool_results: %+v", got)
+		}
+		fmt.Fprint(w, `{"type":"tool_calls","calls":[{"id":"t1","name":"read_file","args":{"path":"a.java"}}]}`)
 	})
 
-	_, err := client.KnoxIQ.SubmitAutofixToolResults(context.Background(), 118, 12, 3,
-		[]AutofixToolResult{{ID: "t1", Content: "class A {}"}})
+	got, _, err := client.KnoxIQ.AutofixTurn(context.Background(), 118, 12, &AutofixTurnRequest{
+		UnitID: "a1-F-0",
+		Start:  &AutofixTurnStart{Kind: AutofixTurnFix, Target: &AutofixFixTarget{Path: "a.java"}},
+	})
 	if err != nil {
-		t.Fatalf("SubmitAutofixToolResults returned error: %v", err)
+		t.Fatalf("AutofixTurn returned error: %v", err)
+	}
+	if got.Type != AutofixTurnToolCalls || len(got.Calls) != 1 || got.Calls[0].Args["path"] != "a.java" {
+		t.Errorf("AutofixTurn returned %+v", got)
+	}
+}
+
+func TestKnoxIQService_CompleteAutofix(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/12/complete", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "POST")
+		var got AutofixComplete
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if len(got.Outcomes) != 1 || got.Outcomes[0].Status != "FIXED" || got.Outcomes[0].Files[0].Path != "a.java" {
+			t.Errorf("complete body = %+v", got)
+		}
+		fmt.Fprint(w, `{"id":12,"status":"Ready","outcomes":[],"pr":{"title":"t","body":"b"}}`)
+	})
+
+	got, _, err := client.KnoxIQ.CompleteAutofix(context.Background(), 118, 12, []AutofixOutcome{
+		{UnitID: "a1-F-0", Status: "FIXED", Files: []AutofixTargetOutcome{{Path: "a.java", Patched: true}}},
+	})
+	if err != nil {
+		t.Fatalf("CompleteAutofix returned error: %v", err)
+	}
+	if got.Status != AutofixStatusReady || got.PR.Title != "t" {
+		t.Errorf("CompleteAutofix returned %+v", got)
+	}
+}
+
+func TestKnoxIQService_CompleteAutofixSendsAnEmptyList(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/12/complete", func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		if strings.TrimSpace(string(raw)) != `{"outcomes":[]}` {
+			t.Errorf("complete body = %s", raw)
+		}
+		fmt.Fprint(w, `{"id":12,"status":"Processed","outcomes":[],"pr":null}`)
+	})
+	if _, _, err := client.KnoxIQ.CompleteAutofix(context.Background(), 118, 12, nil); err != nil {
+		t.Fatalf("CompleteAutofix returned error: %v", err)
 	}
 }
 

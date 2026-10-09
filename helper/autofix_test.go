@@ -297,58 +297,55 @@ func TestSession_BeginRefusesANewFileThatExists(t *testing.T) {
 	require.Contains(t, res.Content, "already exists")
 }
 
-// fakeMycroft serves one job that asks for a read and an edit, then is Ready.
+// fakeMycroft serves one job with one finding: a locate turn that globs and
+// answers, then a fix turn that edits MainActivity.
 type fakeMycroft struct {
-	t         *testing.T
-	polls     int
-	submitted [][]appknox.AutofixToolResult
-	start     appknox.AutofixStart
+	t        *testing.T
+	polls    int
+	start    appknox.AutofixStart
+	turns    []appknox.AutofixTurnRequest
+	complete appknox.AutofixComplete
 }
 
 func (f *fakeMycroft) handler() http.HandlerFunc {
 	mux := http.NewServeMux()
-	job := func(status string, step int, calls []map[string]interface{}) map[string]interface{} {
-		return map[string]interface{}{"id": 12, "file": 118, "status": status, "step": step,
-			"tool_calls": calls, "outcomes": []interface{}{}, "pr": nil}
-	}
 	mux.HandleFunc("/api/knoxiq/file/118/autofix", func(w http.ResponseWriter, r *http.Request) {
 		require.NoError(f.t, json.NewDecoder(r.Body).Decode(&f.start))
 		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(job("Pending", 0, nil))
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": 12, "file": 118, "status": "Pending", "units": nil})
 	})
 	mux.HandleFunc("/api/knoxiq/file/118/autofix/12", func(w http.ResponseWriter, r *http.Request) {
 		f.polls++
-		switch len(f.submitted) {
-		case 0:
-			_ = json.NewEncoder(w).Encode(job("Awaiting CLI", 1, []map[string]interface{}{
-				{"id": "op-1", "name": "validate_targets", "args": map[string]interface{}{
-					"unit_id": "a1-F-0", "targets": []interface{}{map[string]interface{}{"path": mainRel}}}},
-			}))
-		case 1:
-			_ = json.NewEncoder(w).Encode(job("Awaiting CLI", 2, []map[string]interface{}{
-				{"id": "op-2", "name": "begin_target", "args": map[string]interface{}{"path": mainRel}},
-				{"id": "t1", "name": "edit", "args": map[string]interface{}{"path": mainRel,
-					"old_string": "new Random()", "new_string": "new java.security.SecureRandom()"}},
-				{"id": "op-3", "name": "verify_target", "args": map[string]interface{}{"path": mainRel}},
-			}))
-		default:
-			ready := job("Ready", 3, nil)
-			ready["outcomes"] = []interface{}{map[string]interface{}{"unit_id": "a1-F-0", "status": "FIXED",
-				"finding": "Weak PRNG", "detail": mainRel}}
-			ready["pr"] = map[string]interface{}{"title": "Appknox autofix: 1 finding fixed", "body": "summary"}
-			_ = json.NewEncoder(w).Encode(ready)
-		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": 12, "file": 118, "status": "Processing",
+			"units": []interface{}{map[string]interface{}{"unit_id": "a1-F-0", "vulnerability_id": 7,
+				"finding": "Weak PRNG", "title": "", "third_party": false, "skip_reason": nil}}})
 	})
-	mux.HandleFunc("/api/knoxiq/file/118/autofix/12/tool_results", func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Step    int                         `json:"step"`
-			Results []appknox.AutofixToolResult `json:"results"`
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/12/turn", func(w http.ResponseWriter, r *http.Request) {
+		var req appknox.AutofixTurnRequest
+		require.NoError(f.t, json.NewDecoder(r.Body).Decode(&req))
+		f.turns = append(f.turns, req)
+		var resp map[string]interface{}
+		switch len(f.turns) {
+		case 1:
+			resp = map[string]interface{}{"type": "tool_calls", "calls": []interface{}{
+				map[string]interface{}{"id": "g1", "name": "glob", "args": map[string]interface{}{"pattern": "*MainActivity*"}}}}
+		case 2:
+			resp = map[string]interface{}{"type": "done", "answer": map[string]interface{}{
+				"targets": []interface{}{map[string]interface{}{"path": mainRel, "why": "seeds Random"}}}}
+		case 3:
+			resp = map[string]interface{}{"type": "tool_calls", "calls": []interface{}{
+				map[string]interface{}{"id": "e1", "name": "edit", "args": map[string]interface{}{"path": mainRel,
+					"old_string": "new Random()", "new_string": "new java.security.SecureRandom()"}}}}
+		default:
+			resp = map[string]interface{}{"type": "done"}
 		}
-		require.NoError(f.t, json.NewDecoder(r.Body).Decode(&body))
-		require.Equal(f.t, len(f.submitted)+1, body.Step)
-		f.submitted = append(f.submitted, body.Results)
-		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{"detail":"Accepted."}`))
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/12/complete", func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(f.t, json.NewDecoder(r.Body).Decode(&f.complete))
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": 12, "status": "Ready",
+			"outcomes": f.complete.Outcomes,
+			"pr":       map[string]interface{}{"title": "Appknox autofix: 1 finding fixed", "body": "summary"}})
 	})
 	return mux.ServeHTTP
 }
@@ -394,11 +391,20 @@ func TestRunAutofix_AnswersToolCallsThenDeliversThePR(t *testing.T) {
 
 	require.Equal(t, "main", fake.start.BaseRef)
 	require.Equal(t, 3, fake.start.RiskThreshold)
-	require.Len(t, fake.submitted, 2)
-	require.Equal(t, mainRel, fake.submitted[0][0].Data["accepted"].([]interface{})[0].(map[string]interface{})["path"])
-	verify := fake.submitted[1][2]
-	require.Equal(t, "op-3", verify.ID)
-	require.Equal(t, true, verify.Data["accepted"])
+	require.Equal(t, 1, fake.polls, "polled once, until the worker built the findings")
+	require.Len(t, fake.turns, 4)
+	require.Equal(t, appknox.AutofixTurnLocate, fake.turns[0].Start.Kind)
+	require.Equal(t, mainRel, fake.turns[1].ToolResults[0].Content, "the glob ran on the checkout")
+	fix := fake.turns[2].Start
+	require.Equal(t, appknox.AutofixTurnFix, fix.Kind)
+	require.Equal(t, mainRel, fix.Target.Path)
+	require.Equal(t, "edited "+mainRel, fake.turns[3].ToolResults[0].Content)
+
+	require.Len(t, fake.complete.Outcomes, 1)
+	sent := fake.complete.Outcomes[0]
+	require.Equal(t, "FIXED", sent.Status)
+	require.Equal(t, mainRel, sent.Detail)
+	require.True(t, sent.Files[0].Patched)
 
 	require.Len(t, delivered, 1)
 	require.Contains(t, delivered[0].Content, "SecureRandom")
@@ -413,13 +419,23 @@ func TestRunAutofix_AnswersToolCallsThenDeliversThePR(t *testing.T) {
 
 func TestRunAutofix_NothingToDeliverWhenProcessed(t *testing.T) {
 	autofixTestEnv(t)
-	client := testAppknoxClient(t, func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/knoxiq/file/118/autofix", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": 12, "status": "Processed",
-			"outcomes": []interface{}{map[string]interface{}{"status": "SKIPPED", "detail": "KnoxIQ: no findings"}}})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": 12, "status": "Processing",
+			"units": []interface{}{map[string]interface{}{"unit_id": "a1", "finding": "Weak hash",
+				"skip_reason": "KnoxIQ: false positive"}}})
+	})
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/12/turn", func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("a skipped finding takes no model turn")
+	})
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/12/complete", func(w http.ResponseWriter, r *http.Request) {
+		var body appknox.AutofixComplete
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": 12, "status": "Processed", "outcomes": body.Outcomes})
 	})
 	d := autofixDeps{
-		client:   client,
+		client:   testAppknoxClient(t, mux.ServeHTTP),
 		baseTree: func(context.Context, AutofixOptions) (string, func(), error) { return t.TempDir(), func() {}, nil },
 		deliver: func(context.Context, AutofixOptions, []filePatch, *appknox.AutofixPRText) (Delivery, error) {
 			t.Fatal("nothing to deliver")
@@ -429,6 +445,7 @@ func TestRunAutofix_NothingToDeliverWhenProcessed(t *testing.T) {
 	out, err := runAutofix(context.Background(), AutofixOptions{FileID: 118, Repo: "o/r", Ref: "main"}, d)
 	require.NoError(t, err)
 	require.Equal(t, "SKIPPED", out.Findings[0].Status)
+	require.Equal(t, "KnoxIQ: false positive", out.Findings[0].Detail)
 }
 
 func TestRunAutofix_ErroredJobFails(t *testing.T) {
@@ -436,9 +453,27 @@ func TestRunAutofix_ErroredJobFails(t *testing.T) {
 	client := testAppknoxClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": 12, "status": "Errored",
-			"error_message": "Sherrinford returned 502"})
+			"error_message": "Could not read the file's KnoxIQ findings."})
 	})
 	d := autofixDeps{client: client,
+		baseTree: func(context.Context, AutofixOptions) (string, func(), error) { return t.TempDir(), func() {}, nil }}
+	_, err := runAutofix(context.Background(), AutofixOptions{FileID: 118, Repo: "o/r", Ref: "main"}, d)
+	require.ErrorContains(t, err, "Could not read the file's KnoxIQ findings.")
+}
+
+func TestRunAutofix_TurnFailureStopsTheRun(t *testing.T) {
+	autofixTestEnv(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/knoxiq/file/118/autofix", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": 12, "status": "Processing",
+			"units": []interface{}{map[string]interface{}{"unit_id": "a1", "finding": "Weak hash"}}})
+	})
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/12/turn", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"detail":"Sherrinford returned 502"}`))
+	})
+	d := autofixDeps{client: testAppknoxClient(t, mux.ServeHTTP),
 		baseTree: func(context.Context, AutofixOptions) (string, func(), error) { return t.TempDir(), func() {}, nil }}
 	_, err := runAutofix(context.Background(), AutofixOptions{FileID: 118, Repo: "o/r", Ref: "main"}, d)
 	require.ErrorContains(t, err, "Sherrinford returned 502")
