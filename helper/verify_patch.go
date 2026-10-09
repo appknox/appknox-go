@@ -50,6 +50,31 @@ var buildFileRE = regexp.MustCompile(
 // android:networkSecurityConfig="@xml/network_security_config".
 var resourceRefRE = regexp.MustCompile(`@(xml|drawable|layout|raw|menu|anim)/([A-Za-z0-9_]+)`)
 
+// valueRefRE finds references to value resources, which are declared inside
+// res/values*/ files (<string name="x">) rather than as files of their own.
+//
+// mfva PR #43, 2026-10-09: a new res/xml/input_method_config.xml referenced
+// @string/input_method_subtype_label, which nothing declared, and AAPT failed
+// the build. @style is deliberately left out: themes such as
+// Theme.AppCompat.Light come from library dependencies, which are not on disk.
+var valueRefRE = regexp.MustCompile(`@(string|color|dimen|bool|integer|array|plurals)/([A-Za-z0-9_]+)`)
+
+// libraryValuePrefixes are name prefixes of value resources that ship in
+// common libraries (AppCompat, Material, Play services, ...). A reference to
+// one cannot be judged from this repository's files.
+var libraryValuePrefixes = []string{
+	"abc_", "design_", "mtrl_", "material_", "m3_", "notification_", "compat_",
+	"common_google_", "exo_", "com_facebook_", "fui_", "gcm_",
+}
+
+// valueTags lists the element names that declare each value resource kind.
+var valueTags = map[string]string{
+	"string": "string", "color": "color", "dimen": "dimen", "bool": "bool",
+	"integer": "integer", "array": "array|string-array|integer-array", "plurals": "plurals",
+}
+
+var valuesFileRE = regexp.MustCompile(`(^|/)res/values(-[^/]+)?/[^/]+\.xml$`)
+
 // buildConfigImportRE matches an import of BuildConfig, the one generated
 // symbol whose absence is both common and fatal: it exists only if the build
 // generates it for that exact package, and allsafe-android broke importing one
@@ -293,6 +318,9 @@ func skipQuoted(src string, i int) int {
 // remediation creates is on disk before the manifest's call (new files run
 // first), so it passes here; one that was never created does not.
 func checkResourceRefs(root, path, original, patched string) *patchViolation {
+	if v := checkValueRefs(root, path, original, patched); v != nil {
+		return v
+	}
 	for _, m := range introduced(resourceRefRE, original, patched) {
 		kind, name := m[1], m[2]
 		if resourceExists(root, kind, name) {
@@ -314,6 +342,76 @@ func checkResourceRefs(root, path, original, patched string) *patchViolation {
 //
 // Matching only the bare directory is what cost Fossify Calendar every one of
 // its fixes: the drawable it referenced was real, and sitting in drawable-nodpi.
+// checkValueRefs rejects a newly added reference to a value resource that no
+// res/values*/ file declares -- including the patched file itself, which may
+// add the declaration in the same edit.
+func checkValueRefs(root, path, original, patched string) *patchViolation {
+	for _, m := range introduced(valueRefRE, original, patched) {
+		kind, name := m[1], m[2]
+		if isLibraryValueName(name) || declaresValue(patched, kind, name) {
+			continue
+		}
+		// A color may also be a color state list file, res/color/<name>.xml.
+		if valueResourceExists(root, kind, name) || (kind == "color" && resourceExists(root, kind, name)) {
+			continue
+		}
+		return &patchViolation{
+			Rule: "missing-resource",
+			Detail: fmt.Sprintf("%s adds a reference to @%s/%s, but no res/values*/ file in this "+
+				"repository declares <%s name=\"%s\">, and nothing in this remediation creates it. "+
+				"Use a literal value or a resource that exists, or make no edit.",
+				path, kind, name, kind, name),
+		}
+	}
+	return nil
+}
+
+func isLibraryValueName(name string) bool {
+	for _, prefix := range libraryValuePrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// declaresValue reports whether the XML in src declares the value resource,
+// as <string name="x"> or as <item type="string" name="x">, in either
+// attribute order.
+func declaresValue(src, kind, name string) bool {
+	n := regexp.QuoteMeta(name)
+	k := regexp.QuoteMeta(kind)
+	patterns := []string{
+		`<(?:` + valueTags[kind] + `)\b[^>]*\bname\s*=\s*"` + n + `"`,
+		`<item\b[^>]*\btype\s*=\s*"` + k + `"[^>]*\bname\s*=\s*"` + n + `"`,
+		`<item\b[^>]*\bname\s*=\s*"` + n + `"[^>]*\btype\s*=\s*"` + k + `"`,
+	}
+	for _, p := range patterns {
+		if regexp.MustCompile(p).MatchString(src) {
+			return true
+		}
+	}
+	return false
+}
+
+// valueResourceExists reports whether any res/values*/ file declares it.
+func valueResourceExists(root, kind, name string) bool {
+	found := false
+	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() || found {
+			return nil
+		}
+		if !valuesFileRE.MatchString(filepath.ToSlash(p)) {
+			return nil
+		}
+		if b, readErr := os.ReadFile(p); readErr == nil && declaresValue(string(b), kind, name) {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
 func resourceDirRE(kind string) *regexp.Regexp {
 	return regexp.MustCompile(`(^|/)res/` + regexp.QuoteMeta(kind) + `(-[^/]+)?/`)
 }

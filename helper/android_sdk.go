@@ -59,11 +59,8 @@ func checkAndroidSymbols(root, path, original, patched string) *patchViolation {
 		return nil
 	}
 	refs := introduced(platformConstRE, original, patched)
-	if len(refs) == 0 {
-		return nil
-	}
-	imports := androidImports(patched)
-	if len(imports) == 0 {
+	classes := introducedPlatformImports(original, patched)
+	if len(refs) == 0 && len(classes) == 0 {
 		return nil
 	}
 	jar, ok := openAndroidJar(root)
@@ -71,7 +68,13 @@ func checkAndroidSymbols(root, path, original, patched string) *patchViolation {
 		return nil // abstention 1: no usable platform jar, no opinion
 	}
 	defer jar.close()
-
+	if v := jar.unknownClass(classes); v != nil {
+		return v
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	imports := androidImports(patched)
 	for _, m := range refs {
 		class, member := m[1], m[2]
 		fqcn, imported := imports[class]
@@ -90,6 +93,105 @@ func checkAndroidSymbols(root, path, original, patched string) *patchViolation {
 		}
 	}
 	return nil
+}
+
+// Packages under android.* that ship as libraries, not in the platform jar.
+// An import from one of them is the build's to judge, never the jar's.
+var libraryAndroidPackages = []string{
+	"android.support.", "android.arch.", "android.databinding.", "android.test.",
+}
+
+// introducedPlatformImports returns the android.* classes the patch newly
+// imports from the platform, wildcards and library packages left out.
+//
+// mfva PR #43, 2026-10-09: a new SecureInputMethodService imported
+// android.inputmethod.InputMethodService and android.inputmethod.EditorInfo.
+// Neither package exists; the classes live in android.inputmethodservice and
+// android.view.inputmethod.
+func introducedPlatformImports(original, patched string) []string {
+	var out []string
+	for _, m := range introduced(androidImportRE, original, patched) {
+		fq := m[1]
+		if strings.HasSuffix(fq, ".*") || isLibraryAndroidPackage(fq) {
+			continue
+		}
+		out = append(out, fq)
+	}
+	return out
+}
+
+func isLibraryAndroidPackage(fq string) bool {
+	for _, prefix := range libraryAndroidPackages {
+		if strings.HasPrefix(fq, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// platformSentinel is a class every real platform jar carries. A jar without
+// it is partial -- a stub, a test fixture -- and cannot prove a class absent.
+const platformSentinel = "android/app/Activity.class"
+
+// unknownClass reports every imported class the platform does not have, in
+// one violation: the fixer gets one retry, and a file with two wrong imports
+// (mfva PR #43 had InputMethodService and EditorInfo) must hear about both.
+//
+// ABSENCE PROVES EVERYTHING applies to classes as it does to members: a full
+// platform jar holds every android.* platform class, so a class file it lacks
+// does not exist. Only a full jar is trusted with that verdict.
+func (j *androidJar) unknownClass(classes []string) *patchViolation {
+	if len(classes) == 0 || j.entry(platformSentinel) == nil {
+		return nil
+	}
+	var problems []string
+	for _, fq := range classes {
+		if j.hasClass(fq) {
+			continue
+		}
+		problem := fq + " does not exist"
+		if real := j.classesNamed(fq[strings.LastIndex(fq, ".")+1:]); len(real) > 0 {
+			problem += " (the platform has " + strings.Join(real, ", ") + ")"
+		}
+		problems = append(problems, problem)
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return &patchViolation{
+		Rule: "unknown-android-class",
+		Detail: "No such class in the Android platform: " + strings.Join(problems, "; ") +
+			". Import the real class, or make no edit.",
+	}
+}
+
+// hasClass reports whether the jar carries the class, nested classes included:
+// android.view.WindowManager.LayoutParams is WindowManager$LayoutParams.class.
+func (j *androidJar) hasClass(fq string) bool {
+	parts := strings.Split(fq, ".")
+	for split := len(parts) - 1; split >= 1; split-- {
+		name := strings.Join(parts[:split], "/") + "/" + strings.Join(parts[split:], "$") + ".class"
+		if j.entry(name) != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// classesNamed returns the platform classes with this simple name, for the
+// retry: InputMethodService -> android.inputmethodservice.InputMethodService.
+func (j *androidJar) classesNamed(simple string) []string {
+	var out []string
+	suffix := "/" + simple + ".class"
+	for _, f := range j.zr.File {
+		if strings.HasPrefix(f.Name, "android/") && strings.HasSuffix(f.Name, suffix) {
+			out = append(out, strings.ReplaceAll(strings.TrimSuffix(f.Name, ".class"), "/", "."))
+			if len(out) == 3 {
+				break
+			}
+		}
+	}
+	return out
 }
 
 // androidImports maps each imported simple class name to its android.* FQCN.
