@@ -169,11 +169,26 @@ func TestKnoxIQService_StartAutofix(t *testing.T) {
 
 	mux.HandleFunc("/api/knoxiq/file/118/autofix", func(w http.ResponseWriter, r *http.Request) {
 		testMethod(t, r, "POST")
+		var got AutofixStart
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if got.Repo != "appknox/mfva" || got.BaseRef != "master" {
+			t.Errorf("start body = %+v", got)
+		}
+		if got.HeadRef != "test/pipeline_test_v2" || got.RiskThreshold != 1 {
+			t.Errorf("start body = %+v", got)
+		}
 		w.WriteHeader(http.StatusAccepted)
 		fmt.Fprint(w, `{"id":12,"file":118,"project":45,"status":"Pending","pr_url":null,"error_message":""}`)
 	})
 
-	got, _, err := client.KnoxIQ.StartAutofix(context.Background(), 118)
+	got, _, err := client.KnoxIQ.StartAutofix(context.Background(), 118, &AutofixStart{
+		Repo:          "appknox/mfva",
+		BaseRef:       "master",
+		HeadRef:       "test/pipeline_test_v2",
+		RiskThreshold: 1,
+	})
 	if err != nil {
 		t.Fatalf("StartAutofix returned error: %v", err)
 	}

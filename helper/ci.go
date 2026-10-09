@@ -3,8 +3,12 @@ package helper
 import (
 	"encoding/json"
 	"os"
+	"regexp"
 	"strings"
 )
+
+// commitSHARe matches the 40- or 64-character hex SHA the autofix API accepts.
+var commitSHARe = regexp.MustCompile(`(?i)^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
 // applyCIDefaults fills repo identity from the pipeline. Flags already set win.
 func applyCIDefaults(opts AutofixOptions) AutofixOptions {
@@ -25,6 +29,18 @@ func applyCIDefaults(opts AutofixOptions) AutofixOptions {
 		opts.Ref = opts.HeadRef
 	}
 	return opts
+}
+
+// commitFromCI is the commit the pipeline checked out. GitHub Actions sets
+// GITHUB_SHA without anything in the workflow file.
+func commitFromCI() string {
+	for _, key := range []string{"GITHUB_SHA", "CI_COMMIT_SHA", "CIRCLE_SHA1"} {
+		sha := strings.TrimSpace(os.Getenv(key))
+		if commitSHARe.MatchString(sha) {
+			return strings.ToLower(sha)
+		}
+	}
+	return ""
 }
 
 func repoFromCI() string {

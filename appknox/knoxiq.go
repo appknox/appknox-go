@@ -175,11 +175,21 @@ type AutofixRequest struct {
 	UpdatedOn    *time.Time `json:"updated_on,omitempty"`
 }
 
+// AutofixStart is the checkout the CLI is fixing. repo and base_ref are
+// required by the API; the CLI fills them from the CI environment.
+type AutofixStart struct {
+	Repo          string `json:"repo"`
+	BaseRef       string `json:"base_ref"`
+	HeadRef       string `json:"head_ref,omitempty"`
+	CommitSHA     string `json:"commit_sha,omitempty"`
+	RiskThreshold int    `json:"risk_threshold,omitempty"`
+}
+
 // StartAutofix registers an autofix job for the file (PENDING) and enqueues
 // it. The CLI waits until Processing, then locates, fixes, and records the PR.
-func (s *KnoxIQService) StartAutofix(ctx context.Context, fileID int) (*AutofixRequest, *Response, error) {
+func (s *KnoxIQService) StartAutofix(ctx context.Context, fileID int, start *AutofixStart) (*AutofixRequest, *Response, error) {
 	u := fmt.Sprintf("api/knoxiq/file/%d/autofix", fileID)
-	req, err := s.client.NewRequest("POST", u, nil)
+	req, err := s.client.NewRequest("POST", u, start)
 	if err != nil {
 		return nil, nil, err
 	}

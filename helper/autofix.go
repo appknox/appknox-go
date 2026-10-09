@@ -135,11 +135,14 @@ func ProcessAutofix(opts AutofixOptions) {
 		}
 		return
 	}
+	// CI env (GITHUB_REPOSITORY, GITHUB_REF, …) supplies repo and base ref.
+	// The start call needs them, and it runs before runAutofix.
+	opts = applyCIDefaults(opts)
 	// --file-id registers the job and waits until Processing, then locates,
 	// fixes, and opens the PR. Waiting for Processed here deadlocks: that
 	// status is written only after this CLI records the PR.
 	if opts.FileID > 0 && !opts.DryRun && !opts.LocateOnly {
-		done, err := processAutofixWait(context.Background(), opts.FileID)
+		done, err := processAutofixWait(context.Background(), opts)
 		if err != nil {
 			PrintError(err)
 			os.Exit(1)
@@ -191,7 +194,8 @@ func autofixExit(err error) (nothingToFix, fail bool) {
 	return false, err != nil
 }
 
-func processAutofixWait(ctx context.Context, fileID int) (alreadyDone bool, err error) {
+func processAutofixWait(ctx context.Context, opts AutofixOptions) (alreadyDone bool, err error) {
+	fileID := opts.FileID
 	ctx, cancel := context.WithTimeout(ctx, autofixHardLimit)
 	defer cancel()
 	if err := checkKnoxIQReady(ctx, fileID); err != nil {
@@ -200,7 +204,7 @@ func processAutofixWait(ctx context.Context, fileID int) (alreadyDone bool, err 
 		}
 		return false, err
 	}
-	req, err := awaitAutofix(ctx, getClient(), fileID)
+	req, err := awaitAutofix(ctx, getClient(), fileID, autofixStart(opts))
 	if err != nil {
 		return false, err
 	}
@@ -211,11 +215,28 @@ func processAutofixWait(ctx context.Context, fileID int) (alreadyDone bool, err 
 	return false, nil
 }
 
-func awaitAutofix(ctx context.Context, client *appknox.Client, fileID int) (*appknox.AutofixRequest, error) {
+// autofixStart is the body of POST /autofix. repo and base_ref come from the
+// checkout (flags, or GITHUB_REPOSITORY / GITHUB_REF). An unset risk threshold
+// is low, matching the default runAutofix applies before it selects findings.
+func autofixStart(opts AutofixOptions) *appknox.AutofixStart {
+	threshold := opts.RiskThreshold
+	if threshold <= 0 {
+		threshold = 1
+	}
+	return &appknox.AutofixStart{
+		Repo:          opts.Repo,
+		BaseRef:       opts.Ref,
+		HeadRef:       opts.HeadRef,
+		CommitSHA:     commitFromCI(),
+		RiskThreshold: threshold,
+	}
+}
+
+func awaitAutofix(ctx context.Context, client *appknox.Client, fileID int, start *appknox.AutofixStart) (*appknox.AutofixRequest, error) {
 	if client == nil {
 		return nil, fmt.Errorf("autofix start failed: missing Appknox client")
 	}
-	started, _, err := client.KnoxIQ.StartAutofix(ctx, fileID)
+	started, _, err := client.KnoxIQ.StartAutofix(ctx, fileID, start)
 	if err != nil {
 		if isAutofixTimeout(ctx, err) {
 			reportAutofixTimeout(client, fileID)
