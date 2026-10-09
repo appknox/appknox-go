@@ -99,6 +99,9 @@ func verifyPatch(root, path, original, patched string) *patchViolation {
 	if v := checkBuildConfigImport(original, patched); v != nil {
 		return v
 	}
+	if v := checkAndroidLibraryImports(root, path, original, patched); v != nil {
+		return v
+	}
 	if v := checkSiblingManifests(root, path, original, patched); v != nil {
 		return v
 	}

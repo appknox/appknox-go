@@ -32,6 +32,9 @@ type buildProfile struct {
 	AGPMajor    int  // 0 when unreadable
 	CompileSDK  int  // 0 when unreadable
 	BuildConfig bool // some module enables buildFeatures.buildConfig
+	// Library is the Android library family, Support Library or AndroidX;
+	// libUnknown unless the build files and sources agree on one.
+	Library androidLibrary
 	// buildConfigKnown separates "checked, and it is off" from "not checked".
 	// Only the first is safe to state as a fact.
 	buildConfigKnown bool
@@ -52,6 +55,9 @@ func describeBuild(root string) buildProfile {
 	// Android is inferred from the plugin or a compileSdk, never from Gradle
 	// alone: plenty of Gradle projects are plain JVM.
 	p.Android = p.AGPMajor > 0 || p.CompileSDK > 0
+	if p.Android {
+		p.Library = detectAndroidLibrary(root)
+	}
 	if p.BuildSystem == "Gradle" {
 		p.BuildConfig = buildConfigEnabled(root)
 		p.buildConfigKnown = true
@@ -93,6 +99,9 @@ func (p buildProfile) String() string {
 	}
 	if p.CompileSDK > 0 {
 		lines = append(lines, fmt.Sprintf("compileSdk: %d", p.CompileSDK))
+	}
+	if line := libraryProfileLine(p.Library); line != "" {
+		lines = append(lines, line)
 	}
 	// The line that earns this whole profile, stated as a consequence rather
 	// than as a setting the fixer would have to reason from.
