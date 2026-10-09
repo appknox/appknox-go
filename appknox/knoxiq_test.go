@@ -197,6 +197,32 @@ func TestKnoxIQService_StartAutofix(t *testing.T) {
 	}
 }
 
+func TestKnoxIQService_SubmitAutofixToolResults(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/12/tool_results", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "POST")
+		var got AutofixToolResults
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if got.Step != 1 || len(got.Results) != 1 || got.Results[0].ID != "t1" || got.Results[0].Content != "class A {}" {
+			t.Errorf("tool results = %+v", got)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprint(w, `{"detail":"Accepted."}`)
+	})
+
+	_, err := client.KnoxIQ.SubmitAutofixToolResults(context.Background(), 118, 12, &AutofixToolResults{
+		Step:    1,
+		Results: []AutofixToolResult{{ID: "t1", Content: "class A {}"}},
+	})
+	if err != nil {
+		t.Fatalf("SubmitAutofixToolResults returned error: %v", err)
+	}
+}
+
 func TestKnoxIQService_GetAutofixStatus(t *testing.T) {
 	client, mux, _, teardown := setup()
 	defer teardown()

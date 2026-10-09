@@ -582,7 +582,7 @@ func TestAutofixStart_WorkflowDispatchNeedsNoFlags(t *testing.T) {
 }
 
 func TestAwaitAutofix_NilClient(t *testing.T) {
-	_, err := awaitAutofix(context.Background(), nil, 118, testAutofixStart())
+	_, _, err := awaitAutofix(context.Background(), nil, 118, testAutofixStart(), "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "missing Appknox client")
 }
@@ -597,7 +597,7 @@ func TestAwaitAutofix_ProcessedOnStart(t *testing.T) {
 			"pr_url": "https://github.com/appknox/mfva/pull/16",
 		})
 	})
-	req, err := awaitAutofix(context.Background(), client, 118, testAutofixStart())
+	req, _, err := awaitAutofix(context.Background(), client, 118, testAutofixStart(), "")
 	require.NoError(t, err)
 	require.Equal(t, "Processed", req.Status)
 	require.Equal(t, "https://github.com/appknox/mfva/pull/16", req.PRURL)
@@ -616,7 +616,7 @@ func TestAwaitAutofix_ProcessingOnStart(t *testing.T) {
 			"id": 12, "file": 118, "project": 45, "status": "Processing",
 		})
 	})
-	req, err := awaitAutofix(context.Background(), client, 118, testAutofixStart())
+	req, _, err := awaitAutofix(context.Background(), client, 118, testAutofixStart(), "")
 	require.NoError(t, err)
 	require.Equal(t, "Processing", req.Status)
 }
@@ -647,10 +647,61 @@ func TestAwaitAutofix_PollsUntilProcessing(t *testing.T) {
 		})
 	})
 	client := testAppknoxClient(t, mux.ServeHTTP)
-	req, err := awaitAutofix(context.Background(), client, 118, testAutofixStart())
+	req, relayed, err := awaitAutofix(context.Background(), client, 118, testAutofixStart(), "")
 	require.NoError(t, err)
+	require.False(t, relayed)
 	require.Equal(t, "Processing", req.Status)
 	require.GreaterOrEqual(t, n, 2)
+}
+
+func TestAwaitAutofix_AwaitingCLIRunsToolCalls(t *testing.T) {
+	prevSleep := autofixSleep
+	t.Cleanup(func() { autofixSleep = prevSleep })
+	autofixSleep = func(time.Duration) {}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "app", "A.java"), []byte("class A {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var posted appknox.AutofixToolResults
+	polls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/knoxiq/file/118/autofix", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 12, "file": 118, "status": "Awaiting CLI", "step": 1,
+			"tool_calls": []map[string]any{{
+				"id": "t1", "name": "read_file", "args": map[string]string{"path": "app/A.java"},
+			}},
+		})
+	})
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/12/tool_results", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&posted))
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"detail":"Accepted."}`))
+	})
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/status", func(w http.ResponseWriter, r *http.Request) {
+		polls++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 12, "file": 118, "status": "Ready", "step": 1, "tool_calls": []any{},
+		})
+	})
+	client := testAppknoxClient(t, mux.ServeHTTP)
+	req, relayed, err := awaitAutofix(context.Background(), client, 118, testAutofixStart(), root)
+	require.NoError(t, err)
+	require.True(t, relayed)
+	require.Equal(t, "Ready", req.Status)
+	require.Equal(t, 1, posted.Step)
+	require.Len(t, posted.Results, 1)
+	require.Equal(t, "t1", posted.Results[0].ID)
+	require.False(t, posted.Results[0].IsError)
+	require.Equal(t, "class A {}\n", posted.Results[0].Content)
+	require.GreaterOrEqual(t, polls, 1)
 }
 
 func TestAwaitAutofix_Errored(t *testing.T) {
@@ -660,7 +711,7 @@ func TestAwaitAutofix_Errored(t *testing.T) {
 			"error_message": "Sherrinford is unavailable",
 		})
 	})
-	_, err := awaitAutofix(context.Background(), client, 118, testAutofixStart())
+	_, _, err := awaitAutofix(context.Background(), client, 118, testAutofixStart(), "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "Sherrinford is unavailable")
 }
@@ -684,7 +735,7 @@ func TestAwaitAutofix_Timeout(t *testing.T) {
 	client := testAppknoxClient(t, mux.ServeHTTP)
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	_, err := awaitAutofix(ctx, client, 118, testAutofixStart())
+	_, _, err := awaitAutofix(ctx, client, 118, testAutofixStart(), "")
 	require.EqualError(t, err, "autofix timed out for file 118 after 1h0m0s")
 	require.True(t, marked)
 }
@@ -695,7 +746,7 @@ func TestAwaitAutofix_AlreadyTimedOut(t *testing.T) {
 			"id": 12, "file": 118, "project": 45, "status": "Timed Out",
 		})
 	})
-	_, err := awaitAutofix(context.Background(), client, 118, testAutofixStart())
+	_, _, err := awaitAutofix(context.Background(), client, 118, testAutofixStart(), "")
 	require.EqualError(t, err, "autofix timed out for file 118 after 1h0m0s")
 }
 
@@ -704,7 +755,7 @@ func TestAwaitAutofix_StartError(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{"detail": "denied"})
 	})
-	_, err := awaitAutofix(context.Background(), client, 118, testAutofixStart())
+	_, _, err := awaitAutofix(context.Background(), client, 118, testAutofixStart(), "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "autofix start failed")
 }

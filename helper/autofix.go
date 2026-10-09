@@ -204,11 +204,13 @@ func processAutofixWait(ctx context.Context, opts AutofixOptions) (alreadyDone b
 		}
 		return false, err
 	}
-	req, err := awaitAutofix(ctx, getClient(), fileID, autofixStart(opts))
+	req, relayed, err := awaitAutofix(ctx, getClient(), fileID, autofixStart(opts), opts.RepoPath)
 	if err != nil {
 		return false, err
 	}
-	if req != nil && req.Status == appknox.AutofixStatusProcessed {
+	// Processed means the PR is already recorded. Ready means this run answered
+	// the worker's tool calls and the server finished the job.
+	if req != nil && (req.Status == appknox.AutofixStatusProcessed || (relayed && req.Status == appknox.AutofixStatusReady)) {
 		printJobSummary(req.Status, req.PRURL, false, true)
 		return true, nil
 	}
@@ -232,65 +234,108 @@ func autofixStart(opts AutofixOptions) *appknox.AutofixStart {
 	}
 }
 
-func awaitAutofix(ctx context.Context, client *appknox.Client, fileID int, start *appknox.AutofixStart) (*appknox.AutofixRequest, error) {
+func awaitAutofix(ctx context.Context, client *appknox.Client, fileID int, start *appknox.AutofixStart, repoRoot string) (*appknox.AutofixRequest, bool, error) {
 	if client == nil {
-		return nil, fmt.Errorf("autofix start failed: missing Appknox client")
+		return nil, false, fmt.Errorf("autofix start failed: missing Appknox client")
 	}
 	started, _, err := client.KnoxIQ.StartAutofix(ctx, fileID, start)
 	if err != nil {
 		if isAutofixTimeout(ctx, err) {
 			reportAutofixTimeout(client, fileID)
-			return nil, autofixTimeoutError(fileID)
+			return nil, false, autofixTimeoutError(fileID)
 		}
-		return nil, fmt.Errorf("autofix start failed: %w", err)
+		return nil, false, fmt.Errorf("autofix start failed: %w", err)
 	}
 	fmt.Println("\nAutofix status:")
-	return pollAutofix(ctx, client, fileID, started)
+	return pollAutofix(ctx, client, fileID, started, repoRoot)
 }
 
-func pollAutofix(ctx context.Context, client *appknox.Client, fileID int, current *appknox.AutofixRequest) (*appknox.AutofixRequest, error) {
+func pollAutofix(ctx context.Context, client *appknox.Client, fileID int, current *appknox.AutofixRequest, repoRoot string) (*appknox.AutofixRequest, bool, error) {
 	last := ""
+	answeredStep := 0
+	relayed := false
 	for {
 		if current == nil {
-			return nil, fmt.Errorf("autofix status missing for file %d", fileID)
+			return nil, relayed, fmt.Errorf("autofix status missing for file %d", fileID)
 		}
 		if current.Status != last {
 			fmt.Printf("  %s\n", current.Status)
 			last = current.Status
 		}
 		switch current.Status {
+		case appknox.AutofixStatusAwaitingCLI:
+			relayed = true
+			if err := submitAutofixCalls(ctx, client, fileID, current, repoRoot, &answeredStep); err != nil {
+				return nil, true, err
+			}
 		case appknox.AutofixStatusProcessing:
-			return current, nil
-		case appknox.AutofixStatusProcessed:
-			return current, nil
+			// A server-driven job passes through Processing between steps.
+			// Processing with no tool calls means this CLI does the fix itself.
+			if !relayed {
+				return current, false, nil
+			}
+		case appknox.AutofixStatusReady, appknox.AutofixStatusProcessed:
+			return current, relayed, nil
 		case appknox.AutofixStatusErrored:
 			msg := current.ErrorMessage
 			if msg == "" {
 				msg = "autofix failed"
 			}
-			return nil, fmt.Errorf("autofix errored for file %d: %s", fileID, msg)
+			return nil, relayed, fmt.Errorf("autofix errored for file %d: %s", fileID, msg)
 		case appknox.AutofixStatusTimedOut:
-			return nil, autofixTimeoutError(fileID)
+			return nil, relayed, autofixTimeoutError(fileID)
 		}
 		if err := ctx.Err(); err != nil {
 			reportAutofixTimeout(client, fileID)
-			return nil, autofixTimeoutError(fileID)
+			return nil, relayed, autofixTimeoutError(fileID)
 		}
 		autofixSleep(autofixPollInterval)
 		if err := ctx.Err(); err != nil {
 			reportAutofixTimeout(client, fileID)
-			return nil, autofixTimeoutError(fileID)
+			return nil, relayed, autofixTimeoutError(fileID)
 		}
 		next, _, err := client.KnoxIQ.GetAutofixStatus(ctx, fileID)
 		if err != nil {
 			if isAutofixTimeout(ctx, err) {
 				reportAutofixTimeout(client, fileID)
-				return nil, autofixTimeoutError(fileID)
+				return nil, relayed, autofixTimeoutError(fileID)
 			}
-			return nil, fmt.Errorf("autofix status check failed: %w", err)
+			return nil, relayed, fmt.Errorf("autofix status check failed: %w", err)
 		}
 		current = next
 	}
+}
+
+// submitAutofixCalls runs the step's tool calls on the checkout and posts the
+// results. An empty list, or a step already answered, just waits for the next poll.
+func submitAutofixCalls(ctx context.Context, client *appknox.Client, fileID int, job *appknox.AutofixRequest, repoRoot string, answeredStep *int) error {
+	if job == nil || len(job.ToolCalls) == 0 || job.Step == 0 || job.Step == *answeredStep {
+		return nil
+	}
+	if job.ID == 0 {
+		return fmt.Errorf("autofix tool calls for file %d have no request id", fileID)
+	}
+	if repoRoot == "" {
+		repoRoot = "."
+	}
+	results := make([]appknox.AutofixToolResult, 0, len(job.ToolCalls))
+	for _, call := range job.ToolCalls {
+		content, err := agent.RunCheckoutCall(repoRoot, call.Name, call.Args)
+		res := appknox.AutofixToolResult{ID: call.ID, Content: content}
+		if err != nil {
+			res = appknox.AutofixToolResult{ID: call.ID, Content: err.Error(), IsError: true}
+		}
+		results = append(results, res)
+	}
+	if _, err := client.KnoxIQ.SubmitAutofixToolResults(ctx, fileID, job.ID, &appknox.AutofixToolResults{
+		Step:    job.Step,
+		Results: results,
+	}); err != nil {
+		return fmt.Errorf("autofix tool results for file %d step %d: %w", fileID, job.Step, err)
+	}
+	*answeredStep = job.Step
+	fmt.Printf("  ran %d tool call(s) for step %d\n", len(results), job.Step)
+	return nil
 }
 
 func isAutofixTimeout(ctx context.Context, err error) bool {

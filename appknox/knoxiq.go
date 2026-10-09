@@ -156,23 +156,48 @@ func (s *KnoxIQService) CreateAutofixPR(ctx context.Context, fileID int, pr *Aut
 
 // Autofix job status labels from GET /api/knoxiq/file/{id}/autofix/status/.
 const (
-	AutofixStatusPending    = "Pending"
-	AutofixStatusProcessing = "Processing"
-	AutofixStatusProcessed  = "Processed"
-	AutofixStatusErrored    = "Errored"
-	AutofixStatusTimedOut   = "Timed Out"
+	AutofixStatusPending     = "Pending"
+	AutofixStatusProcessing  = "Processing"
+	AutofixStatusAwaitingCLI = "Awaiting CLI"
+	AutofixStatusReady       = "Ready"
+	AutofixStatusProcessed   = "Processed"
+	AutofixStatusErrored     = "Errored"
+	AutofixStatusTimedOut    = "Timed Out"
 )
+
+// AutofixToolCall is one call the worker asks the CLI to run on its checkout.
+type AutofixToolCall struct {
+	ID   string                 `json:"id"`
+	Name string                 `json:"name"`
+	Args map[string]interface{} `json:"args"`
+}
+
+// AutofixToolResult is the CLI's answer to one AutofixToolCall.
+type AutofixToolResult struct {
+	ID      string                 `json:"id"`
+	Content string                 `json:"content"`
+	IsError bool                   `json:"is_error"`
+	Data    map[string]interface{} `json:"data,omitempty"`
+}
+
+// AutofixToolResults is the body of POST .../autofix/{id}/tool_results/.
+type AutofixToolResults struct {
+	Step    int                 `json:"step"`
+	Results []AutofixToolResult `json:"results"`
+}
 
 // AutofixRequest is one autofix job for a scanned file.
 type AutofixRequest struct {
-	ID           int        `json:"id,omitempty"`
-	File         int        `json:"file,omitempty"`
-	Project      int        `json:"project,omitempty"`
-	Status       string     `json:"status"`
-	PRURL        string     `json:"pr_url"`
-	ErrorMessage string     `json:"error_message,omitempty"`
-	CreatedOn    *time.Time `json:"created_on,omitempty"`
-	UpdatedOn    *time.Time `json:"updated_on,omitempty"`
+	ID           int               `json:"id,omitempty"`
+	File         int               `json:"file,omitempty"`
+	Project      int               `json:"project,omitempty"`
+	Status       string            `json:"status"`
+	Step         int               `json:"step"`
+	ToolCalls    []AutofixToolCall `json:"tool_calls"`
+	PRURL        string            `json:"pr_url"`
+	ErrorMessage string            `json:"error_message,omitempty"`
+	CreatedOn    *time.Time        `json:"created_on,omitempty"`
+	UpdatedOn    *time.Time        `json:"updated_on,omitempty"`
 }
 
 // AutofixStart is the checkout the CLI is fixing. repo and base_ref are
@@ -196,6 +221,17 @@ func (s *KnoxIQService) StartAutofix(ctx context.Context, fileID int, start *Aut
 	var out AutofixRequest
 	resp, err := s.client.Do(ctx, req, &out)
 	return &out, resp, err
+}
+
+// SubmitAutofixToolResults posts the checkout's answer to the step the worker
+// is waiting on. The job stays Awaiting CLI until these results arrive.
+func (s *KnoxIQService) SubmitAutofixToolResults(ctx context.Context, fileID, requestID int, results *AutofixToolResults) (*Response, error) {
+	u := fmt.Sprintf("api/knoxiq/file/%d/autofix/%d/tool_results", fileID, requestID)
+	req, err := s.client.NewRequest("POST", u, results)
+	if err != nil {
+		return nil, err
+	}
+	return s.client.Do(ctx, req, nil)
 }
 
 // GetAutofixStatus returns the latest autofix job status for the file.
