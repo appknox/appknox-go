@@ -322,6 +322,12 @@ appknox cicheck 12345 --risk-threshold high --include-needs-review
 appknox cicheck 12345 --exploit-likelihood-threshold high --knoxiq-timeout 45
 ```
 
+In health-score mode, `cicheck` waits for triage the same way and gates on the health score
+recalculated from it (AEIS-adjusted), printing the score from before triage for reference. If
+triage doesn't complete, or completes without the score being recalculated within 30 seconds,
+it falls back to the current score with a warning. `--include-needs-review` has no effect on the
+health score, which is calculated server-side.
+
 `sarif` decorates results with AEIS score and exploit likelihood when KnoxIQ triage is available,
 and excludes needs-review findings unless `include-needs-review` is set:
 

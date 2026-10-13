@@ -124,6 +124,25 @@ type HealthScoreOptions struct {
 	EventType string `url:"event_type,omitempty"`
 }
 
+// HealthScoreAuditEntry is one recalculation in a file's health score history.
+type HealthScoreAuditEntry struct {
+	EventType string `json:"event_type"`
+	KnoxIQRan bool   `json:"knoxiq_ran"`
+	Score     int    `json:"score"`
+}
+
+// HealthScoreAuditCurrent is the file's current health score.
+type HealthScoreAuditCurrent struct {
+	Score int `json:"score"`
+}
+
+// HealthScoreAudit represents the response returned by the API endpoint
+// /api/v3/files/{id}/health_score_audit.
+type HealthScoreAudit struct {
+	CurrentScore *HealthScoreAuditCurrent `json:"current_score"`
+	AuditTrail   []HealthScoreAuditEntry  `json:"audit_trail"`
+}
+
 // FileListOptions specifies the optional parameters to the
 // FilesService.List method.
 type FileListOptions struct {
@@ -195,4 +214,16 @@ func (s *FilesService) GetHealthScore(ctx context.Context, fileID int, opt *Heal
 	var healthScore HealthScore
 	resp, err := s.client.Do(ctx, req, &healthScore)
 	return &healthScore, resp, err
+}
+
+// GetHealthScoreAudit fetches the health score history for the given file.
+func (s *FilesService) GetHealthScoreAudit(ctx context.Context, fileID int) (*HealthScoreAudit, *Response, error) {
+	u := fmt.Sprintf("api/v3/files/%v/health_score_audit", fileID)
+	req, err := s.client.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var audit HealthScoreAudit
+	resp, err := s.client.Do(ctx, req, &audit)
+	return &audit, resp, err
 }

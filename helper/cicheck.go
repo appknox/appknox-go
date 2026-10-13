@@ -204,6 +204,20 @@ func ProcessHealthScoreCiCheck(fileID int, policy CiPolicy) {
 	ctx := context.Background()
 	client := getClient()
 
+	triage := awaitKnoxIQHealthScore(ctx, client, fileID, policy.Budget)
+	score := triage.score
+	if !triage.scoreReady {
+		score = fetchHealthScore(ctx, client, fileID)
+	}
+
+	likelihoodCount := 0
+	if policy.LikelihoodThreshold >= 0 {
+		likelihoodCount = countLikelihoodOffenders(ctx, client, fileID, policy, triage)
+	}
+	decideHealthScore(fileID, policy, score, likelihoodCount, triage.scoreReady)
+}
+
+func fetchHealthScore(ctx context.Context, client *appknox.Client, fileID int) int {
 	options := &appknox.HealthScoreOptions{
 		EventType: string(enums.EventTypeSASTCompleted),
 	}
@@ -212,36 +226,65 @@ func ProcessHealthScoreCiCheck(fileID int, policy CiPolicy) {
 		PrintError(err)
 		os.Exit(1)
 	}
-
-	likelihoodCount := 0
-	if policy.LikelihoodThreshold >= 0 {
-		likelihoodCount = countLikelihoodOffenders(ctx, client, fileID, policy)
-	}
-	decideHealthScore(fileID, policy, healthScoreResponse.HealthScore, likelihoodCount)
+	return healthScoreResponse.HealthScore
 }
 
 // decideHealthScore prints the health-score (and optional likelihood) verdict
 // and exits non-zero when the score is below threshold or the likelihood gate
 // is breached.
-func decideHealthScore(fileID int, policy CiPolicy, score, likelihoodCount int) {
-	msg := fmt.Sprintf("\nCheck file ID %d on appknox dashboard for more details.\n", fileID)
-	healthFail := score < policy.HealthScoreThreshold
-	likelihoodFail := policy.LikelihoodThreshold >= 0 && likelihoodCount > 0
-	if healthFail {
-		PrintError(fmt.Sprintf("Health score %d is below the threshold %d.",
-			score, policy.HealthScoreThreshold))
-	} else {
-		fmt.Printf("\nHealth score %d is greater than or equal to threshold %d.\n",
-			score, policy.HealthScoreThreshold)
+func decideHealthScore(fileID int, policy CiPolicy, score, likelihoodCount int, afterTriage bool) {
+	verdict := buildHealthScoreVerdict(policy, score, likelihoodCount, afterTriage)
+	for _, line := range verdict.stdout {
+		fmt.Print(line)
 	}
-	if likelihoodFail {
-		PrintError(fmt.Sprintf("Found %d vulnerabilities with exploit likelihood >= %s",
-			likelihoodCount, enums.ExploitabilityType(policy.LikelihoodThreshold)))
+	for _, line := range verdict.stderr {
+		PrintError(line)
 	}
-	if healthFail || likelihoodFail {
-		fmt.Print(msg)
+	fmt.Printf("\nCheck file ID %d on appknox dashboard for more details.\n", fileID)
+	if verdict.failed {
 		os.Exit(1)
 	}
-	fmt.Println("Build passed.")
-	fmt.Print(msg)
+}
+
+type healthScoreVerdict struct {
+	stdout []string
+	stderr []string
+	failed bool
+}
+
+func buildHealthScoreVerdict(policy CiPolicy, score, likelihoodCount int, afterTriage bool) healthScoreVerdict {
+	label := ""
+	if afterTriage {
+		label = " (after KnoxIQ triage)"
+	}
+	threshold := policy.HealthScoreThreshold
+	healthFail := score < threshold
+	likelihoodFail := policy.LikelihoodThreshold >= 0 && likelihoodCount > 0
+
+	var verdict healthScoreVerdict
+	switch {
+	case !healthFail && !likelihoodFail:
+		verdict.stdout = append(verdict.stdout, fmt.Sprintf(
+			"\nHealth score %d%s is greater than or equal to threshold %d. Build passed.\n",
+			score, label, threshold))
+		return verdict
+	case healthFail && !likelihoodFail:
+		verdict.stderr = append(verdict.stderr, fmt.Sprintf(
+			"Health score %d%s is below the threshold %d. Build failed.\n",
+			score, label, threshold))
+	default:
+		if healthFail {
+			verdict.stderr = append(verdict.stderr, fmt.Sprintf(
+				"Health score %d%s is below the threshold %d.", score, label, threshold))
+		} else {
+			verdict.stdout = append(verdict.stdout, fmt.Sprintf(
+				"\nHealth score %d%s is greater than or equal to threshold %d.\n", score, label, threshold))
+		}
+		verdict.stderr = append(verdict.stderr,
+			fmt.Sprintf("Found %d vulnerabilities with exploit likelihood >= %s",
+				likelihoodCount, enums.ExploitabilityType(policy.LikelihoodThreshold)),
+			"Build failed.")
+	}
+	verdict.failed = true
+	return verdict
 }
