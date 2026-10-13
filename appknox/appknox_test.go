@@ -214,6 +214,54 @@ func TestNewRequest(t *testing.T) {
 	}
 }
 
+func TestNewRequest_authorizationHeaderForPAT(t *testing.T) {
+	c, err := NewClient("some-pat-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := c.NewRequest("GET", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := req.Header.Get("Authorization"), "Token some-pat-token"; got != want {
+		t.Errorf("Authorization header = %v, want %v", got, want)
+	}
+}
+
+func TestNewClientWithServiceAccount(t *testing.T) {
+	c, err := NewClientWithServiceAccount("some-access-key-id", "some-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := c.NewRequest("GET", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := req.Header.Get("Authorization"), "Bearer some-access-key-id:some-secret"; got != want {
+		t.Errorf("Authorization header = %v, want %v", got, want)
+	}
+}
+
+func TestNewClientWithServiceAccount_rejectsEmptyCredentials(t *testing.T) {
+	tests := []struct {
+		name            string
+		accessKeyID     string
+		accessKeySecret string
+	}{
+		{"empty access key id", "", "some-secret"},
+		{"empty access key secret", "some-access-key-id", ""},
+		{"both empty", "", ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewClientWithServiceAccount(test.accessKeyID, test.accessKeySecret)
+			if err == nil {
+				t.Error("expected an error, got nil")
+			}
+		})
+	}
+}
+
 func TestNewRequest_invalidJSON(t *testing.T) {
 	c, err := NewClient("token")
 
