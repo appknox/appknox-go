@@ -19,6 +19,9 @@ import (
 const (
 	autofixMessagesPath     = "/api/knoxiq/autofix/"
 	anthropicMessagesSuffix = "/v1/messages"
+	// Mycroft's autofix proxy is a DRF view whose default renderer is JSON:API.
+	// The SDK sends Accept: application/json, which that view answers with 406.
+	autofixAccept = "application/vnd.api+json"
 )
 
 // autofixBaseURL is Mycroft's KnoxIQ autofix proxy on the same API host.
@@ -44,6 +47,7 @@ func rewriteAutofixMessages(req *http.Request, next option.MiddlewareNext) (*htt
 		req.Header.Set("Authorization", "Token "+key)
 		req.Header.Del("X-Api-Key")
 	}
+	req.Header.Set("Accept", autofixAccept)
 	return next(req)
 }
 

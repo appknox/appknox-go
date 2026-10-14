@@ -29,17 +29,19 @@ func TestRewriteAutofixMessages_StripsSDKMessagesPath(t *testing.T) {
 		require.Equal(t, "beta=true", r.URL.RawQuery)
 		require.Equal(t, "Token pat", r.Header.Get("Authorization"))
 		require.Empty(t, r.Header.Get("X-Api-Key"))
+		require.Equal(t, autofixAccept, r.Header.Get("Accept"))
 		return &http.Response{StatusCode: http.StatusOK}, nil
 	})
 	require.NoError(t, err)
 }
 
 func TestNewAutofixSDK_PostsToKnoxIQAutofix(t *testing.T) {
-	var gotPath, gotAuth, gotAPIKey string
+	var gotPath, gotAuth, gotAPIKey, gotAccept string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
 		gotAPIKey = r.Header.Get("X-Api-Key")
+		gotAccept = r.Header.Get("Accept")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		fmt.Fprint(w, `{"type":"error","error":{"type":"authentication_error","message":"x"}}`)
@@ -60,4 +62,5 @@ func TestNewAutofixSDK_PostsToKnoxIQAutofix(t *testing.T) {
 	require.Equal(t, "/api/knoxiq/autofix/", gotPath)
 	require.Equal(t, "Token pat", gotAuth)
 	require.Empty(t, gotAPIKey)
+	require.Equal(t, "application/vnd.api+json", gotAccept)
 }
