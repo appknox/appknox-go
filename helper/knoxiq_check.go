@@ -39,7 +39,7 @@ func knoxIQAvailable(
 		}
 		return enums.KnoxIQStatusDisabled, false
 	}
-	status := enums.KnoxIQScanStatusType(scanStatus.SastStatus)
+	status := enums.KnoxIQScanStatusType(scanStatus.SASTStatus)
 	switch status {
 	case enums.KnoxIQStatusPending,
 		enums.KnoxIQStatusRunning,
@@ -133,7 +133,7 @@ func waitForKnoxIQ(ctx context.Context, client *appknox.Client, fileID int, dead
 			PrintError(err)
 			return false
 		}
-		status := enums.KnoxIQScanStatusType(scanStatus.SastStatus)
+		status := enums.KnoxIQScanStatusType(scanStatus.SASTStatus)
 		if status != lastStatus {
 			fmt.Printf("  %s\n", status)
 			lastStatus = status
