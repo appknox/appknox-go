@@ -55,6 +55,18 @@ type AutofixOptions struct {
 	// then the default. Deliberately one-directional: a cheap model here cannot
 	// weaken the shipped patch, because the fix turn never reads this field.
 	LocateModel string
+
+	// JobID is the Mycroft autofix job this run drives. Set after start.
+	JobID int
+	// Units are the findings the worker published. Nil means this run still
+	// resolves targets from KnoxIQ itself (the manual --finding path).
+	Units *[]appknox.AutofixUnit
+	// PRTitle and PRBody are the text Mycroft returned from complete.
+	PRTitle string
+	PRBody  string
+	// jobDone is set once complete has been accepted, so a later failure
+	// does not mark the job timed out.
+	jobDone *bool
 }
 
 // autofixDeps are the injectable collaborators (seams for cost-free tests).
@@ -135,11 +147,15 @@ func ProcessAutofix(opts AutofixOptions) {
 		}
 		return
 	}
-	// --file-id registers the job and waits until Processing, then locates,
-	// fixes, and opens the PR. Waiting for Processed here deadlocks: that
-	// status is written only after this CLI records the PR.
-	if opts.FileID > 0 && !opts.DryRun && !opts.LocateOnly {
-		done, err := processAutofixWait(context.Background(), opts.FileID)
+	// --file-id registers the job and waits until the worker has published
+	// units, then locates and fixes. Dry-run and locate-only still complete
+	// the job so the worker does not time out; they do not push a branch.
+	// Waiting for Processed here deadlocks: that status is written when there
+	// is nothing to open, or after this CLI records the PR.
+	if opts.FileID > 0 {
+		var jobDone bool
+		opts.jobDone = &jobDone
+		req, done, err := processAutofixWait(context.Background(), opts)
 		if err != nil {
 			PrintError(err)
 			os.Exit(1)
@@ -147,6 +163,15 @@ func ProcessAutofix(opts AutofixOptions) {
 		if done {
 			return
 		}
+		if req != nil {
+			opts.JobID = req.ID
+			opts.Units = req.Units
+		}
+		defer func() {
+			if opts.JobID > 0 && !jobDone {
+				reportAutofixTimeout(getClient(), opts.FileID)
+			}
+		}()
 	}
 	out, err := runAutofix(context.Background(), opts, defaultDeps())
 	nothingToFix, fail := autofixExit(err)
@@ -167,6 +192,9 @@ func ProcessAutofix(opts AutofixOptions) {
 	if fail {
 		printOutcomeLines(out.Findings)
 		PrintError(err)
+		if opts.JobID > 0 && opts.jobDone != nil && !*opts.jobDone {
+			reportAutofixTimeout(getClient(), opts.FileID)
+		}
 		os.Exit(1)
 	}
 	printOutcome(opts, out)
@@ -191,40 +219,47 @@ func autofixExit(err error) (nothingToFix, fail bool) {
 	return false, err != nil
 }
 
-func processAutofixWait(ctx context.Context, fileID int) (alreadyDone bool, err error) {
+func processAutofixWait(ctx context.Context, opts AutofixOptions) (req *appknox.AutofixRequest, alreadyDone bool, err error) {
 	ctx, cancel := context.WithTimeout(ctx, autofixHardLimit)
 	defer cancel()
-	if err := checkKnoxIQReady(ctx, fileID); err != nil {
+	if err := checkKnoxIQReady(ctx, opts.FileID); err != nil {
 		if isAutofixTimeout(ctx, err) {
-			return false, autofixTimeoutError(fileID)
+			return nil, false, autofixTimeoutError(opts.FileID)
 		}
-		return false, err
+		return nil, false, err
 	}
-	req, err := awaitAutofix(ctx, getClient(), fileID)
+	req, err = awaitAutofix(ctx, getClient(), opts)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	if req != nil && req.Status == appknox.AutofixStatusProcessed {
 		printJobSummary(req.Status, req.PRURL, false, true)
-		return true, nil
+		return req, true, nil
 	}
-	return false, nil
+	return req, false, nil
 }
 
-func awaitAutofix(ctx context.Context, client *appknox.Client, fileID int) (*appknox.AutofixRequest, error) {
+func awaitAutofix(ctx context.Context, client *appknox.Client, opts AutofixOptions) (*appknox.AutofixRequest, error) {
 	if client == nil {
 		return nil, fmt.Errorf("autofix start failed: missing Appknox client")
 	}
-	started, _, err := client.KnoxIQ.StartAutofix(ctx, fileID)
+	opts = applyCIDefaults(opts)
+	if opts.Repo == "" || opts.Ref == "" {
+		return nil, errors.New("autofix start needs a repo and base ref (--repo and --ref, or GITHUB_REPOSITORY and GITHUB_BASE_REF)")
+	}
+	started, _, err := client.KnoxIQ.StartAutofix(ctx, opts.FileID, &appknox.AutofixStart{
+		Repo: opts.Repo, BaseRef: opts.Ref, HeadRef: opts.HeadRef,
+		CommitSHA: headSHA(opts.RepoPath), RiskThreshold: opts.RiskThreshold,
+	})
 	if err != nil {
 		if isAutofixTimeout(ctx, err) {
-			reportAutofixTimeout(client, fileID)
-			return nil, autofixTimeoutError(fileID)
+			reportAutofixTimeout(client, opts.FileID)
+			return nil, autofixTimeoutError(opts.FileID)
 		}
 		return nil, fmt.Errorf("autofix start failed: %w", err)
 	}
 	fmt.Println("\nAutofix status:")
-	return pollAutofix(ctx, client, fileID, started)
+	return pollAutofix(ctx, client, opts.FileID, started)
 }
 
 func pollAutofix(ctx context.Context, client *appknox.Client, fileID int, current *appknox.AutofixRequest) (*appknox.AutofixRequest, error) {
@@ -239,7 +274,11 @@ func pollAutofix(ctx context.Context, client *appknox.Client, fileID int, curren
 		}
 		switch current.Status {
 		case appknox.AutofixStatusProcessing:
-			return current, nil
+			// Units stay null until the worker has built them. Keep polling
+			// the job detail until that field is present, even when it is empty.
+			if current.Units != nil {
+				return current, nil
+			}
 		case appknox.AutofixStatusProcessed:
 			return current, nil
 		case appknox.AutofixStatusErrored:
@@ -260,7 +299,13 @@ func pollAutofix(ctx context.Context, client *appknox.Client, fileID int, curren
 			reportAutofixTimeout(client, fileID)
 			return nil, autofixTimeoutError(fileID)
 		}
-		next, _, err := client.KnoxIQ.GetAutofixStatus(ctx, fileID)
+		var next *appknox.AutofixRequest
+		var err error
+		if current.ID > 0 {
+			next, _, err = client.KnoxIQ.GetAutofix(ctx, fileID, current.ID)
+		} else {
+			next, _, err = client.KnoxIQ.GetAutofixStatus(ctx, fileID)
+		}
 		if err != nil {
 			if isAutofixTimeout(ctx, err) {
 				reportAutofixTimeout(client, fileID)
@@ -324,9 +369,15 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 		return Outcome{}, errors.New("autofix needs an Appknox access token (--access-token or APPKNOX_ACCESS_TOKEN)")
 	}
 	d = withKnoxIQFetchers(d)
-	targets, err := resolveTargets(ctx, opts, d)
-	if err != nil {
-		return Outcome{}, err
+	var err error
+	var targets []analysisTarget
+	if opts.Units != nil {
+		targets = targetsFromUnits(opts.Units)
+	} else {
+		targets, err = resolveTargets(ctx, opts, d)
+		if err != nil {
+			return Outcome{}, err
+		}
 	}
 	root, cleanup, err := resolveRepoRoot(ctx, opts)
 	if err != nil {
@@ -366,8 +417,12 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 			fmt.Printf("autofix: failed to restore the working tree to its original state: %v\n", err)
 		}
 	}()
+	var job *mycroftJob
+	if opts.JobID > 0 {
+		job = &mycroftJob{fileID: opts.FileID, id: opts.JobID, done: opts.jobDone}
+	}
 	return fixSession{opts: opts, d: d, root: root, host: host, token: token,
-		targets: targets, profile: profile, work: work}.run(ctx)
+		targets: targets, profile: profile, work: work, job: job}.run(ctx)
 }
 
 // memoizedAnalysesFor wraps list in a per-call cache keyed by fileID, local to
@@ -438,6 +493,9 @@ type fixSession struct {
 	// work is shared across analyses so two findings in the same file compose
 	// instead of overwriting each other.
 	work *workingTree
+	// job is set when this run drives a Mycroft autofix job. Nil on the
+	// manual --finding path, which still calls the in-CLI agent.
+	job *mycroftJob
 	// tally counts locate and fix calls for the all-failed exit decision.
 	// run() sets it; a nil tally records nothing.
 	tally *callTally
@@ -493,8 +551,9 @@ targetLoop:
 			return out, err
 		}
 	}
+	var runErr error
 	if s.tally.allFailed() {
-		return out, fmt.Errorf("%w: %d of %d locate/fix calls failed, last: %v",
+		runErr = fmt.Errorf("%w: %d of %d locate/fix calls failed, last: %v",
 			ErrAllCallsFailed, s.tally.failures, s.tally.calls, s.tally.last)
 	}
 	// One file, one blob. Two analyses that patched the same file each appended
@@ -512,6 +571,21 @@ targetLoop:
 		original = s.work.original
 	}
 	out.Patches = lastPatchPerPath(out.Patches, original)
+	if s.job != nil {
+		title, body, err := s.finishJob(ctx, &out)
+		if err != nil && runErr == nil {
+			return out, err
+		}
+		if title != "" {
+			s.opts.PRTitle = title
+		}
+		if body != "" {
+			s.opts.PRBody = body
+		}
+	}
+	if runErr != nil {
+		return out, runErr
+	}
 	if len(out.Patches) == 0 || s.opts.DryRun {
 		return out, nil
 	}
@@ -608,6 +682,9 @@ func (s fixSession) produceFixFor(
 func (s fixSession) attemptFix(
 	ctx context.Context, path string, in FindingInputs, tc targetContext, priorViolation string,
 ) (fixservice.Result, error) {
+	if s.job != nil {
+		return s.fixViaMycroft(ctx, path, tc, priorViolation)
+	}
 	if tc.Create && s.opts.FixMode != "agent" {
 		// /v1/fix rewrites an uploaded file; it has nothing to upload here.
 		return fixservice.Result{}, fmt.Errorf("creating %s needs --fix-mode agent", path)

@@ -10,6 +10,9 @@ import (
 // whose remediation, and only whose remediation, reaches the fixer. Sibling
 // findings of the same analysis never share a fix call (spec 3.3).
 type FindingUnit struct {
+	// UnitID is Mycroft's id for this finding. Empty on the manual path,
+	// which does not have a job.
+	UnitID          string
 	Title           string
 	Description     string
 	Remediation     string // FixInstruction(f)

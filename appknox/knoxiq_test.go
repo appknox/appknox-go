@@ -173,7 +173,9 @@ func TestKnoxIQService_StartAutofix(t *testing.T) {
 		fmt.Fprint(w, `{"id":12,"file":118,"project":45,"status":"Pending","pr_url":null,"error_message":""}`)
 	})
 
-	got, _, err := client.KnoxIQ.StartAutofix(context.Background(), 118)
+	got, _, err := client.KnoxIQ.StartAutofix(context.Background(), 118, &AutofixStart{
+		Repo: "appknox/mfva", BaseRef: "master",
+	})
 	if err != nil {
 		t.Fatalf("StartAutofix returned error: %v", err)
 	}

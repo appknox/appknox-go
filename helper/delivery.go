@@ -73,6 +73,9 @@ func deliverBranch(ctx context.Context, opts AutofixOptions, patches []filePatch
 }
 
 func prTitle(opts AutofixOptions) string {
+	if opts.PRTitle != "" {
+		return opts.PRTitle
+	}
 	if opts.HeadRef != "" {
 		return "fix(autofix): " + strings.TrimSpace(opts.HeadRef)
 	}
@@ -80,6 +83,9 @@ func prTitle(opts AutofixOptions) string {
 }
 
 func prBody(opts AutofixOptions, patches []filePatch) string {
+	if opts.PRBody != "" {
+		return opts.PRBody
+	}
 	var b strings.Builder
 	b.WriteString("Appknox autofix generated this change from a scan.\n\n")
 	if opts.FileID > 0 {
@@ -138,12 +144,13 @@ func buildAutofixPR(opts AutofixOptions, d Delivery, patches []filePatch) *appkn
 		base = opts.Ref
 	}
 	return &appknox.AutofixPR{
-		Repo:         opts.Repo,
-		BaseBranch:   base,
-		Branch:       d.Branch,
-		PRURL:        d.URL,
-		CommitSHA:    d.CommitSHA,
-		PatchedFiles: paths,
+		Repo:           opts.Repo,
+		BaseBranch:     base,
+		Branch:         d.Branch,
+		PRURL:          d.URL,
+		CommitSHA:      d.CommitSHA,
+		PatchedFiles:   paths,
+		AutofixRequest: opts.JobID,
 	}
 }
 

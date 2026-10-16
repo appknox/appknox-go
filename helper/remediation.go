@@ -40,6 +40,9 @@ type FindingInputs struct {
 	// the manual --finding path. Printed on outcome lines.
 	VulnerabilityID int
 
+	// UnitID is Mycroft's id when this input is one public finding from a job.
+	UnitID string
+
 	// Units are this analysis's KnoxIQ findings, one each. Empty on the
 	// manual path; see unitsOf.
 	Units []FindingUnit

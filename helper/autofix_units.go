@@ -25,6 +25,7 @@ type unitResult struct {
 
 // targetContext is what one fix call is told about the rest of the remediation.
 type targetContext struct {
+	UnitID     string // Mycroft finding id; empty on the manual path
 	Why        string
 	OtherFiles []agent.Target
 	Create     bool // the target is a new file
@@ -42,7 +43,10 @@ type targetContext struct {
 // same analysis -- which otherwise share an identical vulnerability id and
 // analysis name -- can be told apart on their outcome line.
 func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit) (res unitResult, err error) {
-	defer func() { res.outcome.Title = u.Title }()
+	defer func() {
+		res.outcome.Title = u.Title
+		res.outcome.UnitID = u.UnitID
+	}()
 
 	reply, locateErr := s.locateUnit(ctx, in, u)
 	if locateErr != nil {
@@ -115,8 +119,9 @@ func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit
 		res.outcome = locatedOutcome(in, accepted, results, notes)
 		return res, nil
 	}
-	if u.Remediation == "" {
-		// A fix built on no instruction is worse than no fix.
+	if s.job == nil && u.Remediation == "" {
+		// A fix built on no instruction is worse than no fix. A Mycroft job
+		// keeps the instruction on the worker, so an empty string here is expected.
 		res.outcome = summarizeFinding(in.VulnerabilityID, in.Finding, results,
 			append(notes, "no remediation to apply"))
 		return res, nil
@@ -328,6 +333,11 @@ func rolledBack(results []targetResult) []targetResult {
 
 // locateUnit runs the locate turn for one finding, on LocateModel first.
 func (s fixSession) locateUnit(ctx context.Context, in FindingInputs, u FindingUnit) (agent.TargetReply, error) {
+	if s.job != nil {
+		reply, err := s.locateViaMycroft(ctx, u)
+		s.tally.record(err)
+		return reply, err
+	}
 	reply, err := s.d.locateTargets(ctx,
 		agent.Config{Host: s.host, Token: s.token, Model: firstNonEmpty(s.opts.LocateModel, s.opts.Model)},
 		agent.TargetRequest{RepoRoot: s.root, VulnerabilityID: in.VulnerabilityID, Finding: in.Finding,
@@ -362,7 +372,7 @@ func (s fixSession) fixOne(
 	unitIn := FindingInputs{Finding: in.Finding, Remediation: u.Remediation,
 		DeveloperPrompt: u.DeveloperPrompt, Criteria: u.Criteria}
 	res, reason, err := s.produceFixFor(ctx, t.Path, unitIn,
-		targetContext{Why: t.Why, OtherFiles: othersThan(all, t.Path), Create: t.New})
+		targetContext{UnitID: u.UnitID, Why: t.Why, OtherFiles: othersThan(all, t.Path), Create: t.New})
 	s.tally.record(err)
 	if err != nil {
 		tr := targetResult{Path: t.Path, Reason: "error: " + err.Error()}

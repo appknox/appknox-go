@@ -59,6 +59,8 @@ type findingOutcome struct {
 	Title  string
 	Status string
 	Detail string
+	// UnitID is Mycroft's finding id, sent back on complete. Not printed.
+	UnitID string
 }
 
 // summarizeFinding turns a finding's target results into its line. A
@@ -112,6 +114,7 @@ func locatedOutcome(in FindingInputs, accepted []agent.Target, results []targetR
 func skippedAnalysis(analysisID int, in FindingInputs) findingOutcome {
 	return findingOutcome{
 		VulnerabilityID: in.VulnerabilityID,
+		UnitID:          in.UnitID,
 		Finding:         firstNonEmpty(in.Finding, fmt.Sprintf("analysis %d", analysisID)),
 		Status:          statusSkipped,
 		Detail:          firstNonEmpty(in.SkipReason, "KnoxIQ: nothing fixable"),
@@ -131,7 +134,7 @@ func notAttemptedOutcomes(in FindingInputs, units []FindingUnit) []findingOutcom
 	out := make([]findingOutcome, 0, len(units))
 	for _, u := range units {
 		out = append(out, findingOutcome{
-			VulnerabilityID: in.VulnerabilityID, Finding: in.Finding, Title: u.Title,
+			VulnerabilityID: in.VulnerabilityID, UnitID: u.UnitID, Finding: in.Finding, Title: u.Title,
 			Status: statusSkipped, Detail: reasonNotAttempted,
 		})
 	}

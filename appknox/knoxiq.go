@@ -2,6 +2,7 @@ package appknox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -129,17 +130,18 @@ type AutofixPRCommitRecord struct {
 // CommitSHA and PatchedFiles are write-only on POST; the response lists them
 // under Commits as AutofixPRCommitRecord rows.
 type AutofixPR struct {
-	ID           int                     `json:"id,omitempty"`
-	File         int                     `json:"file,omitempty"`
-	Repo         string                  `json:"repo"`
-	BaseBranch   string                  `json:"base_branch"`
-	Branch       string                  `json:"branch"`
-	PRURL        string                  `json:"pr_url"`
-	CommitSHA    string                  `json:"commit_sha,omitempty"`
-	PatchedFiles []string                `json:"patched_files,omitempty"`
-	Commits      []AutofixPRCommitRecord `json:"commits,omitempty"`
-	CreatedOn    *time.Time              `json:"created_on,omitempty"`
-	UpdatedOn    *time.Time              `json:"updated_on,omitempty"`
+	ID             int                     `json:"id,omitempty"`
+	File           int                     `json:"file,omitempty"`
+	Repo           string                  `json:"repo"`
+	BaseBranch     string                  `json:"base_branch"`
+	Branch         string                  `json:"branch"`
+	PRURL          string                  `json:"pr_url"`
+	CommitSHA      string                  `json:"commit_sha,omitempty"`
+	PatchedFiles   []string                `json:"patched_files,omitempty"`
+	AutofixRequest int                     `json:"autofix_request,omitempty"`
+	Commits        []AutofixPRCommitRecord `json:"commits,omitempty"`
+	CreatedOn      *time.Time              `json:"created_on,omitempty"`
+	UpdatedOn      *time.Time              `json:"updated_on,omitempty"`
 }
 
 // CreateAutofixPR records a delivered autofix: upserts the PR, appends a commit.
@@ -154,32 +156,176 @@ func (s *KnoxIQService) CreateAutofixPR(ctx context.Context, fileID int, pr *Aut
 	return &out, resp, err
 }
 
-// Autofix job status labels from GET /api/knoxiq/file/{id}/autofix/status/.
+// Autofix job status labels from GET /api/knoxiq/file/{id}/autofix/{job_id}/.
 const (
 	AutofixStatusPending    = "Pending"
 	AutofixStatusProcessing = "Processing"
+	AutofixStatusReady      = "Ready"
 	AutofixStatusProcessed  = "Processed"
 	AutofixStatusErrored    = "Errored"
 	AutofixStatusTimedOut   = "Timed Out"
 )
 
-// AutofixRequest is one autofix job for a scanned file.
-type AutofixRequest struct {
-	ID           int        `json:"id,omitempty"`
-	File         int        `json:"file,omitempty"`
-	Project      int        `json:"project,omitempty"`
-	Status       string     `json:"status"`
-	PRURL        string     `json:"pr_url"`
-	ErrorMessage string     `json:"error_message,omitempty"`
-	CreatedOn    *time.Time `json:"created_on,omitempty"`
-	UpdatedOn    *time.Time `json:"updated_on,omitempty"`
+// AutofixStart is the checkout Mycroft records when a job is created.
+// Repo and BaseRef are required. RiskThreshold uses the same scale as
+// analyses (low=1); zero is omitted so Mycroft applies its own default.
+type AutofixStart struct {
+	Repo          string `json:"repo"`
+	BaseRef       string `json:"base_ref"`
+	HeadRef       string `json:"head_ref,omitempty"`
+	CommitSHA     string `json:"commit_sha,omitempty"`
+	RiskThreshold int    `json:"risk_threshold,omitempty"`
 }
 
-// StartAutofix registers an autofix job for the file (PENDING) and enqueues
-// it. The CLI waits until Processing, then locates, fixes, and records the PR.
-func (s *KnoxIQService) StartAutofix(ctx context.Context, fileID int) (*AutofixRequest, *Response, error) {
+// AutofixUnit is one finding the CLI walks. Remediation text stays on the
+// worker; this is only enough to run turns and print an outcome.
+type AutofixUnit struct {
+	UnitID          string `json:"unit_id"`
+	VulnerabilityID *int   `json:"vulnerability_id"`
+	Finding         string `json:"finding"`
+	Title           string `json:"title"`
+	// Pointers because the worker sends JSON null for a field the unit does not have.
+	ThirdParty *bool   `json:"third_party"`
+	SkipReason *string `json:"skip_reason"`
+}
+
+// AutofixPRText is the title and body Sherrinford wrote for the pull request.
+type AutofixPRText struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
+
+// AutofixToolCall is one tool the CLI runs on its checkout.
+type AutofixToolCall struct {
+	ID   string         `json:"id"`
+	Name string         `json:"name"`
+	Args map[string]any `json:"args"`
+}
+
+// AutofixToolResult is the CLI's answer to one tool call.
+type AutofixToolResult struct {
+	ID      string         `json:"id"`
+	Content string         `json:"content,omitempty"`
+	IsError bool           `json:"is_error,omitempty"`
+	Data    map[string]any `json:"data,omitempty"`
+}
+
+// AutofixTurnStart opens a locate turn or a fix turn on one file.
+type AutofixTurnStart struct {
+	Kind      string          `json:"kind"`
+	Target    *AutofixTarget  `json:"target,omitempty"`
+	Others    []AutofixTarget `json:"others,omitempty"`
+	Profile   string          `json:"profile,omitempty"`
+	Violation string          `json:"violation,omitempty"`
+}
+
+// AutofixTarget is one file a fix turn may change.
+type AutofixTarget struct {
+	Path string `json:"path"`
+	Why  string `json:"why,omitempty"`
+	New  bool   `json:"new,omitempty"`
+}
+
+// AutofixTurnRequest is one call of a turn. Start opens it; ToolResults continue it.
+type AutofixTurnRequest struct {
+	UnitID      string              `json:"unit_id"`
+	Start       *AutofixTurnStart   `json:"start,omitempty"`
+	ToolResults []AutofixToolResult `json:"tool_results,omitempty"`
+}
+
+// AutofixTurnResponse is either tool calls or the end of the turn.
+type AutofixTurnResponse struct {
+	Type   string            `json:"type"`
+	Calls  []AutofixToolCall `json:"calls"`
+	Answer json.RawMessage   `json:"answer"`
+	Failed bool              `json:"failed"`
+	Detail string            `json:"detail"`
+}
+
+// AutofixTargetOutcome is one file's result inside a completed finding.
+type AutofixTargetOutcome struct {
+	Path    string `json:"path"`
+	Patched bool   `json:"patched,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	New     bool   `json:"new,omitempty"`
+}
+
+// AutofixOutcome is one finding's result, posted to complete the job.
+type AutofixOutcome struct {
+	UnitID          string                 `json:"unit_id"`
+	VulnerabilityID *int                   `json:"vulnerability_id"`
+	Finding         string                 `json:"finding,omitempty"`
+	Title           string                 `json:"title,omitempty"`
+	Status          string                 `json:"status"`
+	Detail          string                 `json:"detail,omitempty"`
+	Files           []AutofixTargetOutcome `json:"files,omitempty"`
+}
+
+// AutofixRequest is one autofix job for a scanned file.
+type AutofixRequest struct {
+	ID           int            `json:"id,omitempty"`
+	File         int            `json:"file,omitempty"`
+	Project      int            `json:"project,omitempty"`
+	Status       string         `json:"status"`
+	PRURL        string         `json:"pr_url"`
+	ErrorMessage string         `json:"error_message,omitempty"`
+	Repo         string         `json:"repo,omitempty"`
+	BaseRef      string         `json:"base_ref,omitempty"`
+	HeadRef      string         `json:"head_ref,omitempty"`
+	Step         int            `json:"step,omitempty"`
+	Units        *[]AutofixUnit `json:"units"`
+	PR           *AutofixPRText `json:"pr"`
+	CreatedOn    *time.Time     `json:"created_on,omitempty"`
+	UpdatedOn    *time.Time     `json:"updated_on,omitempty"`
+}
+
+// StartAutofix registers an autofix job (PENDING) and enqueues it.
+// The CLI waits until Processing and the worker has published Units, then
+// drives POST .../turn/ and POST .../complete/.
+func (s *KnoxIQService) StartAutofix(ctx context.Context, fileID int, start *AutofixStart) (*AutofixRequest, *Response, error) {
 	u := fmt.Sprintf("api/knoxiq/file/%d/autofix", fileID)
-	req, err := s.client.NewRequest("POST", u, nil)
+	var body interface{}
+	if start != nil {
+		body = start
+	}
+	req, err := s.client.NewRequest("POST", u, body)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out AutofixRequest
+	resp, err := s.client.Do(ctx, req, &out)
+	return &out, resp, err
+}
+
+// GetAutofix returns one job, including units once the worker has built them.
+func (s *KnoxIQService) GetAutofix(ctx context.Context, fileID, jobID int) (*AutofixRequest, *Response, error) {
+	u := fmt.Sprintf("api/knoxiq/file/%d/autofix/%d", fileID, jobID)
+	req, err := s.client.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out AutofixRequest
+	resp, err := s.client.Do(ctx, req, &out)
+	return &out, resp, err
+}
+
+// AutofixTurn posts one model-turn call. Mycroft relays it to Sherrinford.
+func (s *KnoxIQService) AutofixTurn(ctx context.Context, fileID, jobID int, turn *AutofixTurnRequest) (*AutofixTurnResponse, *Response, error) {
+	u := fmt.Sprintf("api/knoxiq/file/%d/autofix/%d/turn", fileID, jobID)
+	req, err := s.client.NewRequest("POST", u, turn)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out AutofixTurnResponse
+	resp, err := s.client.Do(ctx, req, &out)
+	return &out, resp, err
+}
+
+// AutofixComplete posts every finding's outcome. The response is the job
+// after the worker has written the pull-request text (status Ready or Processed).
+func (s *KnoxIQService) AutofixComplete(ctx context.Context, fileID, jobID int, outcomes []AutofixOutcome) (*AutofixRequest, *Response, error) {
+	u := fmt.Sprintf("api/knoxiq/file/%d/autofix/%d/complete", fileID, jobID)
+	req, err := s.client.NewRequest("POST", u, map[string]any{"outcomes": outcomes})
 	if err != nil {
 		return nil, nil, err
 	}

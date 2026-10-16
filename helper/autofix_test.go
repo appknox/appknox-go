@@ -564,7 +564,7 @@ func TestRunAutofix_FileID_SkipsFailedFinding(t *testing.T) {
 }
 
 func TestAwaitAutofix_NilClient(t *testing.T) {
-	_, err := awaitAutofix(context.Background(), nil, 118)
+	_, err := awaitAutofix(context.Background(), nil, AutofixOptions{FileID: 118})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "missing Appknox client")
 }
@@ -579,7 +579,7 @@ func TestAwaitAutofix_ProcessedOnStart(t *testing.T) {
 			"pr_url": "https://github.com/appknox/mfva/pull/16",
 		})
 	})
-	req, err := awaitAutofix(context.Background(), client, 118)
+	req, err := awaitAutofix(context.Background(), client, AutofixOptions{FileID: 118, Repo: "appknox/mfva", Ref: "master"})
 	require.NoError(t, err)
 	require.Equal(t, "Processed", req.Status)
 	require.Equal(t, "https://github.com/appknox/mfva/pull/16", req.PRURL)
@@ -591,10 +591,10 @@ func TestAwaitAutofix_ProcessingOnStart(t *testing.T) {
 		require.Equal(t, "/api/knoxiq/file/118/autofix", r.URL.Path)
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": 12, "file": 118, "project": 45, "status": "Processing",
+			"id": 12, "file": 118, "project": 45, "status": "Processing", "units": []any{},
 		})
 	})
-	req, err := awaitAutofix(context.Background(), client, 118)
+	req, err := awaitAutofix(context.Background(), client, AutofixOptions{FileID: 118, Repo: "appknox/mfva", Ref: "master"})
 	require.NoError(t, err)
 	require.Equal(t, "Processing", req.Status)
 }
@@ -613,19 +613,20 @@ func TestAwaitAutofix_PollsUntilProcessing(t *testing.T) {
 			"id": 12, "file": 118, "project": 45, "status": "Pending",
 		})
 	})
-	mux.HandleFunc("/api/knoxiq/file/118/autofix/status", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/knoxiq/file/118/autofix/12", func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodGet, r.Method)
 		n++
-		status := "Pending"
-		if n >= 2 {
-			status = "Processing"
+		body := map[string]any{
+			"id": 12, "file": 118, "project": 45, "status": "Pending",
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": 12, "file": 118, "project": 45, "status": status,
-		})
+		if n >= 2 {
+			body["status"] = "Processing"
+			body["units"] = []any{}
+		}
+		_ = json.NewEncoder(w).Encode(body)
 	})
 	client := testAppknoxClient(t, mux.ServeHTTP)
-	req, err := awaitAutofix(context.Background(), client, 118)
+	req, err := awaitAutofix(context.Background(), client, AutofixOptions{FileID: 118, Repo: "appknox/mfva", Ref: "master"})
 	require.NoError(t, err)
 	require.Equal(t, "Processing", req.Status)
 	require.GreaterOrEqual(t, n, 2)
@@ -638,7 +639,7 @@ func TestAwaitAutofix_Errored(t *testing.T) {
 			"error_message": "Sherrinford is unavailable",
 		})
 	})
-	_, err := awaitAutofix(context.Background(), client, 118)
+	_, err := awaitAutofix(context.Background(), client, AutofixOptions{FileID: 118, Repo: "appknox/mfva", Ref: "master"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "Sherrinford is unavailable")
 }
@@ -662,7 +663,7 @@ func TestAwaitAutofix_Timeout(t *testing.T) {
 	client := testAppknoxClient(t, mux.ServeHTTP)
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	_, err := awaitAutofix(ctx, client, 118)
+	_, err := awaitAutofix(ctx, client, AutofixOptions{FileID: 118, Repo: "appknox/mfva", Ref: "master"})
 	require.EqualError(t, err, "autofix timed out for file 118 after 1h0m0s")
 	require.True(t, marked)
 }
@@ -673,7 +674,7 @@ func TestAwaitAutofix_AlreadyTimedOut(t *testing.T) {
 			"id": 12, "file": 118, "project": 45, "status": "Timed Out",
 		})
 	})
-	_, err := awaitAutofix(context.Background(), client, 118)
+	_, err := awaitAutofix(context.Background(), client, AutofixOptions{FileID: 118, Repo: "appknox/mfva", Ref: "master"})
 	require.EqualError(t, err, "autofix timed out for file 118 after 1h0m0s")
 }
 
@@ -682,7 +683,7 @@ func TestAwaitAutofix_StartError(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{"detail": "denied"})
 	})
-	_, err := awaitAutofix(context.Background(), client, 118)
+	_, err := awaitAutofix(context.Background(), client, AutofixOptions{FileID: 118, Repo: "appknox/mfva", Ref: "master"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "autofix start failed")
 }
