@@ -128,6 +128,8 @@ type HealthScoreOptions struct {
 // FilesService.List method.
 type FileListOptions struct {
 	VersionCode string `url:"version_code,omitempty"`
+	// GitBranch limits the list to builds uploaded for that branch.
+	GitBranch string `url:"git_branch,omitempty"`
 
 	ListOptions
 }

@@ -32,7 +32,9 @@ type AutofixOptions struct {
 	Ref           string // PR base / merge target; empty = repo default branch
 	HeadRef       string // feature branch this autofix belongs to (CI: GITHUB_HEAD_REF / GITHUB_REF)
 	RepoPath      string // already-checked-out repo (CI: GITHUB_WORKSPACE)
-	FileID        int    // Appknox file id (every fixable analysis on the file)
+	FileID        int    // Appknox file id. 0 with no --finding = latest upload on the base branch
+	PackageName   string // package name or bundle id used to find that upload; empty = detect from the checkout
+	Platform      string // "android" or "ios" for that lookup; empty = detect from the checkout
 	AnalysisID    int    // one analysis on the file; 0 = every fixable analysis
 	RiskThreshold int    // minimum computed risk to attempt; runAutofix defaults an unset (<=0) value to 1 -- see the comment there. 0 means "everything" only when passed to locatableAnalysisIDs directly, as every test and health-score mode do.
 	Finding       string // manual finding detail (when not using file id)
@@ -138,6 +140,12 @@ type Outcome struct {
 
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
 func ProcessAutofix(opts AutofixOptions) {
+	var err error
+	opts, err = EnsureAutofixFile(context.Background(), opts)
+	if err != nil {
+		PrintError(err)
+		os.Exit(1)
+	}
 	if opts.ListAnalyses {
 		if err := checkKnoxIQReady(context.Background(), opts.FileID); err != nil {
 			PrintError(err)
@@ -668,10 +676,8 @@ func (s fixSession) produceFixFor(
 		if attempt >= maxFixRetries {
 			// Discard the patch rather than ship it. A reported gap is
 			// recoverable; a branch that does not compile is not.
-			fmt.Printf("   !! %s rejected (%s); no edit made\n", path, v.Rule)
 			return fixservice.Result{}, fmt.Sprintf("rejected by patch gate (%s)", v.Rule), nil
 		}
-		fmt.Printf("   .. %s rejected (%s); retrying once\n", path, v.Rule)
 		violation, refused = v.Detail, v.Rule
 	}
 }

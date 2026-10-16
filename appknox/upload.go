@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -23,6 +24,18 @@ type Upload struct {
 	// `appknox upload --knoxiq`). omitempty so nothing is sent when false,
 	// keeping this backwards compatible with backends that predate the field.
 	KnoxIQ bool `json:"knoxiq,omitempty"`
+	// GitBranch and GitRepo record which checkout this build came from so
+	// autofix can later pick it without a file id. omitempty keeps older
+	// backends, which ignore unknown fields only when the keys are absent.
+	GitBranch string `json:"git_branch,omitempty"`
+	GitRepo   string `json:"git_repo,omitempty"`
+}
+
+// UploadOptions is what an upload records besides the binary itself.
+type UploadOptions struct {
+	KnoxIQ    bool
+	GitBranch string
+	GitRepo   string
 }
 
 // uploadFileUsingReaderHelper is used to get a minio upload url
@@ -53,9 +66,10 @@ func (s *UploadService) uploadFileUsingReaderHelper(ctx context.Context, file io
 }
 
 // UploadFileUsingReader is used to upload a file to appknox dashboard.
-// knoxiq requests KnoxIQ triage for this build (see the Upload.KnoxIQ field).
+// opt.KnoxIQ requests KnoxIQ triage for this build (see the Upload.KnoxIQ field).
+// opt.GitBranch and opt.GitRepo are stored with the submission.
 // Returns the submissionID.
-func (s *UploadService) UploadFileUsingReader(ctx context.Context, file io.Reader, size int64, knoxiq bool) (*int, error) {
+func (s *UploadService) UploadFileUsingReader(ctx context.Context, file io.Reader, size int64, opt UploadOptions) (*int, error) {
 	me, _, err := s.client.Me.CurrentAuthenticatedUser(ctx)
 	if err != nil {
 		return nil, err
@@ -66,7 +80,9 @@ func (s *UploadService) UploadFileUsingReader(ctx context.Context, file io.Reade
 	if err != nil {
 		return nil, err
 	}
-	uploadResponse.KnoxIQ = knoxiq
+	uploadResponse.KnoxIQ = opt.KnoxIQ
+	uploadResponse.GitBranch = strings.TrimSpace(opt.GitBranch)
+	uploadResponse.GitRepo = strings.TrimSpace(opt.GitRepo)
 	req, err := s.client.NewRequest("POST", u, uploadResponse)
 	if err != nil {
 		return nil, err
@@ -79,16 +95,15 @@ func (s *UploadService) UploadFileUsingReader(ctx context.Context, file io.Reade
 	return &submissionID, nil
 }
 
-// UploadFile is used to upload a file to appknox dashboard. knoxiq requests
-// KnoxIQ triage for this build (see the Upload.KnoxIQ field).
+// UploadFile is used to upload a file to appknox dashboard.
 // Returns the file object.
-func (s *UploadService) UploadFile(ctx context.Context, file *os.File, knoxiq bool) (*File, *Response, error) {
+func (s *UploadService) UploadFile(ctx context.Context, file *os.File, opt UploadOptions) (*File, *Response, error) {
 	stat, err := file.Stat()
 	if err != nil {
 		return nil, nil, err
 	}
 	fileSize := stat.Size()
-	submissionID, err := s.UploadFileUsingReader(ctx, file, fileSize, knoxiq)
+	submissionID, err := s.UploadFileUsingReader(ctx, file, fileSize, opt)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -122,7 +122,7 @@ func TestUploadService_UploadFileUsingReader(t *testing.T) {
 		testBody(t, r, "Upload me !\n")
 	})
 
-	submissionID, err := client.Upload.UploadFileUsingReader(context.Background(), file, 12, false)
+	submissionID, err := client.Upload.UploadFileUsingReader(context.Background(), file, 12, UploadOptions{})
 	if err != nil {
 		t.Errorf("Upload.UploadFileUsingReader returned error: %v", err)
 	}
@@ -166,12 +166,49 @@ func TestUploadService_UploadFileUsingReader_KnoxIQFlag(t *testing.T) {
 		testBody(t, r, "Upload me !\n")
 	})
 
-	submissionID, err := client.Upload.UploadFileUsingReader(context.Background(), file, 12, true)
+	submissionID, err := client.Upload.UploadFileUsingReader(context.Background(), file, 12, UploadOptions{KnoxIQ: true})
 	if err != nil {
 		t.Fatalf("Upload.UploadFileUsingReader returned error: %v", err)
 	}
 	if *submissionID != 1 {
 		t.Errorf("Upload.UploadFileUsingReader returned %d, want 1", *submissionID)
+	}
+}
+
+func TestUploadService_UploadFileUsingReader_GitBranch(t *testing.T) {
+	client, mux, _, teardown := setup()
+	defer teardown()
+
+	mux.HandleFunc("/api/me", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "GET")
+		fmt.Fprint(w, `{"default_organization":1}`)
+	})
+	mux.HandleFunc("/api/organizations/1/upload_app", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			fmt.Fprint(w, `{"url":"u"}`)
+		} else {
+			testMethod(t, r, "POST")
+			testBody(t, r, `{"url":"u","git_branch":"develop","git_repo":"appknox/mfva"}`+"\n")
+			fmt.Fprint(w, `{"submission_id":1}`)
+		}
+	})
+
+	file, dir, err := openTestFile("upload.txt", "Upload me !\n")
+	if err != nil {
+		t.Fatalf("Unable to create temp file: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	mux.HandleFunc("/u", func(w http.ResponseWriter, r *http.Request) {
+		testMethod(t, r, "PUT")
+	})
+
+	_, err = client.Upload.UploadFileUsingReader(context.Background(), file, 12, UploadOptions{
+		GitBranch: " develop ",
+		GitRepo:   " appknox/mfva ",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -213,7 +250,7 @@ func TestUploadService_UploadFile(t *testing.T) {
 		testBody(t, r, "Upload me !\n")
 	})
 
-	akFile, _, err := client.Upload.UploadFile(context.Background(), file, false)
+	akFile, _, err := client.Upload.UploadFile(context.Background(), file, UploadOptions{})
 	if err != nil {
 		t.Errorf("Upload.UploadFile returned error: %v", err)
 	}

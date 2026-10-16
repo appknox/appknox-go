@@ -3,16 +3,27 @@ package helper
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/appknox/appknox-go/appknox"
 	"github.com/cheynewallace/tabby"
 	"github.com/vbauerster/mpb/v4"
 	"github.com/vbauerster/mpb/v4/decor"
 )
 
+// UploadOptions is what an upload records besides the binary.
+// An empty GitBranch or GitRepo is filled from CI (GITHUB_BASE_REF / GITHUB_REF,
+// GITHUB_REPOSITORY) so a later autofix run can find this file by branch.
+type UploadOptions struct {
+	KnoxIQ    bool
+	GitBranch string
+	GitRepo   string
+}
+
 // ProcessUpload takes the filePath and uploads it to the appknox dashboard.
-// knoxiq requests KnoxIQ triage for this build once SAST completes.
-func ProcessUpload(file *os.File, knoxiq bool) {
+// KnoxIQ requests KnoxIQ triage for this build once SAST completes.
+func ProcessUpload(file *os.File, opt UploadOptions) {
 	ctx := context.Background()
 	client := getClient()
 	stat, _ := file.Stat()
@@ -33,7 +44,12 @@ func ProcessUpload(file *os.File, knoxiq bool) {
 		),
 	)
 	filewithbar := bar.ProxyReader(file)
-	submissionID, err := client.Upload.UploadFileUsingReader(ctx, filewithbar, fileSize, knoxiq)
+	opt = fillUploadFromCI(opt)
+	submissionID, err := client.Upload.UploadFileUsingReader(ctx, filewithbar, fileSize, appknox.UploadOptions{
+		KnoxIQ:    opt.KnoxIQ,
+		GitBranch: opt.GitBranch,
+		GitRepo:   opt.GitRepo,
+	})
 	if err != nil {
 		PrintError(err)
 		os.Exit(1)
@@ -46,4 +62,17 @@ func ProcessUpload(file *os.File, knoxiq bool) {
 	t := tabby.New()
 	t.AddLine(akFile.ID)
 	t.Print()
+}
+
+// fillUploadFromCI stamps the checkout the same way autofix resolves its base
+// branch, so `appknox upload` followed by `appknox autofix` agree on the file.
+func fillUploadFromCI(opt UploadOptions) UploadOptions {
+	ci := applyCIDefaults(AutofixOptions{})
+	if strings.TrimSpace(opt.GitRepo) == "" {
+		opt.GitRepo = ci.Repo
+	}
+	if strings.TrimSpace(opt.GitBranch) == "" {
+		opt.GitBranch = ci.Ref
+	}
+	return opt
 }
