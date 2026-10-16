@@ -13,6 +13,7 @@ import (
 
 	"github.com/appknox/appknox-go/agent"
 	"github.com/appknox/appknox-go/appknox"
+	"github.com/appknox/appknox-go/appknox/enums"
 	"github.com/appknox/appknox-go/fixservice"
 	"github.com/appknox/appknox-go/ghfetch"
 	"github.com/pmezard/go-difflib/difflib"
@@ -61,9 +62,10 @@ type AutofixOptions struct {
 	// Units are the findings the worker published. Nil means this run still
 	// resolves targets from KnoxIQ itself (the manual --finding path).
 	Units *[]appknox.AutofixUnit
-	// PRTitle and PRBody are the text Mycroft returned from complete.
+	// PRTitle is the title Mycroft returned from complete.
 	PRTitle string
-	PRBody  string
+	// PRBody is the pull-request description this run writes to GitHub.
+	PRBody string
 	// jobDone is set once complete has been accepted, so a later failure
 	// does not mark the job timed out.
 	jobDone *bool
@@ -373,6 +375,7 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	var targets []analysisTarget
 	if opts.Units != nil {
 		targets = targetsFromUnits(opts.Units)
+		stampSeverity(ctx, opts.FileID, targets)
 	} else {
 		targets, err = resolveTargets(ctx, opts, d)
 		if err != nil {
@@ -572,15 +575,12 @@ targetLoop:
 	}
 	out.Patches = lastPatchPerPath(out.Patches, original)
 	if s.job != nil {
-		title, body, err := s.finishJob(ctx, &out)
+		title, _, err := s.finishJob(ctx, &out)
 		if err != nil && runErr == nil {
 			return out, err
 		}
 		if title != "" {
 			s.opts.PRTitle = title
-		}
-		if body != "" {
-			s.opts.PRBody = body
 		}
 	}
 	if runErr != nil {
@@ -589,6 +589,7 @@ targetLoop:
 	if len(out.Patches) == 0 || s.opts.DryRun {
 		return out, nil
 	}
+	s.opts.PRBody = renderAutofixPRBody(out.Findings, out.Patches, out.Truncated)
 	return s.deliver(ctx, out)
 }
 
@@ -788,11 +789,16 @@ func fetchKnoxIQInputs(
 	if err != nil {
 		return FindingInputs{}, err
 	}
+	severity := severityName(analysis.ComputedRisk)
 	if len(findings) == 0 {
-		return FindingInputs{Finding: vuln.Name, VulnerabilityID: analysis.VulnerabilityID, SkipReason: skip}, nil
+		return FindingInputs{
+			Finding: vuln.Name, VulnerabilityID: analysis.VulnerabilityID,
+			SkipReason: skip, Severity: severity,
+		}, nil
 	}
 	in := knoxIQInputs(findings, vuln.Name)
 	in.VulnerabilityID = analysis.VulnerabilityID
+	in.Severity = severity
 	// Findings dropped before knoxIQInputs saw them (filtered while a sibling
 	// stayed fixable) and findings knoxIQInputs itself dropped (no
 	// remediation text) both land here, each with exactly one outcome line
@@ -800,8 +806,58 @@ func fetchKnoxIQInputs(
 	in.Skipped = append(filteredSkips, in.Skipped...)
 	for i := range in.Skipped {
 		in.Skipped[i].VulnerabilityID = analysis.VulnerabilityID
+		if in.Skipped[i].Severity == "" {
+			in.Skipped[i].Severity = severity
+		}
 	}
 	return in, nil
+}
+
+// severityName is the risk label written into the pull-request table.
+// Passed and Unknown are not severities of a finding.
+func severityName(r enums.RiskType) string {
+	switch r {
+	case enums.Risk.Low, enums.Risk.Medium, enums.Risk.High, enums.Risk.Critical:
+		return r.String()
+	default:
+		return ""
+	}
+}
+
+// stampSeverity fills each target's severity from the file's analyses.
+// The job path builds targets from Mycroft units, which do not carry risk.
+// A lookup failure leaves severity empty; the pull request still opens.
+func stampSeverity(ctx context.Context, fileID int, targets []analysisTarget) {
+	if fileID <= 0 || len(targets) == 0 || viper.GetString("access-token") == "" {
+		return
+	}
+	all, err := allAnalyses(ctx, getClient(), fileID)
+	if err != nil {
+		return
+	}
+	byVuln := map[int]enums.RiskType{}
+	for _, a := range all {
+		if a == nil || a.VulnerabilityID == 0 || severityName(a.ComputedRisk) == "" {
+			continue
+		}
+		if prev, ok := byVuln[a.VulnerabilityID]; ok && prev >= a.ComputedRisk {
+			continue
+		}
+		byVuln[a.VulnerabilityID] = a.ComputedRisk
+	}
+	for i := range targets {
+		risk, ok := byVuln[targets[i].Inputs.VulnerabilityID]
+		if !ok {
+			continue
+		}
+		name := risk.String()
+		targets[i].Inputs.Severity = name
+		for j := range targets[i].Inputs.Skipped {
+			if targets[i].Inputs.Skipped[j].Severity == "" {
+				targets[i].Inputs.Skipped[j].Severity = name
+			}
+		}
+	}
 }
 
 // findAnalysisByID returns the analysis with the given id, or nil.

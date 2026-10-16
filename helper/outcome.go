@@ -59,6 +59,8 @@ type findingOutcome struct {
 	Title  string
 	Status string
 	Detail string
+	// Severity is the analysis risk (Low, Medium, High, Critical).
+	Severity string
 	// UnitID is Mycroft's finding id, sent back on complete. Not printed.
 	UnitID string
 }
@@ -118,6 +120,7 @@ func skippedAnalysis(analysisID int, in FindingInputs) findingOutcome {
 		Finding:         firstNonEmpty(in.Finding, fmt.Sprintf("analysis %d", analysisID)),
 		Status:          statusSkipped,
 		Detail:          firstNonEmpty(in.SkipReason, "KnoxIQ: nothing fixable"),
+		Severity:        in.Severity,
 	}
 }
 
@@ -135,7 +138,7 @@ func notAttemptedOutcomes(in FindingInputs, units []FindingUnit) []findingOutcom
 	for _, u := range units {
 		out = append(out, findingOutcome{
 			VulnerabilityID: in.VulnerabilityID, UnitID: u.UnitID, Finding: in.Finding, Title: u.Title,
-			Status: statusSkipped, Detail: reasonNotAttempted,
+			Status: statusSkipped, Detail: reasonNotAttempted, Severity: in.Severity,
 		})
 	}
 	return out

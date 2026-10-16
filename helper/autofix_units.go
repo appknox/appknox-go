@@ -46,6 +46,9 @@ func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit
 	defer func() {
 		res.outcome.Title = u.Title
 		res.outcome.UnitID = u.UnitID
+		if res.outcome.Severity == "" {
+			res.outcome.Severity = in.Severity
+		}
 	}()
 
 	reply, locateErr := s.locateUnit(ctx, in, u)

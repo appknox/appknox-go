@@ -193,9 +193,10 @@ func (s fixSession) driveTurn(ctx context.Context, unitID string, start *appknox
 	return resp, nil
 }
 
-// finishJob sends outcomes to Mycroft so the worker can write the PR text
-// and stop waiting. The title and body come back for the caller to deliver;
-// this method has a value receiver, so it cannot write them onto s.opts.
+// finishJob sends outcomes to Mycroft so the worker can stop waiting.
+// The title comes back for the pull request. The body Mycroft returns is not
+// what GitHub stores: the caller renders that description itself.
+// This method has a value receiver, so it cannot write them onto s.opts.
 func (s fixSession) finishJob(ctx context.Context, out *Outcome) (title, body string, err error) {
 	if s.job == nil {
 		return "", "", nil

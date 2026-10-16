@@ -40,6 +40,10 @@ type FindingInputs struct {
 	// the manual --finding path. Printed on outcome lines.
 	VulnerabilityID int
 
+	// Severity is the analysis risk (Low, Medium, High, Critical). Empty when
+	// this run has no analysis to read it from.
+	Severity string
+
 	// UnitID is Mycroft's id when this input is one public finding from a job.
 	UnitID string
 
