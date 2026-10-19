@@ -138,8 +138,30 @@ type Outcome struct {
 	Findings []findingOutcome
 }
 
+// ErrAutofixOnAutofixBranch is printed when the base branch is itself an
+// autofix branch. The command shows it and exits 0: autofix must not run
+// again on appknox-autofix/….
+var ErrAutofixOnAutofixBranch = errors.New("Autofix can not be run at appknox autofix branch")
+
+// AutofixBranchError reports ErrAutofixOnAutofixBranch when the PR base,
+// after CI defaults, starts with appknox-autofix/. A normal feature branch
+// returns nil.
+func AutofixBranchError(opts AutofixOptions) error {
+	opts = applyCIDefaults(opts)
+	ref := strings.TrimSpace(opts.Ref)
+	ref = strings.TrimPrefix(ref, "refs/heads/")
+	if strings.HasPrefix(ref, autofixBranchPrefix) {
+		return ErrAutofixOnAutofixBranch
+	}
+	return nil
+}
+
 // ProcessAutofix runs the client-side flow and exits non-zero on error.
 func ProcessAutofix(opts AutofixOptions) {
+	if err := AutofixBranchError(opts); err != nil {
+		PrintError(err)
+		return
+	}
 	var err error
 	opts, err = EnsureAutofixFile(context.Background(), opts)
 	if err != nil {

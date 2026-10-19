@@ -59,6 +59,13 @@ APPKNOX_ACCESS_TOKEN is required.`,
 		opts.ListAnalyses, _ = f.GetBool("list-analyses")
 		opts.LocateOnly, _ = f.GetBool("locate-only")
 
+		// An appknox-autofix/ base would start another autofix on a branch this
+		// command already created. Print the exception and pass.
+		if err := helper.AutofixBranchError(opts); err != nil {
+			helper.PrintError(err)
+			return
+		}
+
 		opts, err := helper.EnsureAutofixFile(context.Background(), opts)
 		if err != nil {
 			helper.PrintError(err)

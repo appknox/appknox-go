@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"bytes"
+	"io"
+	"os"
 	"testing"
 
 	"github.com/spf13/pflag"
@@ -86,4 +89,36 @@ func TestAutofixCommand_RiskThresholdShorthandNoCollision(t *testing.T) {
 	}
 	autofixCmd.Flags().VisitAll(visit)
 	RootCmd.PersistentFlags().VisitAll(visit)
+}
+
+func TestAutofixCommand_AutofixBaseBranchPrintsAndPasses(t *testing.T) {
+	resetAutofixFlags()
+	t.Cleanup(resetAutofixFlags)
+
+	if err := autofixCmd.Flags().Set("ref", "appknox-autofix/feat/login"); err != nil {
+		t.Fatalf("set ref: %v", err)
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := os.Stderr
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = prev })
+
+	autofixCmd.Run(autofixCmd, nil)
+
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	want := "Autofix can not be run at appknox autofix branch"
+	if !bytes.Contains(buf.Bytes(), []byte(want)) {
+		t.Fatalf("stderr %q, want it to contain %q", got, want)
+	}
 }

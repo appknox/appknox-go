@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -708,6 +709,21 @@ func TestAutofixExit_OutageIsAFailure(t *testing.T) {
 	nothingToFix, fail := autofixExit(errors.New("knoxiq fetch failed for 2/2 analyses on file 24, none fixable: knoxiq unreachable: 503"))
 	require.False(t, nothingToFix, "a KnoxIQ outage must not be mistaken for a clean scan")
 	require.True(t, fail, "a KnoxIQ outage must still exit 1")
+}
+
+func TestProcessAutofix_AutofixBaseBranchPrintsAndReturns(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	prev := os.Stderr
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = prev })
+
+	ProcessAutofix(AutofixOptions{Ref: "appknox-autofix/feat/login"})
+
+	require.NoError(t, w.Close())
+	out, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Contains(t, string(out), "Autofix can not be run at appknox autofix branch")
 }
 
 func TestAutofixExit_NilErrorIsClean(t *testing.T) {

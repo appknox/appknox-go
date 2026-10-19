@@ -99,6 +99,35 @@ func TestRefFromCI_PushUsesHeadsRef(t *testing.T) {
 	require.Equal(t, "feat/login", refFromCI())
 }
 
+func TestAutofixBranchError_BaseStartsWithAutofix(t *testing.T) {
+	clearCIRepoEnv(t)
+	err := AutofixBranchError(AutofixOptions{Ref: "appknox-autofix/feat/login"})
+	require.ErrorIs(t, err, ErrAutofixOnAutofixBranch)
+	require.EqualError(t, err, "Autofix can not be run at appknox autofix branch")
+}
+
+func TestAutofixBranchError_BaseFromCI(t *testing.T) {
+	clearCIRepoEnv(t)
+	t.Setenv("GITHUB_BASE_REF", "appknox-autofix/release/1.2")
+	t.Setenv("GITHUB_HEAD_REF", "feat/login")
+	require.ErrorIs(t, AutofixBranchError(AutofixOptions{}), ErrAutofixOnAutofixBranch)
+}
+
+func TestAutofixBranchError_PushToAutofixBranch(t *testing.T) {
+	clearCIRepoEnv(t)
+	t.Setenv("GITHUB_REF", "refs/heads/appknox-autofix/feat/login")
+	require.ErrorIs(t, AutofixBranchError(AutofixOptions{}), ErrAutofixOnAutofixBranch)
+}
+
+func TestAutofixBranchError_NormalBasePasses(t *testing.T) {
+	clearCIRepoEnv(t)
+	require.NoError(t, AutofixBranchError(AutofixOptions{
+		Ref:     "feat/login",
+		HeadRef: "appknox-autofix/feat/login",
+	}))
+	require.NoError(t, AutofixBranchError(AutofixOptions{Ref: "master"}))
+}
+
 func TestApplyCIDefaults_DoesNotOverrideSetFields(t *testing.T) {
 	clearCIRepoEnv(t)
 	t.Setenv("GITHUB_REPOSITORY", "ci/from-env")
