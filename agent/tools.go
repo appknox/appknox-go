@@ -31,11 +31,19 @@ func textResult(s string) sdk.BetaToolResultBlockParamContentUnion {
 }
 
 // readFileHandler returns a read_file handler scoped to root (CWE-22 guarded).
+// Hidden files, credential files and file types the fix never needs are
+// refused (see readable.go), judged on both the path asked for and the file a
+// symlink inside the tree resolves to.
 func readFileHandler(root string) func(context.Context, readFileInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
 	return func(_ context.Context, in readFileInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
 		abs, err := resolveUnderRoot(root, in.Path)
 		if err != nil {
 			return sdk.BetaToolResultBlockParamContentUnion{}, err
+		}
+		resolved, relErr := filepath.Rel(canonicalDir(root), abs)
+		if relErr != nil || !readable(in.Path) || !readable(resolved) {
+			return sdk.BetaToolResultBlockParamContentUnion{}, fmt.Errorf(
+				"agent: read_file %q: not readable by autofix (hidden, credential or unsupported file type)", in.Path)
 		}
 		data, truncated, err := readCapped(abs, maxReadBytes)
 		if err != nil {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"github.com/appknox/appknox-go/appknox"
 )
 
 // What kind of project this is, told to the fixer BEFORE it edits.
@@ -72,6 +73,22 @@ func hasBuildFile(root, name string) bool {
 		return nil
 	})
 	return found
+}
+
+// wire is the profile as typed values for a Mycroft fix turn. Sherrinford
+// writes from these the same sentences String writes for the manual path.
+func (p buildProfile) wire() *appknox.AutofixProfile {
+	out := &appknox.AutofixProfile{
+		BuildSystem: p.BuildSystem,
+		Android:     p.Android,
+		AGPMajor:    p.AGPMajor,
+		CompileSDK:  p.CompileSDK,
+	}
+	if p.buildConfigKnown {
+		enabled := p.BuildConfig
+		out.BuildConfig = &enabled
+	}
+	return out
 }
 
 // String renders the profile for the fix prompt, or "" when nothing is known.

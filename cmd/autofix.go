@@ -65,6 +65,12 @@ APPKNOX_ACCESS_TOKEN is required.`,
 			helper.PrintError(err)
 			return
 		}
+		// Fork pull requests and pull_request_target runs are refused before
+		// the job starts, not after the model has worked on their code.
+		if err := helper.AutofixEventError(); err != nil {
+			helper.PrintError(err)
+			os.Exit(1)
+		}
 
 		opts, err := helper.EnsureAutofixFile(context.Background(), opts)
 		if err != nil {

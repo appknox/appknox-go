@@ -162,6 +162,10 @@ func ProcessAutofix(opts AutofixOptions) {
 		PrintError(err)
 		return
 	}
+	if err := AutofixEventError(); err != nil {
+		PrintError(err)
+		os.Exit(1)
+	}
 	var err error
 	opts, err = EnsureAutofixFile(context.Background(), opts)
 	if err != nil {
@@ -429,7 +433,7 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	}
 	// Once per run, not once per finding: describeBuild walks the build files
 	// and the answer is identical for every analysis in the repository.
-	profile := describeBuild(root).String()
+	build := describeBuild(root)
 	work := newWorkingTree(root)
 	// Unconditional, not dry-run-only: this restores the developer's checkout
 	// to what it was found regardless of whether the run actually wrote
@@ -455,7 +459,7 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 		job = &mycroftJob{fileID: opts.FileID, id: opts.JobID, done: opts.jobDone}
 	}
 	return fixSession{opts: opts, d: d, root: root, host: host, token: token,
-		targets: targets, profile: profile, work: work, job: job}.run(ctx)
+		targets: targets, build: build, profile: build.String(), work: work, job: job}.run(ctx)
 }
 
 // memoizedAnalysesFor wraps list in a per-call cache keyed by fileID, local to
@@ -520,8 +524,11 @@ type fixSession struct {
 	host    string
 	token   string
 	targets []analysisTarget
-	// profile describes the build system this checkout uses, handed to the
+	// build describes the build system this checkout uses, handed to the
 	// fixer up front because it cannot infer any of it from its one file.
+	// A Mycroft job sends it as typed values; profile is its text for the
+	// in-CLI agent on the manual --finding path.
+	build   buildProfile
 	profile string
 	// work is shared across analyses so two findings in the same file compose
 	// instead of overwriting each other.
@@ -664,7 +671,8 @@ func (s fixSession) produceFixFor(
 	ctx context.Context, path string, in FindingInputs, tc targetContext,
 ) (fixservice.Result, string, error) {
 	refused := "" // the rule the previous attempt broke, if any
-	for attempt, violation := 0, ""; ; attempt++ {
+	var violation *patchViolation
+	for attempt := 0; ; attempt++ {
 		res, err := s.attemptFix(ctx, path, in, tc, violation)
 		if err != nil {
 			return res, "", err
@@ -700,19 +708,23 @@ func (s fixSession) produceFixFor(
 			// recoverable; a branch that does not compile is not.
 			return fixservice.Result{}, fmt.Sprintf("rejected by patch gate (%s)", v.Rule), nil
 		}
-		violation, refused = v.Detail, v.Rule
+		violation, refused = v, v.Rule
 	}
 }
 
 // attemptFix runs one fix turn, client-side via the agent's Edit tool
 // (--fix-mode agent — NO upload), or server-side via /v1/fix (default).
-// priorViolation is the fact the previous attempt got wrong, empty on the first.
+// prior is the rule the previous attempt broke, nil on the first.
 // tc is the target's place in a multi-file remediation; server mode ignores it.
 func (s fixSession) attemptFix(
-	ctx context.Context, path string, in FindingInputs, tc targetContext, priorViolation string,
+	ctx context.Context, path string, in FindingInputs, tc targetContext, prior *patchViolation,
 ) (fixservice.Result, error) {
 	if s.job != nil {
-		return s.fixViaMycroft(ctx, path, tc, priorViolation)
+		return s.fixViaMycroft(ctx, path, tc, prior)
+	}
+	priorViolation := ""
+	if prior != nil {
+		priorViolation = prior.Detail
 	}
 	if tc.Create && s.opts.FixMode != "agent" {
 		// /v1/fix rewrites an uploaded file; it has nothing to upload here.

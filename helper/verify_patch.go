@@ -84,6 +84,9 @@ func verifyPatch(root, path, original, patched string) *patchViolation {
 	if v := checkEditablePath(root, path); v != nil {
 		return v
 	}
+	if v := checkSecrets(path, original, patched); v != nil {
+		return v
+	}
 	if v := checkNewFilePackage(path, original, patched); v != nil {
 		return v
 	}

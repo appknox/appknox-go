@@ -204,26 +204,43 @@ type AutofixToolCall struct {
 
 // AutofixToolResult is the CLI's answer to one tool call.
 type AutofixToolResult struct {
-	ID      string         `json:"id"`
-	Content string         `json:"content,omitempty"`
-	IsError bool           `json:"is_error,omitempty"`
-	Data    map[string]any `json:"data,omitempty"`
+	ID      string `json:"id"`
+	Content string `json:"content,omitempty"`
+	IsError bool   `json:"is_error,omitempty"`
 }
 
 // AutofixTurnStart opens a locate turn or a fix turn on one file.
+//
+// Nothing here is prompt text. The profile is typed values, the violation a
+// rule name plus the gate's report (quoted to the model as data), and the
+// targets are paths: Mycroft takes each file's reason from the locate answer.
 type AutofixTurnStart struct {
-	Kind      string          `json:"kind"`
-	Target    *AutofixTarget  `json:"target,omitempty"`
-	Others    []AutofixTarget `json:"others,omitempty"`
-	Profile   string          `json:"profile,omitempty"`
-	Violation string          `json:"violation,omitempty"`
+	Kind      string            `json:"kind"`
+	Target    *AutofixTarget    `json:"target,omitempty"`
+	Others    []AutofixTarget   `json:"others,omitempty"`
+	Profile   *AutofixProfile   `json:"profile,omitempty"`
+	Violation *AutofixViolation `json:"violation,omitempty"`
 }
 
 // AutofixTarget is one file a fix turn may change.
 type AutofixTarget struct {
 	Path string `json:"path"`
-	Why  string `json:"why,omitempty"`
 	New  bool   `json:"new,omitempty"`
+}
+
+// AutofixProfile is the build facts read off the checkout.
+type AutofixProfile struct {
+	BuildSystem string `json:"build_system,omitempty"` // "Gradle", "Maven" or ""
+	Android     bool   `json:"android,omitempty"`
+	AGPMajor    int    `json:"agp_major,omitempty"`
+	CompileSDK  int    `json:"compile_sdk,omitempty"`
+	BuildConfig *bool  `json:"build_config,omitempty"` // nil when not checked
+}
+
+// AutofixViolation is why the patch gate refused the last attempt.
+type AutofixViolation struct {
+	Rule   string `json:"rule"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // AutofixTurnRequest is one call of a turn. Start opens it; ToolResults continue it.

@@ -24,6 +24,18 @@ type mycroftJob struct {
 
 const mycroftTurnLimit = 15
 
+// maxViolationDetail is the longest gate report Mycroft accepts.
+const maxViolationDetail = 1000
+
+// capRunes cuts s to at most n characters, the unit Mycroft counts in.
+func capRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+
 // targetsFromUnits turns the worker's public findings into the run's targets.
 // A unit with a skip reason is not located. Remediation text stays on the
 // worker, so a unit the CLI will attempt carries only its id.
@@ -65,9 +77,7 @@ func targetsFromUnits(units *[]appknox.AutofixUnit) []analysisTarget {
 }
 
 func (s fixSession) locateViaMycroft(ctx context.Context, u FindingUnit) (agent.TargetReply, error) {
-	resp, err := s.driveTurn(ctx, u.UnitID, &appknox.AutofixTurnStart{
-		Kind: "locate", Profile: s.profile,
-	}, "")
+	resp, err := s.driveTurn(ctx, u.UnitID, &appknox.AutofixTurnStart{Kind: "locate"}, "")
 	if err != nil {
 		return agent.TargetReply{}, err
 	}
@@ -88,7 +98,7 @@ func (s fixSession) locateViaMycroft(ctx context.Context, u FindingUnit) (agent.
 	return reply, nil
 }
 
-func (s fixSession) fixViaMycroft(ctx context.Context, path string, tc targetContext, priorViolation string) (fixservice.Result, error) {
+func (s fixSession) fixViaMycroft(ctx context.Context, path string, tc targetContext, prior *patchViolation) (fixservice.Result, error) {
 	abs, err := safeDest(s.root, path)
 	if err != nil {
 		return fixservice.Result{}, err
@@ -112,13 +122,17 @@ func (s fixSession) fixViaMycroft(ctx context.Context, path string, tc targetCon
 
 	others := make([]appknox.AutofixTarget, 0, len(tc.OtherFiles))
 	for _, o := range tc.OtherFiles {
-		others = append(others, appknox.AutofixTarget{Path: o.Path, Why: o.Why, New: o.New})
+		others = append(others, appknox.AutofixTarget{Path: o.Path, New: o.New})
+	}
+	var violation *appknox.AutofixViolation
+	if prior != nil {
+		violation = &appknox.AutofixViolation{Rule: prior.Rule, Detail: capRunes(prior.Detail, maxViolationDetail)}
 	}
 	resp, err := s.driveTurn(ctx, tc.UnitID, &appknox.AutofixTurnStart{
 		Kind:      "fix",
-		Profile:   s.profile,
-		Violation: priorViolation,
-		Target:    &appknox.AutofixTarget{Path: path, Why: tc.Why, New: tc.Create},
+		Profile:   s.build.wire(),
+		Violation: violation,
+		Target:    &appknox.AutofixTarget{Path: path, New: tc.Create},
 		Others:    others,
 	}, path)
 	if err != nil {

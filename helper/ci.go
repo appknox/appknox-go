@@ -2,6 +2,7 @@ package helper
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 )
@@ -85,6 +86,24 @@ func branchFromGitHubRef(ref string) string {
 func validRepoSpec(spec string) bool {
 	_, _, err := splitRepo(spec)
 	return err == nil
+}
+
+var errPullRequestTarget = errors.New("autofix must not run on pull_request_target: " +
+	"that event gives the run this repository's secrets while the checkout can be the " +
+	"pull request's code. Run autofix on pull_request or push")
+
+// AutofixEventError refuses, before any work, a CI run autofix must not
+// serve: a pull_request_target run, or a pull request from a fork. In both the
+// code the model would read and edit is not the repository owner's, and a fork's
+// head cannot be pushed with the base repository's token anyway.
+func AutofixEventError() error {
+	if os.Getenv("GITHUB_EVENT_NAME") == "pull_request_target" {
+		return errPullRequestTarget
+	}
+	if forkPRFromCI() {
+		return errForkPR
+	}
+	return nil
 }
 
 // forkPRFromCI reports a pull_request whose head repo is not the base repo.

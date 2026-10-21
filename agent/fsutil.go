@@ -90,7 +90,7 @@ func walkSourceFiles(root string, fn func(rel, abs string) error) {
 			return nil // never read through a symlink
 		}
 		rel, relErr := filepath.Rel(root, abs)
-		if relErr != nil || !isSource(rel) {
+		if relErr != nil || !isSource(rel) || hiddenOrSecret(rel) {
 			return nil
 		}
 		return fn(filepath.ToSlash(rel), abs)
