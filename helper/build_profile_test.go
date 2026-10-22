@@ -3,42 +3,40 @@ package helper
 import (
 	"testing"
 
+	"github.com/appknox/appknox-go/appknox"
 	"github.com/stretchr/testify/require"
 )
 
-// AndroGoat's shape, and the reason this file exists: AGP 8 with viewBinding
-// but no buildConfig. The fixer wrote `if (BuildConfig.DEBUG)` here and the
-// build failed with "Unresolved reference: BuildConfig".
-func TestDescribeBuild_warnsWhenBuildConfigIsNotGenerated(t *testing.T) {
+func boolPtr(b bool) *bool { return &b }
+
+// AndroGoat's shape, and the reason this profile exists: AGP 8 with
+// viewBinding but no buildConfig. The fixer wrote `if (BuildConfig.DEBUG)`
+// here and the build failed with "Unresolved reference: BuildConfig".
+// Sherrinford turns build_config=false on AGP 8 into the warning.
+func TestDescribeBuild_reportsBuildConfigNotGenerated(t *testing.T) {
 	root := writeRepo(t, agp8NoBuildConfig())
 
-	got := describeBuild(root).String()
-
-	require.Contains(t, got, "Build system: Gradle / Android")
-	require.Contains(t, got, "Android Gradle Plugin: 8.x")
-	require.Contains(t, got, "compileSdk: 34")
-	require.Contains(t, got, "BuildConfig is NOT generated here")
+	require.Equal(t, &appknox.AutofixProfile{
+		BuildSystem: "Gradle", Android: true, AGPMajor: 8, CompileSDK: 34, BuildConfig: boolPtr(false),
+	}, describeBuild(root).wire())
 }
 
-// Once a module asks for it, the warning must disappear -- stating it anyway
-// would be asserting something false, which is worse than saying nothing.
-func TestDescribeBuild_silentWhenBuildConfigIsEnabled(t *testing.T) {
+// Once a module asks for it, the profile must say so: stating it is off
+// anyway would be asserting something false.
+func TestDescribeBuild_reportsBuildConfigEnabled(t *testing.T) {
 	files := agp8NoBuildConfig()
 	files["app/build.gradle"] = "android {\n compileSdkVersion 34\n buildFeatures {\n  buildConfig true\n }\n}\n"
 	root := writeRepo(t, files)
 
-	require.NotContains(t, describeBuild(root).String(), "BuildConfig is NOT generated")
+	require.Equal(t, boolPtr(true), describeBuild(root).wire().BuildConfig)
 }
 
-// AGP 7 generates BuildConfig by default, so the warning would be wrong there.
-func TestDescribeBuild_silentAboutBuildConfigOnAGP7(t *testing.T) {
+func TestDescribeBuild_readsTheAGPVersion(t *testing.T) {
 	files := agp8NoBuildConfig()
 	files["build.gradle"] = "buildscript {\n dependencies {\n  classpath 'com.android.tools.build:gradle:7.4.2'\n }\n}\n"
 	root := writeRepo(t, files)
 
-	got := describeBuild(root).String()
-	require.Contains(t, got, "Android Gradle Plugin: 7.x")
-	require.NotContains(t, got, "BuildConfig is NOT generated")
+	require.Equal(t, 7, describeBuild(root).wire().AGPMajor)
 }
 
 // A Maven project has none of the Android machinery the remediation prose
@@ -48,11 +46,7 @@ func TestDescribeBuild_namesAMavenProjectAsNotAndroid(t *testing.T) {
 		"pom.xml": "<project><artifactId>app</artifactId></project>\n",
 	})
 
-	got := describeBuild(root).String()
-
-	require.Contains(t, got, "Build system: Maven")
-	require.Contains(t, got, "not an Android project")
-	require.NotContains(t, got, "compileSdk")
+	require.Equal(t, &appknox.AutofixProfile{BuildSystem: "Maven"}, describeBuild(root).wire())
 }
 
 // Gradle alone does not mean Android: plenty of Gradle projects are plain JVM.
@@ -61,14 +55,13 @@ func TestDescribeBuild_doesNotCallPlainGradleAndroid(t *testing.T) {
 		"build.gradle": "plugins { id 'java' }\n",
 	})
 
-	got := describeBuild(root).String()
-
-	require.Contains(t, got, "Build system: Gradle")
-	require.NotContains(t, got, "Android")
+	got := describeBuild(root).wire()
+	require.Equal(t, "Gradle", got.BuildSystem)
+	require.False(t, got.Android)
 }
 
-// Nothing known means nothing said. Inventing a profile would be worse than
-// omitting the section, because the fixer cannot check it.
+// Nothing known means nothing said. BuildConfig stays unset rather than
+// "off", because nothing was checked.
 func TestDescribeBuild_isEmptyWithNoBuildFiles(t *testing.T) {
-	require.Empty(t, describeBuild(t.TempDir()).String())
+	require.Equal(t, &appknox.AutofixProfile{}, describeBuild(t.TempDir()).wire())
 }

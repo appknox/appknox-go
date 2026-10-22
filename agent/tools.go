@@ -1,75 +1,52 @@
 package agent
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	sdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/toolrunner"
 )
 
-// Tool input schemas (invopop/jsonschema tags drive the tool definition).
-type readFileInput struct {
-	Path string `json:"path" jsonschema:"required,description=Repository-relative path of the source file to read"`
-}
+// The read-only tools a model turn may call on the checkout. Sherrinford
+// defines them for the model; these run them, scoped to the repository root.
 
-type grepInput struct {
-	Pattern string `json:"pattern" jsonschema:"required,description=Go regular expression to search for across source files"`
-}
-
-type globInput struct {
-	Pattern string `json:"pattern" jsonschema:"required,description=Glob matched against each file basename and repo-relative path (e.g. *MainActivity*.java)"`
-}
-
-// textResult wraps a plain-text tool result.
-func textResult(s string) sdk.BetaToolResultBlockParamContentUnion {
-	return sdk.BetaToolResultBlockParamContentUnion{OfText: &sdk.BetaTextBlockParam{Text: s}}
-}
-
-// readFileHandler returns a read_file handler scoped to root (CWE-22 guarded).
+// readFile returns one repository file's content (CWE-22 guarded).
 // Hidden files, credential files and file types the fix never needs are
 // refused (see readable.go), judged on both the path asked for and the file a
 // symlink inside the tree resolves to.
-func readFileHandler(root string) func(context.Context, readFileInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
-	return func(_ context.Context, in readFileInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
-		abs, err := resolveUnderRoot(root, in.Path)
-		if err != nil {
-			return sdk.BetaToolResultBlockParamContentUnion{}, err
-		}
-		resolved, relErr := filepath.Rel(canonicalDir(root), abs)
-		if relErr != nil || !readable(in.Path) || !readable(resolved) {
-			return sdk.BetaToolResultBlockParamContentUnion{}, fmt.Errorf(
-				"agent: read_file %q: not readable by autofix (hidden, credential or unsupported file type)", in.Path)
-		}
-		data, truncated, err := readCapped(abs, maxReadBytes)
-		if err != nil {
-			return sdk.BetaToolResultBlockParamContentUnion{}, fmt.Errorf("agent: read_file %q: %w", in.Path, err)
-		}
-		text := string(data)
-		if truncated {
-			text += fmt.Sprintf("\n…[truncated at %d bytes]", maxReadBytes)
-		}
-		return textResult(text), nil
+func readFile(root, path string) (string, error) {
+	abs, err := resolveUnderRoot(root, path)
+	if err != nil {
+		return "", err
 	}
+	resolved, relErr := filepath.Rel(canonicalDir(root), abs)
+	if relErr != nil || !readable(path) || !readable(resolved) {
+		return "", fmt.Errorf(
+			"agent: read_file %q: not readable by autofix (hidden, credential or unsupported file type)", path)
+	}
+	data, truncated, err := readCapped(abs, maxReadBytes)
+	if err != nil {
+		return "", fmt.Errorf("agent: read_file %q: %w", path, err)
+	}
+	text := string(data)
+	if truncated {
+		text += fmt.Sprintf("\n…[truncated at %d bytes]", maxReadBytes)
+	}
+	return text, nil
 }
 
-// grepHandler returns a grep handler that scans real source files under root.
-func grepHandler(root string) func(context.Context, grepInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
-	return func(_ context.Context, in grepInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
-		re, err := regexp.Compile(in.Pattern)
-		if err != nil {
-			return sdk.BetaToolResultBlockParamContentUnion{}, fmt.Errorf("agent: grep pattern: %w", err)
-		}
-		out, truncated := grepFiles(root, re)
-		if len(out) == 0 {
-			return textResult("No matches."), nil
-		}
-		return textResult(joinCapped(out, truncated)), nil
+// grep returns "path:line:text" matches of pattern across real source files.
+func grep(root, pattern string) (string, error) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "", fmt.Errorf("agent: grep pattern: %w", err)
 	}
+	out, truncated := grepFiles(root, re)
+	if len(out) == 0 {
+		return "No matches.", nil
+	}
+	return joinCapped(out, truncated), nil
 }
 
 // grepFiles walks source files under root collecting up to maxMatches "path:line"
@@ -99,26 +76,24 @@ func grepFiles(root string, re *regexp.Regexp) ([]string, bool) {
 	return out, truncated
 }
 
-// globHandler returns a glob handler that lists matching source files under root.
-func globHandler(root string) func(context.Context, globInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
-	return func(_ context.Context, in globInput) (sdk.BetaToolResultBlockParamContentUnion, error) {
-		var out []string
-		truncated := false
-		walkSourceFiles(root, func(rel, _ string) error {
-			if globMatches(in.Pattern, rel) {
-				out = append(out, rel)
-				if len(out) >= maxMatches {
-					truncated = true
-					return filepath.SkipAll
-				}
+// glob lists source files whose path or basename matches pattern.
+func glob(root, pattern string) (string, error) {
+	var out []string
+	truncated := false
+	walkSourceFiles(root, func(rel, _ string) error {
+		if globMatches(pattern, rel) {
+			out = append(out, rel)
+			if len(out) >= maxMatches {
+				truncated = true
+				return filepath.SkipAll
 			}
-			return nil
-		})
-		if len(out) == 0 {
-			return textResult("No files matched."), nil
 		}
-		return textResult(joinCapped(out, truncated)), nil
+		return nil
+	})
+	if len(out) == 0 {
+		return "No files matched.", nil
 	}
+	return joinCapped(out, truncated), nil
 }
 
 // joinCapped renders result lines, appending a marker when the cap was hit.
@@ -137,24 +112,4 @@ func globMatches(pattern, rel string) bool {
 	}
 	ok, _ := filepath.Match(pattern, filepath.Base(rel))
 	return ok
-}
-
-// buildLocateTools builds the read-only Read/Grep/Glob tool set scoped to root.
-func buildLocateTools(root string) ([]sdk.BetaTool, error) {
-	read, err := toolrunner.NewBetaToolFromJSONSchema(
-		"read_file", "Read a source file by repository-relative path.", readFileHandler(root))
-	if err != nil {
-		return nil, err
-	}
-	grep, err := toolrunner.NewBetaToolFromJSONSchema(
-		"grep", "Search source files for a regular expression; returns path:line matches.", grepHandler(root))
-	if err != nil {
-		return nil, err
-	}
-	glob, err := toolrunner.NewBetaToolFromJSONSchema(
-		"glob", "List source files whose basename or path matches a glob pattern.", globHandler(root))
-	if err != nil {
-		return nil, err
-	}
-	return []sdk.BetaTool{read, grep, glob}, nil
 }

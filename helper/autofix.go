@@ -14,7 +14,6 @@ import (
 	"github.com/appknox/appknox-go/agent"
 	"github.com/appknox/appknox-go/appknox"
 	"github.com/appknox/appknox-go/appknox/enums"
-	"github.com/appknox/appknox-go/fixservice"
 	"github.com/appknox/appknox-go/ghfetch"
 	"github.com/pmezard/go-difflib/difflib"
 	"github.com/spf13/viper"
@@ -32,16 +31,12 @@ type AutofixOptions struct {
 	Ref           string // PR base / merge target; empty = repo default branch
 	HeadRef       string // feature branch this autofix belongs to (CI: GITHUB_HEAD_REF / GITHUB_REF)
 	RepoPath      string // already-checked-out repo (CI: GITHUB_WORKSPACE)
-	FileID        int    // Appknox file id. 0 with no --finding = latest upload on the base branch
+	FileID        int    // Appknox file id. 0 = latest upload on the base branch
 	PackageName   string // package name or bundle id used to find that upload; empty = detect from the checkout
 	Platform      string // "android" or "ios" for that lookup; empty = detect from the checkout
-	AnalysisID    int    // one analysis on the file; 0 = every fixable analysis
-	RiskThreshold int    // minimum computed risk to attempt; runAutofix defaults an unset (<=0) value to 1 -- see the comment there. 0 means "everything" only when passed to locatableAnalysisIDs directly, as every test and health-score mode do.
-	Finding       string // manual finding detail (when not using file id)
-	ClassHint     string // manual class/symbol hint
+	RiskThreshold int    // minimum computed risk Mycroft builds units for
 	GithubToken   string // GitHub token for the --repo fetch and branch push
 	DryRun        bool   // locate + fix but do not push a branch
-	FixMode       string // "agent" (the cmd/autofix.go flag default: client-side Edit, no upload) or "server" (/v1/fix, uploads the file)
 	ListAnalyses  bool   // print the file's analyses + class hints, then exit
 
 	// LocateOnly runs targeting and validation, prints each finding's
@@ -49,20 +44,9 @@ type AutofixOptions struct {
 	// registration, no delivery. Used to measure locate accuracy (spec 3.6).
 	LocateOnly bool
 
-	// Model overrides the model for BOTH turns. Empty keeps the agent layer's
-	// default rather than naming one here, so the default stays in exactly one
-	// place (agent.runnerParams).
-	Model string
-
-	// LocateModel overrides the LOCATE turn only, falling back to Model and
-	// then the default. Deliberately one-directional: a cheap model here cannot
-	// weaken the shipped patch, because the fix turn never reads this field.
-	LocateModel string
-
 	// JobID is the Mycroft autofix job this run drives. Set after start.
 	JobID int
-	// Units are the findings the worker published. Nil means this run still
-	// resolves targets from KnoxIQ itself (the manual --finding path).
+	// Units are the findings the worker published.
 	Units *[]appknox.AutofixUnit
 	// PRTitle is the title Mycroft returned from complete.
 	PRTitle string
@@ -75,40 +59,38 @@ type AutofixOptions struct {
 
 // autofixDeps are the injectable collaborators (seams for cost-free tests).
 type autofixDeps struct {
-	locateTargets func(ctx context.Context, cfg agent.Config, req agent.TargetRequest) (agent.TargetReply, error)
-	fetch         func(ctx context.Context, fileID, analysisID int) (FindingInputs, error)
-	analysisIDs   func(ctx context.Context, fileID, riskThreshold int) ([]int, error)
-	submit        func(ctx context.Context, cfg fixservice.Config, req fixservice.Request) (fixservice.Result, error)
-	agentFix      func(ctx context.Context, cfg agent.Config, req agent.FixRequest) (agent.FixResult, error)
-	deliver       func(ctx context.Context, opts AutofixOptions, patches []filePatch) (Delivery, error)
-	report        func(ctx context.Context, opts AutofixOptions, d Delivery, patches []filePatch) error
-	knoxiqReady   func(ctx context.Context, fileID int) error
+	// locate and fix run one model turn each. Nil means the real thing: a
+	// turn on this run's Mycroft job (locateViaMycroft, fixViaMycroft).
+	locate      func(ctx context.Context, u FindingUnit) (agent.TargetReply, error)
+	fix         func(ctx context.Context, path string, tc targetContext, prior *patchViolation) (fixResult, error)
+	deliver     func(ctx context.Context, opts AutofixOptions, patches []filePatch) (Delivery, error)
+	report      func(ctx context.Context, opts AutofixOptions, d Delivery, patches []filePatch) error
+	knoxiqReady func(ctx context.Context, fileID int) error
+	// analyses lists the file's analyses, for each finding's severity. Nil
+	// leaves severities empty.
+	analyses func(ctx context.Context, fileID int) ([]*appknox.Analysis, error)
 }
 
-// defaultDeps wires every real collaborator except fetch and analysisIDs,
-// which runAutofix fills in via withKnoxIQFetchers so they can share one
-// per-run analysis cache. Leaving them nil here (rather than pointing them at
-// package-level funcs) is what lets withKnoxIQFetchers tell "caller supplied
-// a stub" apart from "use the real thing".
+// defaultDeps wires every real collaborator. locate and fix stay nil: they
+// need the session's job, which only exists once the run has started.
 func defaultDeps() autofixDeps {
 	return autofixDeps{
-		locateTargets: agent.LocateTargets,
-		submit:        fixservice.SubmitAndAwait,
-		agentFix:      agent.FixFile,
-		deliver:       deliverBranch,
-		report:        reportAutofixPR,
-		knoxiqReady:   checkKnoxIQReady,
+		deliver:     deliverBranch,
+		report:      reportAutofixPR,
+		knoxiqReady: checkKnoxIQReady,
+		analyses: func(ctx context.Context, fileID int) ([]*appknox.Analysis, error) {
+			return allAnalyses(ctx, getClient(), fileID)
+		},
 	}
 }
 
 // filePatch is one located file's generated fix.
 type filePatch struct {
-	Path       string
-	Content    string
-	Diff       string
-	Confidence float64
-	Applied    bool
-	Finding    string
+	Path    string
+	Content string
+	Diff    string
+	Applied bool
+	Finding string
 	// Formatting is cosmetic advice about the patch -- tabs in a space-indented
 	// file, say. Reported on the run and never enforced: see formatting.go.
 	Formatting string
@@ -210,22 +192,7 @@ func ProcessAutofix(opts AutofixOptions) {
 		}()
 	}
 	out, err := runAutofix(context.Background(), opts, defaultDeps())
-	nothingToFix, fail := autofixExit(err)
-	if nothingToFix {
-		// A clean scan, an app whose findings are all third-party, or one
-		// KnoxIQ declined to remediate are all successful runs that happen to
-		// produce no patch. Returning here, without touching the Mycroft job
-		// any further, matches baseline c32941e: that build never called
-		// runAutofix's now-removed equivalent with an error at all on a clean
-		// fetch, so the job it had already moved to Processing (via
-		// processAutofixWait above) was simply left there -- printJobResult
-		// only ever ran when out.BranchURL was non-empty. See
-		// final-fix-report.md (I1) for the baseline read that established
-		// this.
-		fmt.Printf("Nothing to fix: %v\n", err)
-		return
-	}
-	if fail {
+	if err != nil {
 		printOutcomeLines(out.Findings)
 		PrintError(err)
 		if opts.JobID > 0 && opts.jobDone != nil && !*opts.jobDone {
@@ -237,22 +204,6 @@ func ProcessAutofix(opts AutofixOptions) {
 	if opts.FileID > 0 && !opts.DryRun && out.BranchURL != "" {
 		printJobResult(opts.FileID, out)
 	}
-}
-
-// autofixExit classifies the result of runAutofix for ProcessAutofix's exit
-// decision, factored out of ProcessAutofix so the clean-scan/outage split is
-// testable without os.Exit.
-//
-// ErrNothingFixable is a real, successful answer -- a clean scan, or one
-// where KnoxIQ judged nothing worth fixing -- and must not read as a failure
-// (nothingToFix true, fail false). Any other non-nil error is a genuine
-// outage (an unreachable KnoxIQ, a rejected credential, a missing repo) and
-// must exit 1 (fail true). A nil error is neither.
-func autofixExit(err error) (nothingToFix, fail bool) {
-	if errors.Is(err, ErrNothingFixable) {
-		return true, false
-	}
-	return false, err != nil
 }
 
 func processAutofixWait(ctx context.Context, opts AutofixOptions) (req *appknox.AutofixRequest, alreadyDone bool, err error) {
@@ -368,7 +319,7 @@ func reportAutofixTimeout(client *appknox.Client, fileID int) {
 	_, _, _ = client.KnoxIQ.MarkAutofixTimedOut(context.Background(), fileID)
 }
 
-// runAutofix: KnoxIQ ready → resolve inputs → locate each class → fix → deliver.
+// runAutofix: KnoxIQ ready → the job's findings → locate and fix each → deliver.
 func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcome, error) {
 	if d.knoxiqReady != nil {
 		if err := d.knoxiqReady(ctx, opts.FileID); err != nil {
@@ -376,46 +327,14 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 		}
 	}
 	opts = applyCIDefaults(opts)
-	// An unset RiskThreshold defaults to 1 (any non-Passed finding), not 0
-	// (everything). locatableAnalysisIDs keeps analyses whose ComputedRisk is
-	// >= this threshold, and on a real file most analyses are Passed
-	// (ComputedRisk 0): measured on mfva file 24 (2026-09-21), 108 analyses
-	// total but only 24 with ComputedRisk > 0. Defaulting to 0 would ask
-	// KnoxIQ about all 108 instead of ~24, and the gateway has a real
-	// per-session call budget -- isGatewayBudgetExhausted exists because that
-	// budget gets exhausted. (locatableAnalysisIDs's own doc comment, in
-	// autofix_targets.go, cites a SEPARATE measurement on mfva file 358 from
-	// 2026-09-04 that happens to share this same 108-analyses total -- same
-	// app, same scanner, so that is expected and not a typo of this one.)
-	// This lives here, not inside locatableAnalysisIDs, so that function keeps
-	// treating 0 as "everything" for any caller that passes it a threshold
-	// directly (as every existing test does, and as health-score mode will).
-	// AutofixOptions.RiskThreshold has no way today to distinguish "the caller
-	// left this unset" from "the caller explicitly asked for 0" -- both are
-	// the field's zero value -- so this default only applies to the CLI's own
-	// AutofixOptions before anything downstream sees it; a future
-	// --risk-threshold flag that wants 0 to mean "everything" will need its
-	// own explicit signal (e.g. a flag-was-set bool) rather than relying on
-	// the zero value.
-	if opts.RiskThreshold <= 0 {
-		opts.RiskThreshold = 1
+	if opts.Units == nil {
+		return Outcome{}, errors.New("autofix needs a Mycroft job: pass --file-id, or upload a build on this branch first")
 	}
-	token := viper.GetString("access-token")
-	if token == "" {
+	if viper.GetString("access-token") == "" {
 		return Outcome{}, errors.New("autofix needs an Appknox access token (--access-token or APPKNOX_ACCESS_TOKEN)")
 	}
-	d = withKnoxIQFetchers(d)
-	var err error
-	var targets []analysisTarget
-	if opts.Units != nil {
-		targets = targetsFromUnits(opts.Units)
-		stampSeverity(ctx, opts.FileID, targets)
-	} else {
-		targets, err = resolveTargets(ctx, opts, d)
-		if err != nil {
-			return Outcome{}, err
-		}
-	}
+	targets := targetsFromUnits(opts.Units)
+	stampSeverity(ctx, d.analyses, opts.FileID, targets)
 	root, cleanup, err := resolveRepoRoot(ctx, opts)
 	if err != nil {
 		return Outcome{}, err
@@ -426,9 +345,10 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	if err != nil {
 		return Outcome{}, err
 	}
-	// Same Mycroft host as upload/cicheck. Gate before locate so a
-	// plaintext-remote check only on the fix leg cannot leak the token (CWE-319).
-	if err := fixservice.ValidateEndpoint(host); err != nil {
+	// Tool results carry the checkout's file contents to this host. Gate
+	// before the first turn so a plaintext remote cannot leak them or the
+	// token (CWE-319).
+	if err := validateEndpoint(host); err != nil {
 		return Outcome{}, err
 	}
 	// Once per run, not once per finding: describeBuild walks the build files
@@ -458,83 +378,26 @@ func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcom
 	if opts.JobID > 0 {
 		job = &mycroftJob{fileID: opts.FileID, id: opts.JobID, done: opts.jobDone}
 	}
-	return fixSession{opts: opts, d: d, root: root, host: host, token: token,
-		targets: targets, build: build, profile: build.String(), work: work, job: job}.run(ctx)
+	return fixSession{opts: opts, d: d, root: root, targets: targets, build: build,
+		work: work, job: job}.run(ctx)
 }
 
-// memoizedAnalysesFor wraps list in a per-call cache keyed by fileID, local to
-// the returned closure -- not a package-level variable, so nothing leaks
-// between runs or tests. This is the mechanism the fetch/analysisIDs
-// signature change exists for: fetch is called once per analysis target (up
-// to ~18 on a real scan) but AnalysesService has no GetByID, only ListByFile,
-// so without this cache every one of those calls would re-list the whole
-// file. Split out from withKnoxIQFetchers so the caching contract itself is
-// testable without a real Appknox client.
-func memoizedAnalysesFor(
-	list func(ctx context.Context, fileID int) ([]*appknox.Analysis, error),
-) func(context.Context, int) ([]*appknox.Analysis, error) {
-	cache := map[int][]*appknox.Analysis{}
-	return func(ctx context.Context, fileID int) ([]*appknox.Analysis, error) {
-		if cached, ok := cache[fileID]; ok {
-			return cached, nil
-		}
-		all, err := list(ctx, fileID)
-		if err != nil {
-			return nil, err
-		}
-		cache[fileID] = all
-		return all, nil
-	}
-}
-
-// withKnoxIQFetchers fills in the real KnoxIQ-backed implementation of
-// whichever of fetch / analysisIDs the caller left nil, independently: a
-// caller that stubs only one of the two fields still gets the real,
-// network-calling implementation of the other -- it is not conditioned on
-// whether BOTH are already set. Every existing test supplies both, so this
-// is a no-op for the whole existing suite; a test that means to stub the run
-// end to end must still set both fields itself.
-//
-// Both real closures share one memoizedAnalysesFor cache of each file's
-// analyses, so a run considering N analyses lists the file once, not N times
-// -- see memoizedAnalysesFor.
-func withKnoxIQFetchers(d autofixDeps) autofixDeps {
-	analysesFor := memoizedAnalysesFor(func(ctx context.Context, fileID int) ([]*appknox.Analysis, error) {
-		return allAnalyses(ctx, getClient(), fileID)
-	})
-	if d.fetch == nil {
-		d.fetch = func(ctx context.Context, fileID, analysisID int) (FindingInputs, error) {
-			return fetchKnoxIQInputs(ctx, analysesFor, fileID, analysisID)
-		}
-	}
-	if d.analysisIDs == nil {
-		d.analysisIDs = func(ctx context.Context, fileID, riskThreshold int) ([]int, error) {
-			return locatableAnalysisIDs(ctx, analysesFor, fileID, riskThreshold)
-		}
-	}
-	return d
-}
-
-// fixSession carries the resolved context for locating + fixing every target
-// on a file (or one manual --finding).
+// fixSession carries the resolved context for locating + fixing every finding
+// of one Mycroft job.
 type fixSession struct {
 	opts    AutofixOptions
 	d       autofixDeps
 	root    string
-	host    string
-	token   string
 	targets []analysisTarget
-	// build describes the build system this checkout uses, handed to the
-	// fixer up front because it cannot infer any of it from its one file.
-	// A Mycroft job sends it as typed values; profile is its text for the
-	// in-CLI agent on the manual --finding path.
-	build   buildProfile
-	profile string
+	// build describes the build system this checkout uses, sent with each
+	// fix turn as typed values because the fixer cannot infer any of it from
+	// its one file.
+	build buildProfile
 	// work is shared across analyses so two findings in the same file compose
 	// instead of overwriting each other.
 	work *workingTree
-	// job is set when this run drives a Mycroft autofix job. Nil on the
-	// manual --finding path, which still calls the in-CLI agent.
+	// job is the Mycroft autofix job this run drives. Nil only in tests that
+	// stub d.locate and d.fix.
 	job *mycroftJob
 	// tally counts locate and fix calls for the all-failed exit decision.
 	// run() sets it; a nil tally records nothing.
@@ -567,7 +430,7 @@ targetLoop:
 		// while a sibling stayed fixable, or left with no remediation text.
 		// Each already carries its own outcome line.
 		out.Findings = append(out.Findings, in.Skipped...)
-		if in.Remediation == "" && in.SkipReason != "" {
+		if in.SkipReason != "" {
 			out.Findings = append(out.Findings, skippedAnalysis(t.AnalysisID, in))
 			continue
 		}
@@ -652,28 +515,20 @@ func (s fixSession) truncate(out *Outcome, i int, cause error) {
 // not see, and a second miss on the same fact is not a third-attempt problem.
 const maxFixRetries = 1
 
-// produceFix generates a patch for one file and holds it to the static gate,
-// retrying once with the violated fact before abandoning the file.
+// produceFixFor generates a patch for one file and holds it to the static
+// gate, retrying once with the violated fact before abandoning the file. It
+// says why no patch came back: reasonDeclined when the fixer abstained,
+// "rejected by patch gate (<rule>)" when the gate discarded the patch after
+// its retry.
 //
 // The gate is relative, not absolute: verifyPatch compares the patch against
 // the original, so a repository that already fails a check is never blamed on
 // the patch that did not introduce it.
-func (s fixSession) produceFix(ctx context.Context, path string, in FindingInputs) (fixservice.Result, error) {
-	res, _, err := s.produceFixFor(ctx, path, in, targetContext{})
-	return res, err
-}
-
-// produceFixFor is produceFix with the target's place in a multi-file
-// remediation, and it says why no patch came back: reasonDeclined when the
-// fixer abstained, "rejected by patch gate (<rule>)" when the gate discarded
-// the patch after its retry.
-func (s fixSession) produceFixFor(
-	ctx context.Context, path string, in FindingInputs, tc targetContext,
-) (fixservice.Result, string, error) {
+func (s fixSession) produceFixFor(ctx context.Context, path string, tc targetContext) (fixResult, string, error) {
 	refused := "" // the rule the previous attempt broke, if any
 	var violation *patchViolation
 	for attempt := 0; ; attempt++ {
-		res, err := s.attemptFix(ctx, path, in, tc, violation)
+		res, err := s.attemptFix(ctx, path, tc, violation)
 		if err != nil {
 			return res, "", err
 		}
@@ -706,56 +561,21 @@ func (s fixSession) produceFixFor(
 		if attempt >= maxFixRetries {
 			// Discard the patch rather than ship it. A reported gap is
 			// recoverable; a branch that does not compile is not.
-			return fixservice.Result{}, fmt.Sprintf("rejected by patch gate (%s)", v.Rule), nil
+			return fixResult{}, fmt.Sprintf("rejected by patch gate (%s)", v.Rule), nil
 		}
 		violation, refused = v, v.Rule
 	}
 }
 
-// attemptFix runs one fix turn, client-side via the agent's Edit tool
-// (--fix-mode agent — NO upload), or server-side via /v1/fix (default).
-// prior is the rule the previous attempt broke, nil on the first.
-// tc is the target's place in a multi-file remediation; server mode ignores it.
+// attemptFix runs one fix turn on path. prior is the rule the previous
+// attempt broke, nil on the first.
 func (s fixSession) attemptFix(
-	ctx context.Context, path string, in FindingInputs, tc targetContext, prior *patchViolation,
-) (fixservice.Result, error) {
-	if s.job != nil {
-		return s.fixViaMycroft(ctx, path, tc, prior)
+	ctx context.Context, path string, tc targetContext, prior *patchViolation,
+) (fixResult, error) {
+	if s.d.fix != nil {
+		return s.d.fix(ctx, path, tc, prior)
 	}
-	priorViolation := ""
-	if prior != nil {
-		priorViolation = prior.Detail
-	}
-	if tc.Create && s.opts.FixMode != "agent" {
-		// /v1/fix rewrites an uploaded file; it has nothing to upload here.
-		return fixservice.Result{}, fmt.Errorf("creating %s needs --fix-mode agent", path)
-	}
-	if s.opts.FixMode == "agent" {
-		// Model only, never LocateModel: this turn writes the patch that ships.
-		fr, err := s.d.agentFix(ctx, agent.Config{Host: s.host, Token: s.token,
-			Model: s.opts.Model},
-			agent.FixRequest{RepoRoot: s.root, Path: path,
-				Finding: in.Finding, Remediation: in.Remediation,
-				// KnoxIQ's own developer-facing wording and its verification
-				// criteria, so the fixer aims at them instead of only the
-				// generic Remediation prose -- see agent/instructions.go's
-				// fixUserPrompt, which renders both when present.
-				DeveloperPrompt: in.DeveloperPrompt, Criteria: in.Criteria,
-				ProjectProfile: s.profile, PriorViolation: priorViolation,
-				Why: tc.Why, OtherFiles: tc.OtherFiles, Create: tc.Create})
-		if err != nil {
-			return fixservice.Result{}, err
-		}
-		return fixservice.Result{Changed: fr.Changed, PatchedContent: fr.PatchedContent, UnifiedDiff: fr.Diff}, nil
-	}
-	content, err := readUnderRoot(s.root, path)
-	if err != nil {
-		return fixservice.Result{}, err
-	}
-	return s.d.submit(ctx, fixservice.Config{URL: s.host, Token: s.token}, fixservice.Request{
-		Filename: path, FileContent: content, Remediation: in.Remediation,
-		Finding: in.Finding, Language: detectLanguage(path),
-	})
+	return s.fixViaMycroft(ctx, path, tc, prior)
 }
 
 // deliver pushes all patches to one GitHub branch and records the delivery on Appknox.
@@ -795,64 +615,6 @@ func resolveRepoRoot(ctx context.Context, opts AutofixOptions) (string, func(), 
 	})
 }
 
-// fetchKnoxIQInputs resolves one analysis into locate + fix inputs.
-//
-// The vulnerability record supplies only the human-readable name; the
-// remediation itself is KnoxIQ's. An empty Remediation (nil error) means
-// KnoxIQ was reached and judged nothing fixable here -- the caller drops the
-// analysis. An error means KnoxIQ was UNREACHABLE, and the caller must not
-// substitute metadata-derived guidance (deriveFindingInputs/remediationText).
-//
-// AnalysesService has no GetByID (see appknox/analyses.go), only ListByFile,
-// so the analysis is looked up in whatever analysesFor returns -- the real
-// caller (withKnoxIQFetchers) passes a memoized listing shared across every
-// analysis target in the run.
-func fetchKnoxIQInputs(
-	ctx context.Context,
-	analysesFor func(context.Context, int) ([]*appknox.Analysis, error),
-	fileID, analysisID int,
-) (FindingInputs, error) {
-	all, err := analysesFor(ctx, fileID)
-	if err != nil {
-		return FindingInputs{}, err
-	}
-	analysis := findAnalysisByID(all, analysisID)
-	if analysis == nil {
-		return FindingInputs{}, fmt.Errorf("analysis %d not found on file %d", analysisID, fileID)
-	}
-	client := getClient()
-	vuln, _, err := client.Vulnerabilities.GetByID(ctx, analysis.VulnerabilityID)
-	if err != nil {
-		return FindingInputs{}, err
-	}
-	findings, filteredSkips, skip, err := fixableKnoxIQFindings(ctx, client, analysisID, vuln.Name)
-	if err != nil {
-		return FindingInputs{}, err
-	}
-	severity := severityName(analysis.ComputedRisk)
-	if len(findings) == 0 {
-		return FindingInputs{
-			Finding: vuln.Name, VulnerabilityID: analysis.VulnerabilityID,
-			SkipReason: skip, Severity: severity,
-		}, nil
-	}
-	in := knoxIQInputs(findings, vuln.Name)
-	in.VulnerabilityID = analysis.VulnerabilityID
-	in.Severity = severity
-	// Findings dropped before knoxIQInputs saw them (filtered while a sibling
-	// stayed fixable) and findings knoxIQInputs itself dropped (no
-	// remediation text) both land here, each with exactly one outcome line
-	// (F1). VulnerabilityID is stamped now because neither producer knows it.
-	in.Skipped = append(filteredSkips, in.Skipped...)
-	for i := range in.Skipped {
-		in.Skipped[i].VulnerabilityID = analysis.VulnerabilityID
-		if in.Skipped[i].Severity == "" {
-			in.Skipped[i].Severity = severity
-		}
-	}
-	return in, nil
-}
-
 // severityName is the risk label written into the pull-request table.
 // Passed and Unknown are not severities of a finding.
 func severityName(r enums.RiskType) string {
@@ -865,13 +627,17 @@ func severityName(r enums.RiskType) string {
 }
 
 // stampSeverity fills each target's severity from the file's analyses.
-// The job path builds targets from Mycroft units, which do not carry risk.
-// A lookup failure leaves severity empty; the pull request still opens.
-func stampSeverity(ctx context.Context, fileID int, targets []analysisTarget) {
-	if fileID <= 0 || len(targets) == 0 || viper.GetString("access-token") == "" {
+// Targets are built from Mycroft units, which do not carry risk. A lookup
+// failure leaves severity empty; the pull request still opens.
+func stampSeverity(
+	ctx context.Context,
+	analyses func(context.Context, int) ([]*appknox.Analysis, error),
+	fileID int, targets []analysisTarget,
+) {
+	if analyses == nil || fileID <= 0 || len(targets) == 0 {
 		return
 	}
-	all, err := allAnalyses(ctx, getClient(), fileID)
+	all, err := analyses(ctx, fileID)
 	if err != nil {
 		return
 	}
@@ -898,16 +664,6 @@ func stampSeverity(ctx context.Context, fileID int, targets []analysisTarget) {
 			}
 		}
 	}
-}
-
-// findAnalysisByID returns the analysis with the given id, or nil.
-func findAnalysisByID(all []*appknox.Analysis, id int) *appknox.Analysis {
-	for _, a := range all {
-		if a.ID == id {
-			return a
-		}
-	}
-	return nil
 }
 
 // allAnalyses fetches every analysis for a file (count, then the full list).
@@ -971,9 +727,6 @@ func printOutcome(opts AutofixOptions, out Outcome) {
 	}
 	for _, p := range out.Patches {
 		fmt.Printf("\n=== %s ===\n", p.Path)
-		if p.Confidence > 0 {
-			fmt.Printf("confidence: %.2f\n", p.Confidence)
-		}
 		if p.Formatting != "" {
 			fmt.Printf("formatting (not enforced): %s\n", p.Formatting)
 		}

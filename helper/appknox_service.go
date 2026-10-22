@@ -11,7 +11,6 @@ import (
 
 	"github.com/appknox/appknox-go/agent"
 	"github.com/appknox/appknox-go/appknox"
-	"github.com/appknox/appknox-go/fixservice"
 )
 
 // mycroftJob is the autofix job Mycroft's worker is serving. Model turns go
@@ -23,6 +22,14 @@ type mycroftJob struct {
 }
 
 const mycroftTurnLimit = 15
+
+// fixResult is one fix turn's outcome: the target's content after the turn.
+// The checkout itself is restored before the result is returned.
+type fixResult struct {
+	Changed        bool
+	PatchedContent string
+	UnifiedDiff    string
+}
 
 // maxViolationDetail is the longest gate report Mycroft accepts.
 const maxViolationDetail = 1000
@@ -98,17 +105,17 @@ func (s fixSession) locateViaMycroft(ctx context.Context, u FindingUnit) (agent.
 	return reply, nil
 }
 
-func (s fixSession) fixViaMycroft(ctx context.Context, path string, tc targetContext, prior *patchViolation) (fixservice.Result, error) {
+func (s fixSession) fixViaMycroft(ctx context.Context, path string, tc targetContext, prior *patchViolation) (fixResult, error) {
 	abs, err := safeDest(s.root, path)
 	if err != nil {
-		return fixservice.Result{}, err
+		return fixResult{}, err
 	}
 	var original []byte
 	existed := false
 	if !tc.Create {
 		original, err = os.ReadFile(abs)
 		if err != nil {
-			return fixservice.Result{}, err
+			return fixResult{}, err
 		}
 		existed = true
 	}
@@ -136,27 +143,27 @@ func (s fixSession) fixViaMycroft(ctx context.Context, path string, tc targetCon
 		Others:    others,
 	}, path)
 	if err != nil {
-		return fixservice.Result{}, err
+		return fixResult{}, err
 	}
 	if resp.Failed {
 		detail := resp.Detail
 		if detail == "" {
 			detail = "fix failed"
 		}
-		return fixservice.Result{}, errors.New(detail)
+		return fixResult{}, errors.New(detail)
 	}
 	patched, readErr := os.ReadFile(abs)
 	if readErr != nil {
-		return fixservice.Result{}, nil
+		return fixResult{}, nil
 	}
 	if existed && string(patched) == string(original) {
-		return fixservice.Result{}, nil
+		return fixResult{}, nil
 	}
 	before := ""
 	if existed {
 		before = string(original)
 	}
-	return fixservice.Result{
+	return fixResult{
 		Changed: true, PatchedContent: string(patched), UnifiedDiff: unifiedDiff(path, before, string(patched)),
 	}, nil
 }

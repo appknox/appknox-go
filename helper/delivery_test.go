@@ -174,8 +174,8 @@ func TestBuildAutofixPR(t *testing.T) {
 
 func TestReportAutofixPR_SkipsWithoutFileID(t *testing.T) {
 	err := reportAutofixPRWith(context.Background(), nil,
-		AutofixOptions{Finding: "weak PRNG"}, Delivery{}, nil)
-	require.NoError(t, err) // manual --finding has nothing to attach to
+		AutofixOptions{}, Delivery{}, nil)
+	require.NoError(t, err) // no file id: nothing to attach the PR to
 }
 
 func TestReportAutofixPR_PostsPayload(t *testing.T) {

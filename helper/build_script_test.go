@@ -180,11 +180,11 @@ func TestCheckRemovedDependency_AllowedOnceSourceIsClean(t *testing.T) {
 
 // jedisSession is mfva 37: KnoxIQ marks jedis third-party and the locate agent
 // names app/build.gradle and ExportedActivity.java.
-func jedisSession(root string, fix func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error)) fixSession {
-	d := autofixDeps{locateTargets: targetsAt("app/build.gradle", exportedRel), agentFix: fix}
+func jedisSession(root string, fix func(context.Context, string, targetContext, *patchViolation) (fixResult, error)) fixSession {
+	d := autofixDeps{locate: targetsAt("app/build.gradle", exportedRel), fix: fix}
 	return dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "Redis library", VulnerabilityID: 37, Remediation: "r",
-		Units: []FindingUnit{{Title: "jedis", Remediation: "remove jedis", ThirdParty: true}},
+		Finding: "Redis library", VulnerabilityID: 37,
+		Units: []FindingUnit{{Title: "jedis", ThirdParty: true}},
 	}})
 }
 
@@ -193,12 +193,12 @@ func jedisSession(root string, fix func(context.Context, agent.Config, agent.Fix
 func TestRun_ThirdPartyDependencyRemovedWithItsUse(t *testing.T) {
 	root := writeRepo(t, map[string]string{"app/build.gradle": mfvaGradle, exportedRel: exportedJedis})
 	var order []string
-	s := jedisSession(root, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-		order = append(order, req.Path)
-		if req.Path == exportedRel {
-			return agent.FixResult{Changed: true, PatchedContent: exportedNoJedis}, nil
+	s := jedisSession(root, func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+		order = append(order, fixPath)
+		if fixPath == exportedRel {
+			return fixResult{Changed: true, PatchedContent: exportedNoJedis}, nil
 		}
-		return agent.FixResult{Changed: true, PatchedContent: withoutJedis()}, nil
+		return fixResult{Changed: true, PatchedContent: withoutJedis()}, nil
 	})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
@@ -210,11 +210,11 @@ func TestRun_ThirdPartyDependencyRemovedWithItsUse(t *testing.T) {
 // The Java fixer declines: the dependency must stay, or the build breaks.
 func TestRun_DependencyKeptWhenItsUseWasNotRemoved(t *testing.T) {
 	root := writeRepo(t, map[string]string{"app/build.gradle": mfvaGradle, exportedRel: exportedJedis})
-	s := jedisSession(root, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-		if req.Path == exportedRel {
-			return agent.FixResult{}, nil
+	s := jedisSession(root, func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+		if fixPath == exportedRel {
+			return fixResult{}, nil
 		}
-		return agent.FixResult{Changed: true, PatchedContent: withoutJedis()}, nil
+		return fixResult{Changed: true, PatchedContent: withoutJedis()}, nil
 	})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
@@ -232,17 +232,17 @@ func TestRun_BuildScriptUnitRolledBackWhenAnotherTargetFails(t *testing.T) {
 	root := writeRepo(t, map[string]string{"app/build.gradle": mfvaGradle, src: "class Net { void f() { } }\n"})
 	patchedGradle := strings.Replace(mfvaGradle, "    api 'com.squareup.okhttp3:okhttp:3.8.0'\n", "", 1)
 	d := autofixDeps{
-		locateTargets: targetsAt(src, "app/build.gradle"),
-		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-			if req.Path == src {
-				return agent.FixResult{Changed: true, PatchedContent: "class Net { void f() { \n"}, nil // unbalanced
+		locate: targetsAt(src, "app/build.gradle"),
+		fix: func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+			if fixPath == src {
+				return fixResult{Changed: true, PatchedContent: "class Net { void f() { \n"}, nil // unbalanced
 			}
-			return agent.FixResult{Changed: true, PatchedContent: patchedGradle}, nil
+			return fixResult{Changed: true, PatchedContent: patchedGradle}, nil
 		},
 	}
 	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "OkHttp", VulnerabilityID: 7, Remediation: "r",
-		Units: []FindingUnit{{Title: "okhttp", Remediation: "remove okhttp", ThirdParty: true}},
+		Finding: "OkHttp", VulnerabilityID: 7,
+		Units: []FindingUnit{{Title: "okhttp", ThirdParty: true}},
 	}})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
@@ -254,23 +254,22 @@ func TestRun_BuildScriptUnitRolledBackWhenAnotherTargetFails(t *testing.T) {
 	require.Equal(t, mfvaGradle, got, "the build script is back as it was")
 }
 
-// Review finding: a run that stops mid-unit (here the manual path, where any
-// fix error is fatal) still rolls the unit back before returning.
+// Review finding: a run that stops mid-unit (here the gateway budget running
+// out, which ends the run) still rolls the unit back before returning.
 func TestRun_RollbackAlsoOnEarlyReturn(t *testing.T) {
 	root := writeRepo(t, map[string]string{"app/build.gradle": mfvaGradle, "lib/build.gradle": mfvaGradle})
 	d := autofixDeps{
-		locateTargets: targetsAt("app/build.gradle", "lib/build.gradle"),
-		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-			if req.Path == "lib/build.gradle" {
-				return agent.FixResult{}, errors.New("gateway down")
+		locate: targetsAt("app/build.gradle", "lib/build.gradle"),
+		fix: func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+			if fixPath == "lib/build.gradle" {
+				return fixResult{}, errors.New("429 session call budget exhausted")
 			}
-			return agent.FixResult{Changed: true, PatchedContent: withoutJedis()}, nil
+			return fixResult{Changed: true, PatchedContent: withoutJedis()}, nil
 		},
 	}
 	s := dryAgentSession(root, d)
-	s.opts.FileID = 0
 	res, err := s.runUnit(context.Background(), FindingInputs{Finding: "Redis library"},
-		FindingUnit{Title: "jedis", Remediation: "remove jedis"})
+		FindingUnit{Title: "jedis"})
 	require.Error(t, err)
 	require.Empty(t, res.patches)
 	require.Contains(t, res.outcome.Detail, reasonRolledBack)
@@ -287,17 +286,17 @@ func TestRun_DeclinedTargetDoesNotRollBackBuildScript(t *testing.T) {
 	patchedGradle := strings.Replace(mfvaGradle, "minifyEnabled false\n",
 		"minifyEnabled false\n            debuggable false\n", 1)
 	d := autofixDeps{
-		locateTargets: targetsAt(manifest, "app/build.gradle"),
-		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-			if req.Path == manifest {
-				return agent.FixResult{}, nil
+		locate: targetsAt(manifest, "app/build.gradle"),
+		fix: func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+			if fixPath == manifest {
+				return fixResult{}, nil
 			}
-			return agent.FixResult{Changed: true, PatchedContent: patchedGradle}, nil
+			return fixResult{Changed: true, PatchedContent: patchedGradle}, nil
 		},
 	}
 	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "Debug enabled", VulnerabilityID: 3, Remediation: "r",
-		Units: []FindingUnit{{Title: "debuggable", Remediation: "debuggable false"}},
+		Finding: "Debug enabled", VulnerabilityID: 3,
+		Units: []FindingUnit{{Title: "debuggable"}},
 	}})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
@@ -311,15 +310,15 @@ func TestRun_DeclinedTargetDoesNotRollBackBuildScript(t *testing.T) {
 func TestRun_ThirdPartyWithNoSourceIsSkipped(t *testing.T) {
 	var sawThirdParty bool
 	d := autofixDeps{
-		locateTargets: func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
-			sawThirdParty = req.ThirdParty
+		locate: func(_ context.Context, unit FindingUnit) (agent.TargetReply, error) {
+			sawThirdParty = unit.ThirdParty
 			return agent.TargetReply{Targets: []agent.Target{},
 				NotFound: []string{"com.vendor.Sdk: library class"}}, nil
 		},
 	}
 	s := dryAgentSession(t.TempDir(), d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "Vendored SDK", VulnerabilityID: 5, Remediation: "r",
-		Units: []FindingUnit{{Title: "sdk", Remediation: "patch the sdk", ThirdParty: true}},
+		Finding: "Vendored SDK", VulnerabilityID: 5,
+		Units: []FindingUnit{{Title: "sdk", ThirdParty: true}},
 	}})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
@@ -418,22 +417,22 @@ func TestRun_RolledBackWhenBuildScriptChangeRefusedThenDeclined(t *testing.T) {
 	root := writeRepo(t, map[string]string{"app/build.gradle": mfvaGradle, exportedRel: exportedJedis})
 	attempts := 0
 	d := autofixDeps{
-		locateTargets: targetsAt(exportedRel, "app/build.gradle"),
-		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-			if req.Path == exportedRel {
-				return agent.FixResult{Changed: true, PatchedContent: "import com.scottyab.rootbeer.RootBeer;\n" + exportedJedis}, nil
+		locate: targetsAt(exportedRel, "app/build.gradle"),
+		fix: func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+			if fixPath == exportedRel {
+				return fixResult{Changed: true, PatchedContent: "import com.scottyab.rootbeer.RootBeer;\n" + exportedJedis}, nil
 			}
 			attempts++
-			if req.PriorViolation == "" {
-				return agent.FixResult{Changed: true,
+			if fixPrior == nil {
+				return fixResult{Changed: true,
 					PatchedContent: mfvaGradle + "dependencies { implementation 'com.scottyab:rootbeer-lib:0.1.0' }\n"}, nil
 			}
-			return agent.FixResult{}, nil // the retry abstains
+			return fixResult{}, nil // the retry abstains
 		},
 	}
 	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "Root detection", VulnerabilityID: 116, Remediation: "r",
-		Units: []FindingUnit{{Title: "root", Remediation: "add RootBeer and check isRooted()"}},
+		Finding: "Root detection", VulnerabilityID: 116,
+		Units: []FindingUnit{{Title: "root"}},
 	}})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)

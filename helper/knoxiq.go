@@ -16,7 +16,7 @@ func checkKnoxIQReady(ctx context.Context, fileID int) error {
 }
 
 // requireKnoxIQCompleted fails autofix unless KnoxIQ has finished for the file.
-// Skipped when fileID is unset (manual --finding has nothing to check).
+// Skipped when fileID is unset.
 func requireKnoxIQCompleted(ctx context.Context, client *appknox.Client, fileID int) error {
 	if fileID <= 0 {
 		return nil

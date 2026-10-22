@@ -306,7 +306,7 @@ func prFilesCell(paths []string) string {
 }
 
 // reportAutofixPR POSTs the pushed branch to KnoxIQ so the dashboard can list it.
-// Skipped when --file-id is not set (manual --finding has nothing to attach to).
+// Skipped when no file id is set: there is nothing to attach the PR to.
 func reportAutofixPR(ctx context.Context, opts AutofixOptions, d Delivery, patches []filePatch) error {
 	return reportAutofixPRWith(ctx, getClient(), opts, d, patches)
 }

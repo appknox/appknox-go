@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -14,7 +13,7 @@ import (
 
 	"github.com/appknox/appknox-go/agent"
 	"github.com/appknox/appknox-go/appknox"
-	"github.com/appknox/appknox-go/fixservice"
+	"github.com/appknox/appknox-go/appknox/enums"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
@@ -51,14 +50,6 @@ func TestResolveRepoRoot_RequiresRepoOrPath(t *testing.T) {
 	require.Error(t, err)
 }
 
-// resolveInputs / fetchAppknoxInputs were replaced by resolveTargets / the
-// KnoxIQ-backed fetch. Their old coverage now lives in
-// helper/autofix_targets_test.go:
-//   - "flags path must not hit Appknox"  -> TestResolveTargets_ManualFindingNeedsNoLookup
-//   - "FileID path derives from Appknox" -> TestResolveTargets_KeepsOnlyAnalysesKnoxIQCanFix,
-//     TestResolveTargets_SingleAnalysisMode
-//   - "requires FileID or Finding"       -> TestResolveTargets_RequiresFileIDOrFinding
-
 func TestListAnalyses_RequiresFileID(t *testing.T) {
 	require.Error(t, listAnalyses(0))
 }
@@ -73,20 +64,13 @@ func repoWithFile(t *testing.T, body string) (string, string) {
 	return root, rel
 }
 
-// deps builds a stub set: locate returns a fixed path, fix returns res, etc.
-// analysisIDs reports a single analysis (id 1); fetch returns in for it
-// regardless of which analysis id it is asked about, mirroring the single
-// FindingInputs a real single-analysis file used to produce.
-func deps(path string, res fixservice.Result, in FindingInputs) autofixDeps {
+// deps builds a stub set: locate answers with path, fix returns res, and
+// delivery opens a fake pull request.
+func deps(path string, res fixResult) autofixDeps {
 	return autofixDeps{
-		locateTargets: targetsAt(path),
-		analysisIDs:   func(context.Context, int, int) ([]int, error) { return []int{1}, nil },
-		fetch:         func(context.Context, int, int) (FindingInputs, error) { return in, nil },
-		submit: func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
+		locate: targetsAt(path),
+		fix: func(context.Context, string, targetContext, *patchViolation) (fixResult, error) {
 			return res, nil
-		},
-		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
-			return agent.FixResult{Changed: true, PatchedContent: "agent-fixed\n", Diff: "-old\n+new"}, nil
 		},
 		deliver: func(context.Context, AutofixOptions, []filePatch) (Delivery, error) {
 			return Delivery{URL: "https://github.com/appknox/mfva/pull/1"}, nil
@@ -104,33 +88,52 @@ func withAccessToken(t *testing.T) {
 func appknoxOpts(t *testing.T, root string) AutofixOptions {
 	t.Helper()
 	withAccessToken(t)
-	return AutofixOptions{RepoPath: root, FileID: 1}
+	return AutofixOptions{RepoPath: root, FileID: 1, Units: jobUnits("f")}
 }
 
-func oneClass(finding, remediation string) FindingInputs {
-	return FindingInputs{Finding: finding, ClassHints: []string{"com/x/C"}, Remediation: remediation}
+// jobUnits is what a Mycroft worker publishes: one fixable finding per name,
+// with unit id "u-<name>".
+func jobUnits(findings ...string) *[]appknox.AutofixUnit {
+	units := make([]appknox.AutofixUnit, 0, len(findings))
+	for _, f := range findings {
+		units = append(units, appknox.AutofixUnit{UnitID: "u-" + f, Finding: f})
+	}
+	return &units
 }
 
-func TestRunAutofix_KnoxIQNotCompleted_StopsBeforeFetch(t *testing.T) {
-	fetched := false
-	d := deps("app/A.java", fixservice.Result{}, oneClass("f", "r"))
+// oneClass is one finding with a single unit, as targetsFromUnits builds it.
+func oneClass(finding string) FindingInputs {
+	return FindingInputs{Finding: finding, UnitID: "u-" + finding,
+		Units: []FindingUnit{{UnitID: "u-" + finding}}}
+}
+
+func TestRunAutofix_KnoxIQNotCompleted_StopsBeforeLocate(t *testing.T) {
+	located := false
+	d := deps("app/A.java", fixResult{})
 	d.knoxiqReady = func(context.Context, int) error {
 		return errors.New("knoxiq is not completed for file 1 (sast=Pending, dast=Disabled)")
 	}
-	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
-		fetched = true
-		return FindingInputs{}, nil
+	d.locate = func(context.Context, FindingUnit) (agent.TargetReply, error) {
+		located = true
+		return agent.TargetReply{}, nil
 	}
 	_, err := runAutofix(context.Background(), appknoxOpts(t, t.TempDir()), d)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "knoxiq is not completed")
-	require.False(t, fetched)
+	require.False(t, located)
+}
+
+func TestRunAutofix_RequiresAJob(t *testing.T) {
+	withAccessToken(t)
+	_, err := runAutofix(context.Background(), AutofixOptions{RepoPath: t.TempDir(), FileID: 1},
+		deps("app/A.java", fixResult{}))
+	require.ErrorContains(t, err, "needs a Mycroft job")
 }
 
 func TestRunAutofix_KnoxIQCompleted_Continues(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
 	checked := 0
-	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
+	d := deps(rel, fixResult{Changed: true, PatchedContent: "patched\n"})
 	d.knoxiqReady = func(_ context.Context, fileID int) error {
 		checked++
 		require.Equal(t, 1, fileID)
@@ -142,156 +145,14 @@ func TestRunAutofix_KnoxIQCompleted_Continues(t *testing.T) {
 	require.Len(t, out.Patches, 1)
 }
 
-// TestRunAutofix_DefaultsRiskThresholdToOne is the regression test for the
-// RiskThreshold default. locatableAnalysisIDs keeps analyses with
-// ComputedRisk >= riskThreshold, and AutofixOptions.RiskThreshold's zero
-// value is 0 ("everything", Passed analyses included) -- on a real file most
-// analyses ARE Passed, so an unset threshold would multiply KnoxIQ round
-// trips roughly 4-5x against a gateway with a real per-session call budget.
-// runAutofix must turn an unset (<=0) RiskThreshold into 1 before it reaches
-// d.analysisIDs.
-func TestRunAutofix_DefaultsRiskThresholdToOne(t *testing.T) {
-	root, rel := repoWithFile(t, "orig\n")
-	// everyLocatableAnalysis calls analysisIDs a second time, with threshold
-	// 0, to learn how many analyses the real threshold dropped (for its
-	// below-threshold summary line) -- so this fake records every threshold
-	// it is asked about, and this test asserts the FIRST one, which is the
-	// one runAutofix's default actually produced.
-	var gotThresholds []int
-	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
-	d.analysisIDs = func(_ context.Context, _, riskThreshold int) ([]int, error) {
-		gotThresholds = append(gotThresholds, riskThreshold)
-		return []int{1}, nil
-	}
-	_, err := runAutofix(context.Background(), appknoxOpts(t, root), d)
-	require.NoError(t, err)
-	require.NotEmpty(t, gotThresholds)
-	require.Equal(t, 1, gotThresholds[0])
-}
-
-// TestRunAutofix_PreservesAnExplicitRiskThreshold guards the other half of
-// the same fix: the default must not clobber a threshold the caller actually
-// set (a future --risk-threshold flag, or health-score mode).
-func TestRunAutofix_PreservesAnExplicitRiskThreshold(t *testing.T) {
-	root, rel := repoWithFile(t, "orig\n")
-	// See TestRunAutofix_DefaultsRiskThresholdToOne for why this records
-	// every threshold seen instead of just the last.
-	var gotThresholds []int
-	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
-	d.analysisIDs = func(_ context.Context, _, riskThreshold int) ([]int, error) {
-		gotThresholds = append(gotThresholds, riskThreshold)
-		return []int{1}, nil
-	}
-	opts := appknoxOpts(t, root)
-	opts.RiskThreshold = 3
-	_, err := runAutofix(context.Background(), opts, d)
-	require.NoError(t, err)
-	require.NotEmpty(t, gotThresholds)
-	require.Equal(t, 3, gotThresholds[0])
-}
-
-// TestMemoizedAnalysesFor_ListsOncePerFileID is M2: the regression test for
-// the caching contract the whole fetch/analysisIDs signature change exists to
-// support. fetchKnoxIQInputs is called once per analysis target (up to ~18 on
-// a real scan), and AnalysesService has no GetByID, only ListByFile, so
-// without this cache every one of those calls would re-list the whole file.
-// This pins that N repeated lookups for the same fileID hit the underlying
-// list function exactly once.
-func TestMemoizedAnalysesFor_ListsOncePerFileID(t *testing.T) {
-	calls := 0
-	list := func(context.Context, int) ([]*appknox.Analysis, error) {
-		calls++
-		return []*appknox.Analysis{{ID: 1}, {ID: 2}, {ID: 3}}, nil
-	}
-	analysesFor := memoizedAnalysesFor(list)
-
-	const n = 5 // simulates N analyses on the same file, e.g. everyLocatableAnalysis's fetch loop
-	for i := 0; i < n; i++ {
-		_, err := analysesFor(context.Background(), 24)
-		require.NoError(t, err)
-	}
-	require.Equal(t, 1, calls, "N lookups for the same fileID must hit the underlying list exactly once")
-}
-
-// TestMemoizedAnalysesFor_CachesPerFileID guards against a cache keyed
-// wrong: two different fileIDs must each get their own underlying list call,
-// not share one.
-func TestMemoizedAnalysesFor_CachesPerFileID(t *testing.T) {
-	var seen []int
-	list := func(_ context.Context, fileID int) ([]*appknox.Analysis, error) {
-		seen = append(seen, fileID)
-		return nil, nil
-	}
-	analysesFor := memoizedAnalysesFor(list)
-
-	_, err := analysesFor(context.Background(), 24)
-	require.NoError(t, err)
-	_, err = analysesFor(context.Background(), 118)
-	require.NoError(t, err)
-	_, err = analysesFor(context.Background(), 24)
-	require.NoError(t, err)
-
-	require.Equal(t, []int{24, 118}, seen, "each distinct fileID is listed once, not re-listed")
-}
-
-// TestWithKnoxIQFetchers_FillsOnlyWhicheverFieldWasNil documents the
-// current contract of withKnoxIQFetchers: a caller that stubs only ONE of
-// autofixDeps' fetch/analysisIDs fields still gets the real implementation
-// for the OTHER, and the caller's own stub survives untouched.
-//
-// It is NOT a regression guard for I3 (the removed `d.fetch != nil &&
-// d.analysisIDs != nil { return d }` early return) and will NOT fail if
-// that early return is restored: both subtests below stub exactly one
-// field, so the early return's condition (both non-nil) is never true
-// either way, and this test cannot observe whether it is present. I3 was a
-// readability/trap fix -- the early return was redundant and its removal
-// changed no observable behaviour -- so there is nothing behavioural here
-// to assert a regression against. Do not read a future failure of this
-// test as evidence that I3 regressed; it can only fail if
-// withKnoxIQFetchers stops filling a nil field independently.
-func TestWithKnoxIQFetchers_FillsOnlyWhicheverFieldWasNil(t *testing.T) {
-	onlyAnalysisIDs := autofixDeps{
-		analysisIDs: func(context.Context, int, int) ([]int, error) { return []int{1}, nil },
-	}
-	filled := withKnoxIQFetchers(onlyAnalysisIDs)
-	require.NotNil(t, filled.fetch, "fetch must be filled in when only analysisIDs was stubbed")
-	require.NotNil(t, filled.analysisIDs, "the caller's own analysisIDs stub must survive")
-
-	onlyFetch := autofixDeps{
-		fetch: func(context.Context, int, int) (FindingInputs, error) { return FindingInputs{}, nil },
-	}
-	filled2 := withKnoxIQFetchers(onlyFetch)
-	require.NotNil(t, filled2.analysisIDs, "analysisIDs must be filled in when only fetch was stubbed")
-	require.NotNil(t, filled2.fetch, "the caller's own fetch stub must survive")
-}
-
 func TestRunAutofix_RequiresToken(t *testing.T) {
 	prev := viper.GetString("access-token")
 	t.Cleanup(func() { viper.Set("access-token", prev) })
 	viper.Set("access-token", "")
 	_, err := runAutofix(context.Background(),
-		AutofixOptions{RepoPath: t.TempDir(), Finding: "x"}, defaultDeps())
+		AutofixOptions{RepoPath: t.TempDir(), FileID: 1, Units: jobUnits("x")}, deps("", fixResult{}))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "APPKNOX_ACCESS_TOKEN")
-}
-
-func TestRunAutofix_UsesResolvedAPIHost(t *testing.T) {
-	withAccessToken(t)
-	prev := viper.GetString("host")
-	t.Cleanup(func() { viper.Set("host", prev) })
-	viper.Set("host", "https://autofix.staging.appknox.io/")
-
-	var gotHost, gotToken string
-	d := deps("", fixservice.Result{}, FindingInputs{})
-	d.locateTargets = func(_ context.Context, cfg agent.Config, _ agent.TargetRequest) (agent.TargetReply, error) {
-		gotHost, gotToken = cfg.Host, cfg.Token
-		return agent.TargetReply{}, nil
-	}
-	_, err := runAutofix(context.Background(),
-		AutofixOptions{RepoPath: t.TempDir(), Finding: "x"}, d)
-	require.NoError(t, err)
-	require.Equal(t, "https://autofix.staging.appknox.io/", gotHost)
-	require.Equal(t, "tok", gotToken)
 }
 
 func TestRunAutofix_RejectsPlaintextRemoteAPIHost(t *testing.T) {
@@ -301,72 +162,25 @@ func TestRunAutofix_RejectsPlaintextRemoteAPIHost(t *testing.T) {
 	viper.Set("host", "http://remote.example.com")
 
 	_, err := runAutofix(context.Background(),
-		AutofixOptions{RepoPath: t.TempDir(), Finding: "x"},
-		deps("app/A.java", fixservice.Result{}, FindingInputs{}))
+		AutofixOptions{RepoPath: t.TempDir(), FileID: 1, Units: jobUnits("x")},
+		deps("app/A.java", fixResult{}))
 	require.Error(t, err)
 }
 
 func TestRunAutofix_Advisory_WhenLocateAbstains(t *testing.T) {
 	withAccessToken(t)
 	out, err := runAutofix(context.Background(),
-		AutofixOptions{RepoPath: t.TempDir(), Finding: "x"},
-		deps("", fixservice.Result{}, FindingInputs{}))
+		AutofixOptions{RepoPath: t.TempDir(), FileID: 1, Units: jobUnits("x")},
+		deps("", fixResult{}))
 	require.NoError(t, err)
 	require.Empty(t, out.Located)
 }
 
-func TestRunAutofix_LocateOnly_WhenNoRemediation(t *testing.T) {
-	withAccessToken(t)
-	root, rel := repoWithFile(t, "orig")
-	out, err := runAutofix(context.Background(),
-		AutofixOptions{RepoPath: root, Finding: "x"},
-		deps(rel, fixservice.Result{}, FindingInputs{}))
-	require.NoError(t, err)
-	require.Equal(t, []string{rel}, out.Located)
-	require.Empty(t, out.Patches) // no remediation → no fix
-}
-
-// TestRun_EmptyRemediationNeverReachesTheFixer is the regression test for the
-// `|| in.Remediation == ""` guard in fixSession.run. That guard looks
-// redundant on the automatic --file-id path (everyLocatableAnalysis already
-// filters empty Remediation before a target exists), but resolveTargets does
-// NOT guarantee it for a manual --finding target (Remediation is never set at
-// all) or a --file-id + --analysis-id target (whatever d.fetch returned,
-// unfiltered). Deleting the guard again must fail THIS test even though every
-// --file-id-only test above would keep passing.
-func TestRun_EmptyRemediationNeverReachesTheFixer(t *testing.T) {
-	root, rel := repoWithFile(t, "orig\n")
-	agentFixCalled := false
-	d := autofixDeps{
-		locateTargets: targetsAt(rel),
-		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
-			agentFixCalled = true
-			return agent.FixResult{Changed: true, PatchedContent: "must never be produced\n"}, nil
-		},
-	}
-	s := fixSession{
-		opts: AutofixOptions{FixMode: "agent", FileID: 1},
-		d:    d,
-		root: root,
-		targets: []analysisTarget{
-			{AnalysisID: 1, Inputs: FindingInputs{
-				Finding: "no remediation", ClassHints: []string{"Main"}, Remediation: "",
-			}},
-		},
-	}
-	out, err := s.run(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, []string{rel}, out.Located, "an empty-Remediation target is still located and reported")
-	require.Empty(t, out.Patches)
-	require.False(t, agentFixCalled,
-		"the fixer must never be called for a target whose Remediation is empty")
-}
-
 func TestRunAutofix_FullFlow_PushesBranch(t *testing.T) {
 	root, rel := repoWithFile(t, "int r = new Random().nextInt();\n")
-	res := fixservice.Result{Changed: true, PatchedContent: "int r = new SecureRandom().nextInt();\n", Confidence: 0.95}
+	res := fixResult{Changed: true, PatchedContent: "int r = new SecureRandom().nextInt();\n"}
 	out, err := runAutofix(context.Background(), appknoxOpts(t, root),
-		deps(rel, res, oneClass("Insecure Random", "use SecureRandom")))
+		deps(rel, res))
 	require.NoError(t, err)
 	require.Len(t, out.Patches, 1)
 	require.Contains(t, out.BranchURL, "/pull/")
@@ -381,14 +195,9 @@ func TestRunAutofix_MultiClass_FixesEachLocatedFile(t *testing.T) {
 	for _, rel := range []string{"app/A.java", "app/B.java"} {
 		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte("orig\n"), 0o644))
 	}
-	d := deps("", fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, FindingInputs{})
-	d.locateTargets = func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
-		require.Equal(t, "com/x/A, com/x/B", req.ClassHint)
+	d := deps("", fixResult{Changed: true, PatchedContent: "fixed\n"})
+	d.locate = func(_ context.Context, unit FindingUnit) (agent.TargetReply, error) {
 		return agent.TargetReply{Targets: []agent.Target{{Path: "app/A.java"}, {Path: "app/B.java"}}}, nil
-	}
-	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
-		return FindingInputs{Finding: "Derived Crypto Keys",
-			ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}, nil
 	}
 	out, err := runAutofix(context.Background(), appknoxOpts(t, root), d)
 	require.NoError(t, err)
@@ -408,13 +217,9 @@ func TestRunAutofix_MultiClass_PushBranch_OneBranch(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte("orig\n"), 0o644))
 	}
 	var delivered []filePatch
-	d := deps("", fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, FindingInputs{})
-	d.locateTargets = func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
-		require.Equal(t, "com/x/A, com/x/B", req.ClassHint)
+	d := deps("", fixResult{Changed: true, PatchedContent: "fixed\n"})
+	d.locate = func(_ context.Context, unit FindingUnit) (agent.TargetReply, error) {
 		return agent.TargetReply{Targets: []agent.Target{{Path: "app/A.java"}, {Path: "app/B.java"}}}, nil
-	}
-	d.fetch = func(context.Context, int, int) (FindingInputs, error) {
-		return FindingInputs{Finding: "Multi", ClassHints: []string{"com/x/A", "com/x/B"}, Remediation: "fix"}, nil
 	}
 	d.deliver = func(_ context.Context, _ AutofixOptions, patches []filePatch) (Delivery, error) {
 		delivered = patches // all files pushed together in one call
@@ -433,7 +238,7 @@ func TestRunAutofix_DryRun_DoesNotWrite(t *testing.T) {
 	opts := appknoxOpts(t, root)
 	opts.DryRun = true
 	out, err := runAutofix(context.Background(), opts,
-		deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r")))
+		deps(rel, fixResult{Changed: true, PatchedContent: "patched\n"}))
 	require.NoError(t, err)
 	require.Len(t, out.Patches, 1)
 	require.False(t, out.Patches[0].Applied)
@@ -446,7 +251,7 @@ func TestRunAutofix_PushBranch(t *testing.T) {
 	opts := appknoxOpts(t, root)
 	opts.Repo = "appknox/mfva"
 	out, err := runAutofix(context.Background(), opts,
-		deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r")))
+		deps(rel, fixResult{Changed: true, PatchedContent: "patched\n"}))
 	require.NoError(t, err)
 	require.Contains(t, out.BranchURL, "/pull/")
 	require.False(t, out.Patches[0].Applied)
@@ -464,7 +269,7 @@ func TestRunAutofix_PushBranch_ReportsToAppknox(t *testing.T) {
 	var gotOpts AutofixOptions
 	var gotDel Delivery
 	var gotPatches []filePatch
-	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
+	d := deps(rel, fixResult{Changed: true, PatchedContent: "patched\n"})
 	d.deliver = func(_ context.Context, _ AutofixOptions, _ []filePatch) (Delivery, error) {
 		return del, nil
 	}
@@ -486,7 +291,7 @@ func TestRunAutofix_PushBranch_ReportsToAppknox(t *testing.T) {
 
 func TestRunAutofix_PushBranch_ReportError(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
-	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
+	d := deps(rel, fixResult{Changed: true, PatchedContent: "patched\n"})
 	d.report = func(context.Context, AutofixOptions, Delivery, []filePatch) error {
 		return errors.New("mycroft down")
 	}
@@ -498,27 +303,10 @@ func TestRunAutofix_PushBranch_ReportError(t *testing.T) {
 	require.Contains(t, err.Error(), "mycroft down")
 }
 
-func TestRunAutofix_AgentFixMode(t *testing.T) {
-	root, rel := repoWithFile(t, "orig\n")
-	d := deps(rel, fixservice.Result{}, oneClass("f", "r"))
-	d.submit = func(context.Context, fixservice.Config, fixservice.Request) (fixservice.Result, error) {
-		return fixservice.Result{}, errors.New("server /v1/fix must NOT be called in agent mode")
-	}
-	opts := appknoxOpts(t, root)
-	opts.FixMode = "agent"
-	out, err := runAutofix(context.Background(), opts, d)
-	require.NoError(t, err)
-	require.Len(t, out.Patches, 1)
-	require.Equal(t, "agent-fixed\n", out.Patches[0].Content)
-	require.Contains(t, out.BranchURL, "/pull/")
-	got, _ := os.ReadFile(filepath.Join(root, rel))
-	require.Equal(t, "orig\n", string(got))
-}
-
 func TestRunAutofix_EmptyPatchNotApplied(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
 	out, err := runAutofix(context.Background(), appknoxOpts(t, root),
-		deps(rel, fixservice.Result{Changed: true, PatchedContent: ""}, oneClass("f", "r")))
+		deps(rel, fixResult{Changed: true, PatchedContent: ""}))
 	require.NoError(t, err)
 	require.Empty(t, out.Patches) // empty content is not a patch
 	got, _ := os.ReadFile(filepath.Join(root, rel))
@@ -528,7 +316,7 @@ func TestRunAutofix_EmptyPatchNotApplied(t *testing.T) {
 func TestRunAutofix_NoChange_LeavesFile(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
 	out, err := runAutofix(context.Background(), appknoxOpts(t, root),
-		deps(rel, fixservice.Result{Changed: false}, oneClass("f", "r")))
+		deps(rel, fixResult{Changed: false}))
 	require.NoError(t, err)
 	require.Empty(t, out.Patches)
 	require.Equal(t, []string{rel}, out.Located)
@@ -539,25 +327,20 @@ func TestRunAutofix_FileID_SkipsFailedFinding(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "app"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "app/A.java"), []byte("orig\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "app/B.java"), []byte("orig\n"), 0o644))
-	pathFor := map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java"}
-	d := deps("", fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, FindingInputs{})
-	d.locateTargets = func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
-		return agent.TargetReply{Targets: []agent.Target{{Path: pathFor[req.ClassHint]}}}, nil
+	pathFor := map[string]string{"u-Bad": "app/A.java", "u-Good": "app/B.java"}
+	d := deps("", fixResult{Changed: true, PatchedContent: "fixed\n"})
+	d.locate = func(_ context.Context, unit FindingUnit) (agent.TargetReply, error) {
+		return agent.TargetReply{Targets: []agent.Target{{Path: pathFor[unit.UnitID]}}}, nil
 	}
-	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{1, 2}, nil }
-	d.fetch = func(_ context.Context, _, analysisID int) (FindingInputs, error) {
-		if analysisID == 1 {
-			return FindingInputs{Finding: "Bad", ClassHints: []string{"com/x/A"}, Remediation: "fix"}, nil
+	d.fix = func(_ context.Context, _ string, tc targetContext, _ *patchViolation) (fixResult, error) {
+		if tc.UnitID == "u-Bad" {
+			return fixResult{}, errors.New("model failed")
 		}
-		return FindingInputs{Finding: "Good", ClassHints: []string{"com/x/B"}, Remediation: "fix"}, nil
+		return fixResult{Changed: true, PatchedContent: "fixed\n"}, nil
 	}
-	d.submit = func(_ context.Context, _ fixservice.Config, req fixservice.Request) (fixservice.Result, error) {
-		if req.Finding == "Bad" {
-			return fixservice.Result{}, errors.New("model failed")
-		}
-		return fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, nil
-	}
-	out, err := runAutofix(context.Background(), appknoxOpts(t, root), d)
+	opts := appknoxOpts(t, root)
+	opts.Units = jobUnits("Bad", "Good")
+	out, err := runAutofix(context.Background(), opts, d)
 	require.NoError(t, err)
 	require.Len(t, out.Patches, 1)
 	require.Equal(t, "app/B.java", out.Patches[0].Path)
@@ -694,23 +477,6 @@ func TestPrAction(t *testing.T) {
 	require.Equal(t, "Updated PR", prAction(false))
 }
 
-// I1: autofixExit is the factored-out exit decision ProcessAutofix defers to,
-// added because ProcessAutofix's own os.Exit made the clean-scan/outage split
-// impossible to assert directly. These three cases are the whole point of
-// ErrNothingFixable: a clean scan must not fail, but an outage still must.
-func TestAutofixExit_NothingFixableIsNotAFailure(t *testing.T) {
-	err := fmt.Errorf("no analysis on file 24 meets the risk threshold: %w", ErrNothingFixable)
-	nothingToFix, fail := autofixExit(err)
-	require.True(t, nothingToFix, "a clean scan must be reported as nothing-to-fix")
-	require.False(t, fail, "a clean scan must NOT exit 1")
-}
-
-func TestAutofixExit_OutageIsAFailure(t *testing.T) {
-	nothingToFix, fail := autofixExit(errors.New("knoxiq fetch failed for 2/2 analyses on file 24, none fixable: knoxiq unreachable: 503"))
-	require.False(t, nothingToFix, "a KnoxIQ outage must not be mistaken for a clean scan")
-	require.True(t, fail, "a KnoxIQ outage must still exit 1")
-}
-
 func TestProcessAutofix_AutofixBaseBranchPrintsAndReturns(t *testing.T) {
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
@@ -726,12 +492,6 @@ func TestProcessAutofix_AutofixBaseBranchPrintsAndReturns(t *testing.T) {
 	require.Contains(t, string(out), "Autofix can not be run at appknox autofix branch")
 }
 
-func TestAutofixExit_NilErrorIsClean(t *testing.T) {
-	nothingToFix, fail := autofixExit(nil)
-	require.False(t, nothingToFix)
-	require.False(t, fail)
-}
-
 // I3: a locate or fix call hitting the gateway's exhausted per-session budget
 // must stop the run, keep the patches already produced, set Truncated, and
 // (critically) not fail the run -- err is nil so ProcessAutofix exits 0.
@@ -741,49 +501,37 @@ func TestRunAutofix_FixBudgetExhausted_TruncatesButKeepsEarlierPatches(t *testin
 	for _, rel := range []string{"app/A.java", "app/B.java", "app/C.java"} {
 		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte("orig\n"), 0o644))
 	}
-	pathFor := map[string]string{"com/x/A": "app/A.java", "com/x/B": "app/B.java", "com/x/C": "app/C.java"}
-	d := deps("", fixservice.Result{}, FindingInputs{})
-	d.locateTargets = func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
-		return agent.TargetReply{Targets: []agent.Target{{Path: pathFor[req.ClassHint]}}}, nil
-	}
-	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{1, 2, 3}, nil }
-	d.fetch = func(_ context.Context, _, analysisID int) (FindingInputs, error) {
-		return FindingInputs{
-			Finding:     fmt.Sprintf("finding-%d", analysisID),
-			ClassHints:  []string{fmt.Sprintf("com/x/%c", 'A'+analysisID-1)},
-			Remediation: "fix",
-		}, nil
+	pathFor := map[string]string{"u-finding-1": "app/A.java", "u-finding-2": "app/B.java", "u-finding-3": "app/C.java"}
+	d := deps("", fixResult{})
+	d.locate = func(_ context.Context, unit FindingUnit) (agent.TargetReply, error) {
+		return agent.TargetReply{Targets: []agent.Target{{Path: pathFor[unit.UnitID]}}}, nil
 	}
 	var attempted []string
-	d.submit = func(_ context.Context, _ fixservice.Config, req fixservice.Request) (fixservice.Result, error) {
-		attempted = append(attempted, req.Finding)
-		if req.Finding == "finding-2" {
-			return fixservice.Result{}, errors.New("429 session call budget exhausted")
+	d.fix = func(_ context.Context, _ string, tc targetContext, _ *patchViolation) (fixResult, error) {
+		attempted = append(attempted, tc.UnitID)
+		if tc.UnitID == "u-finding-2" {
+			return fixResult{}, errors.New("429 session call budget exhausted")
 		}
-		return fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, nil
+		return fixResult{Changed: true, PatchedContent: "fixed\n"}, nil
 	}
 	opts := appknoxOpts(t, root)
+	opts.Units = jobUnits("finding-1", "finding-2", "finding-3")
 	opts.DryRun = true // no deliver stub needed; the assertions are about Outcome
 	out, err := runAutofix(context.Background(), opts, d)
 	require.NoError(t, err, "a truncated run with patches already produced must not fail")
 	require.NotEmpty(t, out.Truncated, "Truncated must be set")
 	require.Len(t, out.Patches, 1, "only the target attempted before the exhaustion produced a patch")
 	require.Equal(t, "app/A.java", out.Patches[0].Path)
-	require.Equal(t, []string{"finding-1", "finding-2"}, attempted,
+	require.Equal(t, []string{"u-finding-1", "u-finding-2"}, attempted,
 		"the exhausted target is attempted once, then no further targets are attempted")
 }
 
 // I3 (locate side): the same guard on the locate call, not just the fix call.
 func TestRunAutofix_LocateBudgetExhausted_Truncates(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
-	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "fixed\n"}, FindingInputs{})
-	d.analysisIDs = func(context.Context, int, int) ([]int, error) { return []int{1, 2}, nil }
-	d.fetch = func(_ context.Context, _, analysisID int) (FindingInputs, error) {
-		return FindingInputs{Finding: fmt.Sprintf("finding-%d", analysisID),
-			ClassHints: []string{"com/x/C"}, Remediation: "fix"}, nil
-	}
+	d := deps(rel, fixResult{Changed: true, PatchedContent: "fixed\n"})
 	var locateCalls int
-	d.locateTargets = func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+	d.locate = func(context.Context, FindingUnit) (agent.TargetReply, error) {
 		locateCalls++
 		if locateCalls == 1 {
 			return agent.TargetReply{Targets: []agent.Target{{Path: rel}}}, nil
@@ -791,6 +539,7 @@ func TestRunAutofix_LocateBudgetExhausted_Truncates(t *testing.T) {
 		return agent.TargetReply{}, errors.New("403 invalid credential")
 	}
 	opts := appknoxOpts(t, root)
+	opts.Units = jobUnits("finding-1", "finding-2")
 	opts.DryRun = true
 	out, err := runAutofix(context.Background(), opts, d)
 	require.NoError(t, err)
@@ -804,22 +553,16 @@ func TestRunAutofix_LocateBudgetExhausted_Truncates(t *testing.T) {
 func TestRunAutofix_TwoFindingsSameFile_CollapsedPatchNamesBothAndDiffsBoth(t *testing.T) {
 	root, rel := repoWithFile(t, "line1\nline2\n")
 	d := autofixDeps{
-		locateTargets: targetsAt(rel),
-		analysisIDs:   func(context.Context, int, int) ([]int, error) { return []int{1, 2}, nil },
-		fetch: func(_ context.Context, _, analysisID int) (FindingInputs, error) {
-			if analysisID == 1 {
-				return FindingInputs{Finding: "Finding A", Remediation: "fix a"}, nil
+		locate: targetsAt(rel),
+		fix: func(_ context.Context, _ string, tc targetContext, _ *patchViolation) (fixResult, error) {
+			if tc.UnitID == "u-Finding A" {
+				return fixResult{Changed: true, PatchedContent: "line1-fixedA\nline2\n"}, nil
 			}
-			return FindingInputs{Finding: "Finding B", Remediation: "fix b"}, nil
-		},
-		submit: func(_ context.Context, _ fixservice.Config, req fixservice.Request) (fixservice.Result, error) {
-			if req.Finding == "Finding A" {
-				return fixservice.Result{Changed: true, PatchedContent: "line1-fixedA\nline2\n"}, nil
-			}
-			return fixservice.Result{Changed: true, PatchedContent: "line1-fixedA\nline2-fixedB\n"}, nil
+			return fixResult{Changed: true, PatchedContent: "line1-fixedA\nline2-fixedB\n"}, nil
 		},
 	}
 	opts := appknoxOpts(t, root)
+	opts.Units = jobUnits("Finding A", "Finding B")
 	opts.DryRun = true
 	out, err := runAutofix(context.Background(), opts, d)
 	require.NoError(t, err)
@@ -832,7 +575,7 @@ func TestRunAutofix_TwoFindingsSameFile_CollapsedPatchNamesBothAndDiffsBoth(t *t
 	require.Equal(t, "line1-fixedA\nline2-fixedB\n", p.Content, "content is unaffected by this fix")
 }
 
-// M3: produceFix must read the pre-patch original through readUnderRoot --
+// M3: produceFixFor must read the pre-patch original through readUnderRoot --
 // the same path-guard every other read in this package uses -- not a bare
 // os.ReadFile(filepath.Join(root, path)), which a maliciously located path
 // could use to escape the checkout root (CWE-22). This plants a real file
@@ -847,15 +590,15 @@ func TestProduceFix_OriginalReadIsPathGuarded(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(parent, "secret.txt"), []byte("SECRET"), 0o644))
 
 	s := fixSession{
-		opts: AutofixOptions{FixMode: "agent"},
+		opts: AutofixOptions{},
 		root: root,
 		d: autofixDeps{
-			agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
-				return agent.FixResult{Changed: true, PatchedContent: "patched\n"}, nil
+			fix: func(context.Context, string, targetContext, *patchViolation) (fixResult, error) {
+				return fixResult{Changed: true, PatchedContent: "patched\n"}, nil
 			},
 		},
 	}
-	res, err := s.produceFix(context.Background(), "../secret.txt", FindingInputs{Remediation: "r"})
+	res, _, err := s.produceFixFor(context.Background(), "../secret.txt", targetContext{})
 	require.NoError(t, err)
 	require.Equal(t, "patched\n", res.PatchedContent,
 		"the patch still ships because the original could not be read (safeDest refused the escape); "+
@@ -869,7 +612,7 @@ func TestProduceFix_OriginalReadIsPathGuarded(t *testing.T) {
 func TestRunAutofix_RestoreFailure_IsPrintedNotSwallowed(t *testing.T) {
 	root, rel := repoWithFile(t, "orig\n")
 	abs := filepath.Join(root, filepath.FromSlash(rel))
-	d := deps(rel, fixservice.Result{Changed: true, PatchedContent: "patched\n"}, oneClass("f", "r"))
+	d := deps(rel, fixResult{Changed: true, PatchedContent: "patched\n"})
 	d.deliver = func(_ context.Context, _ AutofixOptions, patches []filePatch) (Delivery, error) {
 		// Make the patched file unwritable so the unconditional restore in
 		// runAutofix's defer -- which fires AFTER this stub returns -- fails.
@@ -890,30 +633,26 @@ func TestRunAutofix_RestoreFailure_IsPrintedNotSwallowed(t *testing.T) {
 	require.Contains(t, output, "restore", "the restore failure must be printed, not swallowed")
 }
 
-// I2: DeveloperPrompt and Criteria must reach the agent fix turn, in the
-// style of captureModels in autofix_model_test.go.
-func TestAttemptFix_ForwardsDeveloperPromptAndCriteria(t *testing.T) {
-	root, rel := repoWithFile(t, "orig\n")
-	var gotReq agent.FixRequest
-	s := fixSession{
-		opts: AutofixOptions{FixMode: "agent", FileID: 1},
-		root: root,
-		work: newWorkingTree(root),
-		d: autofixDeps{
-			agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-				gotReq = req
-				return agent.FixResult{Changed: true, PatchedContent: "fixed\n"}, nil
-			},
-		},
+func TestStampSeverity_TakesTheHighestRiskPerVulnerability(t *testing.T) {
+	analyses := func(context.Context, int) ([]*appknox.Analysis, error) {
+		return []*appknox.Analysis{
+			{VulnerabilityID: 7, ComputedRisk: enums.Risk.Medium},
+			{VulnerabilityID: 7, ComputedRisk: enums.Risk.High},
+			{VulnerabilityID: 9, ComputedRisk: enums.Risk.Passed},
+		}, nil
 	}
-	in := FindingInputs{
-		Finding:         "Weak PRNG",
-		Remediation:     "use SecureRandom",
-		DeveloperPrompt: "Replace Random with SecureRandom in the constructor.",
-		Criteria:        []string{"no java.util.Random import remains"},
+	targets := []analysisTarget{
+		{Inputs: FindingInputs{VulnerabilityID: 7, Skipped: []findingOutcome{{}}}},
+		{Inputs: FindingInputs{VulnerabilityID: 9}},
 	}
-	_, err := s.produceFix(context.Background(), rel, in)
-	require.NoError(t, err)
-	require.Equal(t, in.DeveloperPrompt, gotReq.DeveloperPrompt)
-	require.Equal(t, in.Criteria, gotReq.Criteria)
+	stampSeverity(context.Background(), analyses, 1, targets)
+	require.Equal(t, "High", targets[0].Inputs.Severity)
+	require.Equal(t, "High", targets[0].Inputs.Skipped[0].Severity)
+	require.Empty(t, targets[1].Inputs.Severity, "Passed is not a severity")
+}
+
+func TestStampSeverity_WithoutALookupLeavesSeverityEmpty(t *testing.T) {
+	targets := []analysisTarget{{Inputs: FindingInputs{VulnerabilityID: 7}}}
+	stampSeverity(context.Background(), nil, 1, targets)
+	require.Empty(t, targets[0].Inputs.Severity)
 }

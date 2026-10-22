@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/appknox/appknox-go/agent"
-	"github.com/appknox/appknox-go/fixservice"
 )
 
 // One KnoxIQ finding at a time: locate every file its remediation touches,
@@ -25,7 +24,7 @@ type unitResult struct {
 
 // targetContext is what one fix call is told about the rest of the remediation.
 type targetContext struct {
-	UnitID     string // Mycroft finding id; empty on the manual path
+	UnitID     string // Mycroft finding id
 	Why        string
 	OtherFiles []agent.Target
 	Create     bool // the target is a new file
@@ -34,9 +33,8 @@ type targetContext struct {
 // runUnit locates and fixes one KnoxIQ finding.
 //
 // The error is non-nil only when the whole run must stop: gateway budget
-// exhaustion (the caller truncates), a working-tree write failure, or any
-// call error on the manual --finding path, which has always failed fast.
-// Every other miss is recorded in the outcome, and the run moves on.
+// exhaustion (the caller truncates) or a working-tree write failure. Every
+// other miss is recorded in the outcome, and the run moves on.
 //
 // The outcome's Title is always stamped with u.Title on the way out (spec
 // 3.4 / F2), whichever branch below produced it, so sibling findings of the
@@ -51,7 +49,7 @@ func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit
 		}
 	}()
 
-	reply, locateErr := s.locateUnit(ctx, in, u)
+	reply, locateErr := s.locateUnit(ctx, u)
 	if locateErr != nil {
 		return s.locateFailed(in, locateErr)
 	}
@@ -99,13 +97,6 @@ func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit
 			Status: statusSkipped, Detail: reasonNewFileRejected + ": " + rejectionList(bad)}}
 		return res, nil
 	}
-	if len(created) > 0 && s.opts.FixMode != "agent" && !s.opts.LocateOnly {
-		// /v1/fix rewrites an uploaded file; it cannot create one. Refuse the
-		// whole finding here rather than upload its other files first.
-		res = unitResult{outcome: findingOutcome{VulnerabilityID: in.VulnerabilityID, Finding: in.Finding,
-			Status: statusSkipped, Detail: reasonNewFileRejected + ": creating files needs --fix-mode agent"}}
-		return res, nil
-	}
 	accepted = orderTargets(append(created, accepted...))
 	res = unitResult{located: targetPaths(accepted)}
 	results := rejectionResults(rejected)
@@ -120,13 +111,6 @@ func (s fixSession) runUnit(ctx context.Context, in FindingInputs, u FindingUnit
 	}
 	if s.opts.LocateOnly {
 		res.outcome = locatedOutcome(in, accepted, results, notes)
-		return res, nil
-	}
-	if s.job == nil && u.Remediation == "" {
-		// A fix built on no instruction is worse than no fix. A Mycroft job
-		// keeps the instruction on the worker, so an empty string here is expected.
-		res.outcome = summarizeFinding(in.VulnerabilityID, in.Finding, results,
-			append(notes, "no remediation to apply"))
 		return res, nil
 	}
 	patches, fixed, fixErr := s.fixTargets(ctx, in, u, accepted)
@@ -169,7 +153,7 @@ func (s fixSession) fixTargets(
 			patches = append(patches, *patch)
 		}
 		if err != nil {
-			// The run stops (budget exhausted, or the manual path), but a
+			// The run stops (budget exhausted, or a working-tree failure), but a
 			// truncated run still delivers what it has: judge this unit
 			// first, so a half-applied build-script change never ships.
 			fixErr = err
@@ -334,18 +318,13 @@ func rolledBack(results []targetResult) []targetResult {
 	return out
 }
 
-// locateUnit runs the locate turn for one finding, on LocateModel first.
-func (s fixSession) locateUnit(ctx context.Context, in FindingInputs, u FindingUnit) (agent.TargetReply, error) {
-	if s.job != nil {
-		reply, err := s.locateViaMycroft(ctx, u)
-		s.tally.record(err)
-		return reply, err
+// locateUnit runs the locate turn for one finding.
+func (s fixSession) locateUnit(ctx context.Context, u FindingUnit) (agent.TargetReply, error) {
+	locate := s.locateViaMycroft
+	if s.d.locate != nil {
+		locate = s.d.locate
 	}
-	reply, err := s.d.locateTargets(ctx,
-		agent.Config{Host: s.host, Token: s.token, Model: firstNonEmpty(s.opts.LocateModel, s.opts.Model)},
-		agent.TargetRequest{RepoRoot: s.root, VulnerabilityID: in.VulnerabilityID, Finding: in.Finding,
-			Title: u.Title, Description: u.Description, Remediation: u.Remediation, ClassHint: u.ClassHint,
-			ThirdParty: u.ThirdParty})
+	reply, err := locate(ctx, u)
 	s.tally.record(err)
 	return reply, err
 }
@@ -359,7 +338,7 @@ func (s fixSession) locateFailed(in FindingInputs, err error) (unitResult, error
 	}
 	res := unitResult{outcome: summarizeFinding(in.VulnerabilityID, in.Finding, nil,
 		[]string{"locate failed: " + err.Error()})}
-	if isGatewayBudgetExhausted(err) || s.opts.FileID <= 0 {
+	if isGatewayBudgetExhausted(err) {
 		return res, err
 	}
 	fmt.Printf("autofix: skipping %q: %v\n", in.Finding, err)
@@ -372,14 +351,12 @@ func (s fixSession) locateFailed(in FindingInputs, err error) (unitResult, error
 func (s fixSession) fixOne(
 	ctx context.Context, in FindingInputs, u FindingUnit, t agent.Target, all []agent.Target,
 ) (targetResult, *filePatch, error) {
-	unitIn := FindingInputs{Finding: in.Finding, Remediation: u.Remediation,
-		DeveloperPrompt: u.DeveloperPrompt, Criteria: u.Criteria}
-	res, reason, err := s.produceFixFor(ctx, t.Path, unitIn,
+	res, reason, err := s.produceFixFor(ctx, t.Path,
 		targetContext{UnitID: u.UnitID, Why: t.Why, OtherFiles: othersThan(all, t.Path), Create: t.New})
 	s.tally.record(err)
 	if err != nil {
 		tr := targetResult{Path: t.Path, Reason: "error: " + err.Error()}
-		if isGatewayBudgetExhausted(err) || s.opts.FileID <= 0 {
+		if isGatewayBudgetExhausted(err) {
 			return tr, nil, err
 		}
 		fmt.Printf("autofix: skipping %s for %q: %v\n", t.Path, in.Finding, err)
@@ -396,7 +373,7 @@ func (s fixSession) fixOne(
 }
 
 // applyPatch writes the patch to the working tree and records it.
-func (s fixSession) applyPatch(path, finding string, res fixservice.Result) (filePatch, error) {
+func (s fixSession) applyPatch(path, finding string, res fixResult) (filePatch, error) {
 	// Read the pre-patch content BEFORE applying, for the cosmetic advice
 	// below; after apply it would compare a file to itself.
 	before, readErr := readUnderRoot(s.root, path)
@@ -408,7 +385,7 @@ func (s fixSession) applyPatch(path, finding string, res fixservice.Result) (fil
 		advice = formattingAdvice(path, before, res.PatchedContent)
 	}
 	return filePatch{Path: path, Content: res.PatchedContent, Diff: res.UnifiedDiff,
-		Confidence: res.Confidence, Finding: finding, Formatting: advice}, nil
+		Finding: finding, Formatting: advice}, nil
 }
 
 // mergeUnit folds one finding's result into the run's outcome.

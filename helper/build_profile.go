@@ -1,10 +1,9 @@
 package helper
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+
 	"github.com/appknox/appknox-go/appknox"
 )
 
@@ -76,7 +75,7 @@ func hasBuildFile(root, name string) bool {
 }
 
 // wire is the profile as typed values for a Mycroft fix turn. Sherrinford
-// writes from these the same sentences String writes for the manual path.
+// writes the sentences the fixer reads from these.
 func (p buildProfile) wire() *appknox.AutofixProfile {
 	out := &appknox.AutofixProfile{
 		BuildSystem: p.BuildSystem,
@@ -89,43 +88,4 @@ func (p buildProfile) wire() *appknox.AutofixProfile {
 		out.BuildConfig = &enabled
 	}
 	return out
-}
-
-// String renders the profile for the fix prompt, or "" when nothing is known.
-//
-// Empty is a real outcome and must stay silent: a manual run against a
-// directory with no build files has nothing to say, and inventing a profile
-// there would be worse than omitting the section entirely.
-func (p buildProfile) String() string {
-	var lines []string
-	if p.BuildSystem != "" {
-		kind := p.BuildSystem
-		if p.Android {
-			kind += " / Android"
-		}
-		lines = append(lines, "Build system: "+kind)
-	}
-	if p.AGPMajor > 0 {
-		lines = append(lines, fmt.Sprintf("Android Gradle Plugin: %d.x", p.AGPMajor))
-	}
-	if p.CompileSDK > 0 {
-		lines = append(lines, fmt.Sprintf("compileSdk: %d", p.CompileSDK))
-	}
-	// The line that earns this whole profile, stated as a consequence rather
-	// than as a setting the fixer would have to reason from.
-	if p.buildConfigKnown && !p.BuildConfig && p.AGPMajor >= 8 {
-		lines = append(lines,
-			"BuildConfig is NOT generated here: no module sets "+
-				"buildFeatures { buildConfig true }, and AGP 8 leaves it off by "+
-				"default. Do not reference BuildConfig.")
-	}
-	if p.BuildSystem == "Maven" && !p.Android {
-		lines = append(lines,
-			"This is not an Android project: no AndroidManifest, no res/ directory, "+
-				"no R or BuildConfig, and no android.* platform classes.")
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n")
 }

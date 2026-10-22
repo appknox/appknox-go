@@ -11,8 +11,8 @@ import (
 )
 
 // targetsAt fakes a locate turn that answers with the given paths.
-func targetsAt(paths ...string) func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
-	return func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+func targetsAt(paths ...string) func(context.Context, FindingUnit) (agent.TargetReply, error) {
+	return func(context.Context, FindingUnit) (agent.TargetReply, error) {
 		reply := agent.TargetReply{Targets: []agent.Target{}}
 		for _, p := range paths {
 			if p != "" {
@@ -24,28 +24,26 @@ func targetsAt(paths ...string) func(context.Context, agent.Config, agent.Target
 }
 
 func dryAgentSession(root string, d autofixDeps, targets ...analysisTarget) fixSession {
-	return fixSession{opts: AutofixOptions{FixMode: "agent", FileID: 1, DryRun: true},
+	return fixSession{opts: AutofixOptions{FileID: 1, DryRun: true},
 		d: d, root: root, work: newWorkingTree(root), targets: targets}
 }
 
 const javaBody = "class A { void f() { Log.d(s); } }\n"
 
-func TestRun_KnoxIQUnitLocatesOnceWithItsFullText(t *testing.T) {
+func TestRun_KnoxIQUnitLocatesOnce(t *testing.T) {
 	root := t.TempDir()
-	var reqs []agent.TargetRequest
-	d := autofixDeps{locateTargets: func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
-		reqs = append(reqs, req)
+	var located []FindingUnit
+	d := autofixDeps{locate: func(_ context.Context, unit FindingUnit) (agent.TargetReply, error) {
+		located = append(located, unit)
 		return agent.TargetReply{}, nil
 	}}
+	unit := FindingUnit{UnitID: "a3-F-0", Title: "allowBackup is true"}
 	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "Application Data Backup Allowed", VulnerabilityID: 3, Remediation: "r",
-		Units: []FindingUnit{{Title: "allowBackup is true", Description: "d", Remediation: "set allowBackup=false"}},
+		Finding: "Application Data Backup Allowed", VulnerabilityID: 3, Units: []FindingUnit{unit},
 	}})
 	_, err := s.run(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, []agent.TargetRequest{{RepoRoot: root, VulnerabilityID: 3,
-		Finding: "Application Data Backup Allowed", Title: "allowBackup is true",
-		Description: "d", Remediation: "set allowBackup=false"}}, reqs)
+	require.Equal(t, []FindingUnit{unit}, located)
 }
 
 // mfva's Application Logs: one analysis, three KnoxIQ findings, three files.
@@ -59,30 +57,30 @@ func TestRun_OneAnalysisThreeFindingsThreeFilesGivesThreeCalls(t *testing.T) {
 	var units []FindingUnit
 	for _, k := range []string{"A", "B", "C"} {
 		writeSource(t, root, files[k], javaBody)
-		units = append(units, FindingUnit{Title: "Logs in com.x." + k, Remediation: "remove the log in " + k})
+		units = append(units, FindingUnit{UnitID: "a1-F-" + k, Title: "Logs in com.x." + k})
 	}
-	var calls []agent.FixRequest
+	var calls []fixCall
 	d := autofixDeps{
-		locateTargets: func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
-			k := strings.TrimPrefix(req.Title, "Logs in com.x.")
+		locate: func(_ context.Context, unit FindingUnit) (agent.TargetReply, error) {
+			k := strings.TrimPrefix(unit.Title, "Logs in com.x.")
 			return agent.TargetReply{Targets: []agent.Target{{Path: files[k], Why: "log in " + k}}}, nil
 		},
-		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-			calls = append(calls, req)
-			return agent.FixResult{Changed: true, PatchedContent: "class A { void f() { } }\n"}, nil
+		fix: func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+			calls = append(calls, fixCall{Path: fixPath, TC: fixTC, Prior: fixPrior})
+			return fixResult{Changed: true, PatchedContent: "class A { void f() { } }\n"}, nil
 		},
 	}
 	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "Application Logs", VulnerabilityID: 17, Remediation: "all", Units: units}})
+		Finding: "Application Logs", VulnerabilityID: 17, Units: units}})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
 	require.Len(t, calls, 3)
 	for i, k := range []string{"A", "B", "C"} {
 		require.Equal(t, files[k], calls[i].Path)
-		require.Equal(t, "remove the log in "+k, calls[i].Remediation,
-			"each call carries only its own finding's remediation")
-		require.Equal(t, "log in "+k, calls[i].Why)
-		require.Empty(t, calls[i].OtherFiles)
+		require.Equal(t, "a1-F-"+k, calls[i].TC.UnitID,
+			"each call names only its own finding, whose remediation the worker holds")
+		require.Equal(t, "log in "+k, calls[i].TC.Why)
+		require.Empty(t, calls[i].TC.OtherFiles)
 	}
 	require.Len(t, out.Patches, 3)
 	require.Len(t, out.Findings, 3)
@@ -102,23 +100,23 @@ func TestRun_OneAnalysisThreeFindingsThreeFilesGivesThreeCalls(t *testing.T) {
 func TestRun_TwoFindingsInOneAnalysisSameFile_ComposeOnDisk(t *testing.T) {
 	root, rel := repoWithFile(t, "line1\nline2\n")
 	units := []FindingUnit{
-		{Title: "Finding A", Remediation: "fix a"},
-		{Title: "Finding B", Remediation: "fix b"},
+		{UnitID: "a1-F-0", Title: "Finding A"},
+		{UnitID: "a1-F-1", Title: "Finding B"},
 	}
 	d := autofixDeps{
-		locateTargets: targetsAt(rel),
-		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-			if req.Remediation == "fix a" {
-				return agent.FixResult{Changed: true, PatchedContent: "line1-fixedA\nline2\n"}, nil
+		locate: targetsAt(rel),
+		fix: func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+			if fixTC.UnitID == "a1-F-0" {
+				return fixResult{Changed: true, PatchedContent: "line1-fixedA\nline2\n"}, nil
 			}
-			// "fix b" is built on top of fix a's own output -- exactly what a
+			// Finding B is built on top of Finding A's own output -- exactly what a
 			// real agent would see reading the file after the first call
 			// applied its patch to the working tree.
-			return agent.FixResult{Changed: true, PatchedContent: "line1-fixedA\nline2-fixedB\n"}, nil
+			return fixResult{Changed: true, PatchedContent: "line1-fixedA\nline2-fixedB\n"}, nil
 		},
 	}
 	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "Application Logs", VulnerabilityID: 17, Remediation: "all", Units: units}})
+		Finding: "Application Logs", VulnerabilityID: 17, Units: units}})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
 	require.Len(t, out.Patches, 1, "one file, one delivered blob even across two findings in one analysis")
@@ -137,18 +135,18 @@ func TestRun_FansOutManifestThenResThenSource(t *testing.T) {
 	var order []string
 	var others [][]agent.Target
 	d := autofixDeps{
-		locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+		locate: func(context.Context, FindingUnit) (agent.TargetReply, error) {
 			return agent.TargetReply{Targets: []agent.Target{
 				{Path: src, Why: "isTaskRoot"}, {Path: layout, Why: "filterTouches"}, {Path: manifest, Why: "taskAffinity"},
 			}}, nil
 		},
-		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-			order = append(order, req.Path)
-			others = append(others, req.OtherFiles)
-			return agent.FixResult{}, nil // decline: only the order is under test
+		fix: func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+			order = append(order, fixPath)
+			others = append(others, fixTC.OtherFiles)
+			return fixResult{}, nil // decline: only the order is under test
 		},
 	}
-	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: oneClass("StrandHogg", "r")})
+	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: oneClass("StrandHogg")})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, []string{manifest, layout, src}, order)
@@ -173,34 +171,34 @@ func TestRun_OutcomeLinesCoverEveryStatus(t *testing.T) {
 		"notfound": {Targets: []agent.Target{}, NotFound: []string{"android.util.Log: framework class"}},
 		"build":    {Targets: []agent.Target{{Path: "app/build.gradle.kts", Why: "minify"}}},
 	}
-	var fixedRemediations []string
+	var fixedUnits []string
 	d := autofixDeps{
-		locateTargets: func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
-			if req.Title == "unparseable" {
+		locate: func(_ context.Context, unit FindingUnit) (agent.TargetReply, error) {
+			if unit.Title == "unparseable" {
 				return agent.TargetReply{}, agent.ErrUnparseableReply
 			}
-			return replies[req.Title], nil
+			return replies[unit.Title], nil
 		},
-		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-			fixedRemediations = append(fixedRemediations, req.Remediation)
-			switch req.Path {
+		fix: func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+			fixedUnits = append(fixedUnits, fixTC.UnitID)
+			switch fixPath {
 			case src:
-				return agent.FixResult{}, nil
+				return fixResult{}, nil
 			case layout:
-				return agent.FixResult{Changed: true, PatchedContent: "<LinearLayout><!-- fixed --></LinearLayout>\n"}, nil
+				return fixResult{Changed: true, PatchedContent: "<LinearLayout><!-- fixed --></LinearLayout>\n"}, nil
 			case "app/build.gradle.kts":
-				return agent.FixResult{Changed: true, PatchedContent: "plugins { }\n" +
+				return fixResult{Changed: true, PatchedContent: "plugins { }\n" +
 					"android { buildTypes { getByName(\"release\") { isMinifyEnabled = true } } }\n"}, nil
 			}
-			return agent.FixResult{Changed: true, PatchedContent: "<manifest><application/><!-- fixed --></manifest>\n"}, nil
+			return fixResult{Changed: true, PatchedContent: "<manifest><application/><!-- fixed --></manifest>\n"}, nil
 		},
 	}
 	units := []FindingUnit{}
 	for _, title := range []string{"fixed", "partial", "notfound", "unparseable", "build"} {
-		units = append(units, FindingUnit{Title: title, Remediation: "rem-" + title})
+		units = append(units, FindingUnit{UnitID: "unit-" + title, Title: title})
 	}
 	s := dryAgentSession(root, d,
-		analysisTarget{AnalysisID: 1, Inputs: FindingInputs{Finding: "V", VulnerabilityID: 9, Remediation: "r", Units: units}},
+		analysisTarget{AnalysisID: 1, Inputs: FindingInputs{Finding: "V", VulnerabilityID: 9, Units: units}},
 		analysisTarget{AnalysisID: 2, Inputs: FindingInputs{Finding: "Hardcoded Secrets", VulnerabilityID: 120,
 			SkipReason: "KnoxIQ: no findings"}},
 	)
@@ -219,7 +217,7 @@ func TestRun_OutcomeLinesCoverEveryStatus(t *testing.T) {
 	require.Equal(t, statusFixed, got["build"].Status, "a module build script is a target now")
 	require.Equal(t, findingOutcome{VulnerabilityID: 120, Finding: "Hardcoded Secrets",
 		Status: statusSkipped, Detail: "KnoxIQ: no findings"}, got["skipAnalysis"])
-	require.NotContains(t, fixedRemediations, "rem-notfound", "not_found only means no fix call")
+	require.NotContains(t, fixedUnits, "unit-notfound", "not_found only means no fix call")
 }
 
 // TestRun_SkippedFindingsAreAppendedToOutcome is F1: a finding dropped inside
@@ -228,15 +226,15 @@ func TestRun_OutcomeLinesCoverEveryStatus(t *testing.T) {
 // appended by run alongside the lines Units produces.
 func TestRun_SkippedFindingsAreAppendedToOutcome(t *testing.T) {
 	root, rel := repoWithFile(t, javaBody)
-	d := autofixDeps{locateTargets: targetsAt(rel),
-		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
-			return agent.FixResult{Changed: true, PatchedContent: "class A { }\n"}, nil
+	d := autofixDeps{locate: targetsAt(rel),
+		fix: func(context.Context, string, targetContext, *patchViolation) (fixResult, error) {
+			return fixResult{Changed: true, PatchedContent: "class A { }\n"}, nil
 		}}
 	skip := findingOutcome{VulnerabilityID: 5, Finding: "Derived Crypto Keys",
 		Title: "Vendored SDK class", Status: statusSkipped, Detail: "KnoxIQ: third-party code"}
 	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "Derived Crypto Keys", VulnerabilityID: 5, Remediation: "r",
-		Units:   []FindingUnit{{Title: "Fixable finding", Remediation: "fix it"}},
+		Finding: "Derived Crypto Keys", VulnerabilityID: 5,
+		Units:   []FindingUnit{{UnitID: "a1-F-0", Title: "Fixable finding"}},
 		Skipped: []findingOutcome{skip},
 	}})
 	out, err := s.run(context.Background())
@@ -253,24 +251,24 @@ func TestRun_SkippedFindingsAreAppendedToOutcome(t *testing.T) {
 func TestRun_BudgetExhaustionGivesNotAttemptedLineForEachRemainingUnit(t *testing.T) {
 	root, rel := repoWithFile(t, javaBody)
 	d := autofixDeps{
-		locateTargets: func(_ context.Context, _ agent.Config, req agent.TargetRequest) (agent.TargetReply, error) {
-			if req.Title == "first" {
+		locate: func(_ context.Context, unit FindingUnit) (agent.TargetReply, error) {
+			if unit.Title == "first" {
 				return agent.TargetReply{Targets: []agent.Target{{Path: rel}}}, nil
 			}
 			return agent.TargetReply{}, errors.New("429 session call budget exhausted")
 		},
-		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
-			return agent.FixResult{Changed: true, PatchedContent: "class A { }\n"}, nil
+		fix: func(context.Context, string, targetContext, *patchViolation) (fixResult, error) {
+			return fixResult{Changed: true, PatchedContent: "class A { }\n"}, nil
 		},
 	}
 	s := dryAgentSession(root, d,
 		analysisTarget{AnalysisID: 1, Inputs: FindingInputs{Finding: "V", VulnerabilityID: 9, Units: []FindingUnit{
-			{Title: "first", Remediation: "fix a"},
-			{Title: "second", Remediation: "fix b"}, // hits the exhaustion
-			{Title: "third", Remediation: "fix c"},  // sibling never reached
+			{UnitID: "a1-F-0", Title: "first"},
+			{UnitID: "a1-F-1", Title: "second"}, // hits the exhaustion
+			{UnitID: "a1-F-2", Title: "third"},  // sibling never reached
 		}}},
 		analysisTarget{AnalysisID: 2, Inputs: FindingInputs{Finding: "W", VulnerabilityID: 10,
-			Units: []FindingUnit{{Title: "fourth", Remediation: "fix d"}}}},
+			Units: []FindingUnit{{UnitID: "a2-F-0", Title: "fourth"}}}},
 	)
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
@@ -292,28 +290,26 @@ func TestRun_BudgetExhaustionGivesNotAttemptedLineForEachRemainingUnit(t *testin
 
 func TestRun_EveryCallFailingReturnsErrAllCallsFailed(t *testing.T) {
 	root := t.TempDir()
-	d := autofixDeps{locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+	d := autofixDeps{locate: func(context.Context, FindingUnit) (agent.TargetReply, error) {
 		return agent.TargetReply{}, errors.New("404 page not found")
 	}}
 	s := dryAgentSession(root, d,
-		analysisTarget{AnalysisID: 1, Inputs: oneClass("f", "r")},
-		analysisTarget{AnalysisID: 2, Inputs: oneClass("g", "r")})
+		analysisTarget{AnalysisID: 1, Inputs: oneClass("f")},
+		analysisTarget{AnalysisID: 2, Inputs: oneClass("g")})
 	out, err := s.run(context.Background())
 	require.ErrorIs(t, err, ErrAllCallsFailed)
 	require.Len(t, out.Findings, 2, "the outcome lines survive the failure")
-	_, fail := autofixExit(err)
-	require.True(t, fail)
 }
 
 func TestRun_AllDeclinedExitsZero(t *testing.T) {
 	root, rel := repoWithFile(t, javaBody)
 	d := autofixDeps{
-		locateTargets: targetsAt(rel),
-		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
-			return agent.FixResult{}, nil
+		locate: targetsAt(rel),
+		fix: func(context.Context, string, targetContext, *patchViolation) (fixResult, error) {
+			return fixResult{}, nil
 		},
 	}
-	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: oneClass("f", "r")})
+	s := dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: oneClass("f")})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, statusSkipped, out.Findings[0].Status)
@@ -323,24 +319,24 @@ func TestRun_LocateOnlyMakesNoFixCallsAndNoDelivery(t *testing.T) {
 	root, rel := repoWithFile(t, javaBody)
 	fixed := false
 	d := autofixDeps{
-		locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+		locate: func(context.Context, FindingUnit) (agent.TargetReply, error) {
 			return agent.TargetReply{
 				Targets:  []agent.Target{{Path: rel, Why: "weak PRNG here"}, {Path: "app/build.gradle"}},
 				NotFound: []string{"java.util.Random: framework"},
 			}, nil
 		},
-		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+		fix: func(context.Context, string, targetContext, *patchViolation) (fixResult, error) {
 			fixed = true
-			return agent.FixResult{Changed: true, PatchedContent: "x"}, nil
+			return fixResult{Changed: true, PatchedContent: "x"}, nil
 		},
 		deliver: func(context.Context, AutofixOptions, []filePatch) (Delivery, error) {
 			t.Fatal("locate-only must not deliver")
 			return Delivery{}, nil
 		},
 	}
-	s := fixSession{opts: AutofixOptions{FixMode: "agent", FileID: 1, LocateOnly: true},
+	s := fixSession{opts: AutofixOptions{FileID: 1, LocateOnly: true},
 		d: d, root: root, work: newWorkingTree(root),
-		targets: []analysisTarget{{AnalysisID: 1, Inputs: oneClass("Weak PRNG", "use SecureRandom")}}}
+		targets: []analysisTarget{{AnalysisID: 1, Inputs: oneClass("Weak PRNG")}}}
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
 	require.False(t, fixed)
@@ -360,19 +356,19 @@ func TestRunUnit_NeedsNewFileSkipsWholeFinding(t *testing.T) {
 	root, rel := repoWithFile(t, javaBody)
 	fixed := false
 	d := autofixDeps{
-		locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+		locate: func(context.Context, FindingUnit) (agent.TargetReply, error) {
 			return agent.TargetReply{
 				Targets:      []agent.Target{{Path: rel, Why: "extends the base activity"}},
 				NeedsNewFile: []string{"SecureBaseActivity: base class the activities must extend"},
 			}, nil
 		},
-		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+		fix: func(context.Context, string, targetContext, *patchViolation) (fixResult, error) {
 			fixed = true
-			return agent.FixResult{Changed: true, PatchedContent: "x"}, nil
+			return fixResult{Changed: true, PatchedContent: "x"}, nil
 		},
 	}
 	s := dryAgentSession(root, d,
-		analysisTarget{AnalysisID: 1, Inputs: oneClass("StrandHogg", "extend SecureBaseActivity")})
+		analysisTarget{AnalysisID: 1, Inputs: oneClass("StrandHogg")})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
 	require.False(t, fixed, "no fix call for a finding that needs a new file")
@@ -390,16 +386,16 @@ func TestRunUnit_NeedsNewFileSkipsWholeFinding(t *testing.T) {
 func TestRunUnit_NeedsNewFileSkipsInLocateOnlyToo(t *testing.T) {
 	root, rel := repoWithFile(t, javaBody)
 	d := autofixDeps{
-		locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+		locate: func(context.Context, FindingUnit) (agent.TargetReply, error) {
 			return agent.TargetReply{
 				Targets:      []agent.Target{{Path: rel, Why: "extends the base activity"}},
 				NeedsNewFile: []string{"SecureBaseActivity: base class the activities must extend"},
 			}, nil
 		},
 	}
-	s := fixSession{opts: AutofixOptions{FixMode: "agent", FileID: 1, LocateOnly: true},
+	s := fixSession{opts: AutofixOptions{FileID: 1, LocateOnly: true},
 		d: d, root: root, work: newWorkingTree(root),
-		targets: []analysisTarget{{AnalysisID: 1, Inputs: oneClass("StrandHogg", "extend SecureBaseActivity")}}}
+		targets: []analysisTarget{{AnalysisID: 1, Inputs: oneClass("StrandHogg")}}}
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
 	require.Len(t, out.Findings, 1)
@@ -418,19 +414,19 @@ func TestRunUnit_NeedsNewFileFalseClaimDoesNotSkipTheFinding(t *testing.T) {
 	writeSource(t, root, "app/build.gradle", "plugins { }\n")
 	fixed := false
 	d := autofixDeps{
-		locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+		locate: func(context.Context, FindingUnit) (agent.TargetReply, error) {
 			return agent.TargetReply{
 				Targets:      []agent.Target{{Path: rel, Why: "remove the log"}},
 				NeedsNewFile: []string{"app/build.gradle: enable minify"},
 			}, nil
 		},
-		agentFix: func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+		fix: func(context.Context, string, targetContext, *patchViolation) (fixResult, error) {
 			fixed = true
-			return agent.FixResult{Changed: true, PatchedContent: "class A { }\n"}, nil
+			return fixResult{Changed: true, PatchedContent: "class A { }\n"}, nil
 		},
 	}
 	s := dryAgentSession(root, d,
-		analysisTarget{AnalysisID: 1, Inputs: oneClass("Application Logs", "remove the log")})
+		analysisTarget{AnalysisID: 1, Inputs: oneClass("Application Logs")})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
 	require.True(t, fixed, "the in-scope Java target must still get its fix call")
@@ -446,16 +442,16 @@ func TestRunUnit_NeedsNewFileFalseClaimIsTargetsInLocateOnly(t *testing.T) {
 	root, rel := repoWithFile(t, javaBody)
 	writeSource(t, root, "app/build.gradle", "plugins { }\n")
 	d := autofixDeps{
-		locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+		locate: func(context.Context, FindingUnit) (agent.TargetReply, error) {
 			return agent.TargetReply{
 				Targets:      []agent.Target{{Path: rel, Why: "remove the log"}},
 				NeedsNewFile: []string{"app/build.gradle: enable minify"},
 			}, nil
 		},
 	}
-	s := fixSession{opts: AutofixOptions{FixMode: "agent", FileID: 1, LocateOnly: true},
+	s := fixSession{opts: AutofixOptions{FileID: 1, LocateOnly: true},
 		d: d, root: root, work: newWorkingTree(root),
-		targets: []analysisTarget{{AnalysisID: 1, Inputs: oneClass("Application Logs", "remove the log")}}}
+		targets: []analysisTarget{{AnalysisID: 1, Inputs: oneClass("Application Logs")}}}
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
 	require.Len(t, out.Findings, 1)

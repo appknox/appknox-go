@@ -51,10 +51,10 @@ func (a clientProjectAPI) ListFiles(ctx context.Context, projectID int, opt *app
 }
 
 // EnsureAutofixFile sets FileID to the latest upload on the base branch when
-// the caller did not pass one and is not using the manual --finding path.
+// the caller did not pass one.
 // An explicit --file-id is left unchanged.
 func EnsureAutofixFile(ctx context.Context, opts AutofixOptions) (AutofixOptions, error) {
-	if opts.FileID > 0 || strings.TrimSpace(opts.Finding) != "" {
+	if opts.FileID > 0 {
 		return opts, nil
 	}
 	resolved, err := resolveLatestAutofixFile(ctx, clientProjectAPI{getClient()}, opts)

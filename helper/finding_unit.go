@@ -1,62 +1,50 @@
 package helper
 
-import (
-	"strings"
+// FindingInputs is one finding of the Mycroft job, as the CLI sees it: its
+// name and ids, never its remediation, which stays on the worker.
+type FindingInputs struct {
+	Finding string // vulnerability name
 
-	"github.com/appknox/appknox-go/appknox"
-)
+	// VulnerabilityID is the Appknox vulnerability this finding reports.
+	// Printed on outcome lines.
+	VulnerabilityID int
 
-// FindingUnit is one KnoxIQ finding: the unit the locate agent targets and
-// whose remediation, and only whose remediation, reaches the fixer. Sibling
-// findings of the same analysis never share a fix call (spec 3.3).
+	// Severity is the analysis risk (Low, Medium, High, Critical). Empty when
+	// this run has no analysis to read it from.
+	Severity string
+
+	// UnitID is Mycroft's id for this finding.
+	UnitID string
+
+	// Units are the findings to locate and fix, one each. Empty when the
+	// finding is skipped.
+	Units []FindingUnit
+
+	// SkipReason says why Mycroft will not attempt this finding.
+	SkipReason string
+
+	// Skipped is one outcome line per finding dropped before it became a
+	// Unit. Every finding gets exactly one outcome line (spec 3.4), so
+	// fixSession.run appends these to Outcome.Findings alongside the ones
+	// Units produces.
+	Skipped []findingOutcome
+}
+
+// FindingUnit is one KnoxIQ finding: the unit a locate turn targets and whose
+// remediation, and only whose remediation, reaches the fix turns. Sibling
+// findings never share a fix turn (spec 3.3).
 type FindingUnit struct {
-	// UnitID is Mycroft's id for this finding. Empty on the manual path,
-	// which does not have a job.
-	UnitID          string
-	Title           string
-	Description     string
-	Remediation     string // FixInstruction(f)
-	DeveloperPrompt string
-	Criteria        []string
-	ClassHint       string // manual --class-hint path only
+	// UnitID is Mycroft's id for this finding; every turn names it.
+	UnitID string
+	Title  string
 	// ThirdParty is KnoxIQ's is_third_party: the flagged code is a library.
 	// The fix may still be the app's own (drop the dependency, remove its
-	// use); the locate agent is told so, and a unit with no in-repo target is
-	// skipped as reasonThirdPartyNoSource.
+	// use); a unit with no in-repo target is skipped as
+	// reasonThirdPartyNoSource.
 	ThirdParty bool
 }
 
-// unitsOf returns the units to run. Inputs built by knoxIQInputs carry one
-// per KnoxIQ finding. Anything else (the manual --finding path, and callers
-// that set only the aggregate fields) becomes a single unit, so both paths
-// run through the same loop.
+// unitsOf returns the units to run for one finding.
 func unitsOf(in FindingInputs) []FindingUnit {
-	if len(in.Units) > 0 {
-		return in.Units
-	}
-	return []FindingUnit{{
-		Remediation:     in.Remediation,
-		DeveloperPrompt: in.DeveloperPrompt,
-		Criteria:        in.Criteria,
-		ClassHint:       strings.Join(in.ClassHints, ", "),
-	}}
-}
-
-// unfixableReason says why KnoxIQ gave nothing to fix for an analysis, for
-// its SKIPPED outcome line. Third-party is not one of the reasons: those
-// findings are kept (see IsFixable) and decided by where the fix lands.
-func unfixableReason(all []*appknox.KnoxIQFinding) string {
-	if len(all) == 0 {
-		return "KnoxIQ: no findings"
-	}
-	for _, f := range all {
-		if f == nil || f.Validation == nil {
-			continue
-		}
-		v := f.Validation
-		if v.Verdict == "FALSE_POSITIVE" || (v.IsValid != nil && !*v.IsValid) {
-			return "KnoxIQ: false positive"
-		}
-	}
-	return "KnoxIQ: not validated"
+	return in.Units
 }

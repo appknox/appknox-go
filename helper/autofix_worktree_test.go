@@ -4,8 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	"github.com/appknox/appknox-go/agent"
 )
 
 // TestRun_SecondFindingInTheSameFileIsNotDropped is the regression test for
@@ -16,30 +14,30 @@ func TestRun_SecondFindingInTheSameFileIsNotDropped(t *testing.T) {
 
 	// Each fixer call rewrites one token, reading whatever is on disk now.
 	d := autofixDeps{
-		locateTargets: targetsAt("app/A.java"),
-		agentFix: func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-			cur, err := readUnderRoot(req.RepoRoot, req.Path)
+		locate: targetsAt("app/A.java"),
+		fix: func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+			cur, err := readUnderRoot(root, fixPath)
 			if err != nil {
-				return agent.FixResult{}, err
+				return fixResult{}, err
 			}
 			from, to := "weak", "secure"
-			if strings.Contains(req.Finding, "ECB") {
+			if fixTC.UnitID == "ecb" {
 				from, to = "ecb", "gcm"
 			}
-			return agent.FixResult{Changed: true, PatchedContent: strings.ReplaceAll(cur, from, to)}, nil
+			return fixResult{Changed: true, PatchedContent: strings.ReplaceAll(cur, from, to)}, nil
 		},
 	}
 
 	s := fixSession{
-		opts: AutofixOptions{FixMode: "agent", FileID: 24, DryRun: true},
+		opts: AutofixOptions{FileID: 24, DryRun: true},
 		d:    d,
 		root: root,
 		work: newWorkingTree(root),
 		targets: []analysisTarget{
 			{AnalysisID: 1, Inputs: FindingInputs{
-				Finding: "Weak PRNG", ClassHints: []string{"Lcom/x/A;"}, Remediation: "r"}},
+				Finding: "Weak PRNG", Units: []FindingUnit{{UnitID: "prng"}}}},
 			{AnalysisID: 2, Inputs: FindingInputs{
-				Finding: "Insecure ECB", ClassHints: []string{"Lcom/x/A;"}, Remediation: "r"}},
+				Finding: "Insecure ECB", Units: []FindingUnit{{UnitID: "ecb"}}}},
 		},
 	}
 

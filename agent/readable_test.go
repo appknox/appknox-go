@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +52,7 @@ func TestReadFile_RefusesCredentialFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "local.properties"), []byte("storePassword=hunter2"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := readFileHandler(root)(context.Background(), readFileInput{Path: "local.properties"})
+	_, err := readFile(root, "local.properties")
 	if err == nil || !strings.Contains(err.Error(), "not readable by autofix") {
 		t.Fatalf("read_file local.properties: err = %v, want a refusal", err)
 	}
@@ -67,7 +66,7 @@ func TestReadFile_RefusesASymlinkToACredentialFile(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, "local.properties"), filepath.Join(root, "Config.java")); err != nil {
 		t.Skipf("symlinks unavailable here: %v", err)
 	}
-	if _, err := readFileHandler(root)(context.Background(), readFileInput{Path: "Config.java"}); err == nil {
+	if _, err := readFile(root, "Config.java"); err == nil {
 		t.Fatal("read_file through a symlink to local.properties succeeded")
 	}
 }

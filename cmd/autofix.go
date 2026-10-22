@@ -16,7 +16,8 @@ var autofixCmd = &cobra.Command{
 	Long: `Register an autofix job on Appknox and wait until it is Processing.
 Then locate and fix findings on the CI checkout (GITHUB_WORKSPACE), push a
 branch, and open a PR with GITHUB_TOKEN. Recording the PR marks the job
-Processed. Model turns go through Appknox (never a provider key).
+Processed. Model turns run on Appknox; the CLI only runs the model's tool
+calls on the checkout and never holds a provider key.
 
 --file-id is optional. When it is omitted, autofix uses the latest file
 uploaded for this app on the base branch (--ref, or GITHUB_BASE_REF, else
@@ -49,13 +50,8 @@ APPKNOX_ACCESS_TOKEN is required.`,
 		opts.FileID, _ = f.GetInt("file-id")
 		opts.PackageName, _ = f.GetString("package-name")
 		opts.Platform, _ = f.GetString("platform")
-		opts.Finding, _ = f.GetString("finding")
-		opts.ClassHint, _ = f.GetString("class-hint")
 		opts.GithubToken, _ = f.GetString("github-token")
-		opts.Model, _ = f.GetString("model")
-		opts.LocateModel, _ = f.GetString("locate-model")
 		opts.DryRun, _ = f.GetBool("dry-run")
-		opts.FixMode, _ = f.GetString("fix-mode")
 		opts.ListAnalyses, _ = f.GetBool("list-analyses")
 		opts.LocateOnly, _ = f.GetBool("locate-only")
 
@@ -99,13 +95,8 @@ func init() {
 	f.Int("file-id", 0, "Appknox file id. When omitted, the latest upload on the base branch is used")
 	f.String("package-name", "", "Package name or bundle id used to find the latest file. Detected from the checkout when empty")
 	f.String("platform", "", "android or ios, used to find the latest file. Detected from the checkout when empty")
-	f.String("finding", "", "Manual finding detail (when not using a file id)")
-	f.String("class-hint", "", "Manual class/symbol hint from the finding (optional)")
 	f.String("github-token", "", "GitHub token for fetch + push (or env GITHUB_TOKEN)")
-	f.String("model", "", "Model for both turns under --fix-mode agent (blank = claude-haiku-4-5); ignored by --fix-mode server, which takes no model override")
-	f.String("locate-model", "", "Model for the locate turn only; falls back to --model. A cheaper model here does not weaken the patch")
 	f.Bool("dry-run", false, "Locate + generate the fix but do not push a branch")
-	f.String("fix-mode", "agent", "How to generate the fix: 'agent' (default — LLM Edit tool via the agent SDK, no file upload) or 'server' (/v1/fix single-shot, uploads the file)")
 	f.Bool("list-analyses", false, "List the file's analyses + derived class hints, then exit")
 	f.Bool("locate-only", false, "Locate and validate targets per KnoxIQ finding, print them, then exit: no fix, no job registration, no push")
 	f.StringP(

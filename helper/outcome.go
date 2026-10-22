@@ -55,7 +55,7 @@ type findingOutcome struct {
 	// after Finding so sibling findings of the same analysis -- which share
 	// the same VulnerabilityID and Finding name -- can be told apart. Empty
 	// on lines that are not about one specific KnoxIQ finding (an analysis-
-	// level skip, or the manual --finding path).
+	// level skip).
 	Title  string
 	Status string
 	Detail string
@@ -155,7 +155,7 @@ func remainingNotAttempted(targets []analysisTarget) []findingOutcome {
 	for _, t := range targets {
 		in := t.Inputs
 		out = append(out, in.Skipped...)
-		if in.Remediation == "" && in.SkipReason != "" {
+		if in.SkipReason != "" {
 			out = append(out, skippedAnalysis(t.AnalysisID, in))
 			continue
 		}
@@ -243,4 +243,15 @@ func (c *callTally) record(err error) {
 
 func (c *callTally) allFailed() bool {
 	return c != nil && c.calls > 0 && c.failures == c.calls
+}
+
+// joinNonEmpty joins only the parts that carry text.
+func joinNonEmpty(parts []string, sep string) string {
+	kept := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if strings.TrimSpace(p) != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, sep)
 }

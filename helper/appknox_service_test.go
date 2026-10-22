@@ -53,7 +53,6 @@ func TestFixViaMycroft_SendsNoPromptText(t *testing.T) {
 		build: buildProfile{
 			BuildSystem: "Gradle", Android: true, AGPMajor: 8, buildConfigKnown: true,
 		},
-		profile: "Build system: Gradle / Android",
 	}
 	tc := targetContext{
 		UnitID:     "a1-F-0",

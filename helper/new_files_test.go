@@ -83,17 +83,17 @@ func TestWorkingTree_CreatedFileIsDeletedOnRestore(t *testing.T) {
 // nscSession is mfva 113: KnoxIQ creates res/xml/network_security_config.xml
 // and references it from the manifest.
 func nscSession(t *testing.T, root string, locate agent.TargetReply,
-	fix func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error)) fixSession {
+	fix func(context.Context, string, targetContext, *patchViolation) (fixResult, error)) fixSession {
 	t.Helper()
 	d := autofixDeps{
-		locateTargets: func(context.Context, agent.Config, agent.TargetRequest) (agent.TargetReply, error) {
+		locate: func(context.Context, FindingUnit) (agent.TargetReply, error) {
 			return locate, nil
 		},
-		agentFix: fix,
+		fix: fix,
 	}
 	return dryAgentSession(root, d, analysisTarget{AnalysisID: 1, Inputs: FindingInputs{
-		Finding: "Cleartext traffic", VulnerabilityID: 113, Remediation: "r",
-		Units: []FindingUnit{{Title: "nsc", Remediation: "create the config and reference it"}},
+		Finding: "Cleartext traffic", VulnerabilityID: 113,
+		Units: []FindingUnit{{Title: "nsc"}},
 	}})
 }
 
@@ -104,21 +104,21 @@ var nscReply = agent.TargetReply{
 
 func TestRun_NewFileCreatedFirstThenReferenced(t *testing.T) {
 	root := writeRepo(t, map[string]string{manifestRel: manifestBody})
-	var calls []agent.FixRequest
-	s := nscSession(t, root, nscReply, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-		calls = append(calls, req)
-		if req.Path == nscRel {
-			return agent.FixResult{Changed: true, PatchedContent: nscBody}, nil
+	var calls []fixCall
+	s := nscSession(t, root, nscReply, func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+		calls = append(calls, fixCall{Path: fixPath, TC: fixTC, Prior: fixPrior})
+		if fixPath == nscRel {
+			return fixResult{Changed: true, PatchedContent: nscBody}, nil
 		}
-		return agent.FixResult{Changed: true, PatchedContent: manifestNSC}, nil
+		return fixResult{Changed: true, PatchedContent: manifestNSC}, nil
 	})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
 	require.Len(t, calls, 2)
 	require.Equal(t, nscRel, calls[0].Path, "the new file comes first")
-	require.True(t, calls[0].Create)
-	require.False(t, calls[1].Create)
-	require.Equal(t, []agent.Target{{Path: nscRel, Why: "cleartext off", New: true}}, calls[1].OtherFiles)
+	require.True(t, calls[0].TC.Create)
+	require.False(t, calls[1].TC.Create)
+	require.Equal(t, []agent.Target{{Path: nscRel, Why: "cleartext off", New: true}}, calls[1].TC.OtherFiles)
 	require.Equal(t, statusFixed, out.Findings[0].Status, out.Findings[0].Detail)
 	require.NotContains(t, out.Findings[0].Detail, "invalid path", "the duplicate listing under targets is dropped")
 	paths := []string{}
@@ -136,11 +136,11 @@ func TestRun_NewFileCreatedFirstThenReferenced(t *testing.T) {
 // reference to it.
 func TestRun_NewFileDeclinedRollsBackTheUnit(t *testing.T) {
 	root := writeRepo(t, map[string]string{manifestRel: manifestBody})
-	s := nscSession(t, root, nscReply, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-		if req.Path == nscRel {
-			return agent.FixResult{}, nil
+	s := nscSession(t, root, nscReply, func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+		if fixPath == nscRel {
+			return fixResult{}, nil
 		}
-		return agent.FixResult{Changed: true, PatchedContent: manifestBody + "<!-- other -->\n"}, nil
+		return fixResult{Changed: true, PatchedContent: manifestBody + "<!-- other -->\n"}, nil
 	})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
@@ -153,11 +153,11 @@ func TestRun_NewFileDeclinedRollsBackTheUnit(t *testing.T) {
 // A later target fails the gate: the created file is deleted with the rest.
 func TestRun_NewFileRolledBackWhenAnotherTargetFails(t *testing.T) {
 	root := writeRepo(t, map[string]string{manifestRel: manifestBody})
-	s := nscSession(t, root, nscReply, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-		if req.Path == nscRel {
-			return agent.FixResult{Changed: true, PatchedContent: nscBody}, nil
+	s := nscSession(t, root, nscReply, func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+		if fixPath == nscRel {
+			return fixResult{Changed: true, PatchedContent: nscBody}, nil
 		}
-		return agent.FixResult{Changed: true, PatchedContent: "<manifest><application>\n"}, nil // malformed
+		return fixResult{Changed: true, PatchedContent: "<manifest><application>\n"}, nil // malformed
 	})
 	res, err := s.runUnit(context.Background(), s.targets[0].Inputs, s.targets[0].Inputs.Units[0])
 	require.NoError(t, err)
@@ -176,11 +176,11 @@ func TestRun_NewClassWithWrongPackageIsRefused(t *testing.T) {
 		Targets:  []agent.Target{{Path: mainRel, Why: "call it"}},
 		NewFiles: []agent.Target{{Path: helperRel, Why: "AES-GCM helper"}},
 	}
-	s := nscSession(t, root, locate, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-		if req.Path == helperRel {
-			return agent.FixResult{Changed: true, PatchedContent: "package com.wrong;\npublic class SecureCryptoManager { }\n"}, nil
+	s := nscSession(t, root, locate, func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+		if fixPath == helperRel {
+			return fixResult{Changed: true, PatchedContent: "package com.wrong;\npublic class SecureCryptoManager { }\n"}, nil
 		}
-		return agent.FixResult{Changed: true, PatchedContent: "package com.appknox.mfva;\nclass MainActivity { void f() { new SecureCryptoManager(); } }\n"}, nil
+		return fixResult{Changed: true, PatchedContent: "package com.appknox.mfva;\nclass MainActivity { void f() { new SecureCryptoManager(); } }\n"}, nil
 	})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
@@ -197,9 +197,9 @@ func TestRun_RefusedNewFileSkipsTheFinding(t *testing.T) {
 		NewFiles: []agent.Target{{Path: "app/network_security_config.xml", Why: "misplaced"}},
 	}
 	called := false
-	s := nscSession(t, root, locate, func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+	s := nscSession(t, root, locate, func(context.Context, string, targetContext, *patchViolation) (fixResult, error) {
 		called = true
-		return agent.FixResult{}, nil
+		return fixResult{}, nil
 	})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
@@ -235,11 +235,11 @@ func TestRun_NewFileAlsoInNeedsNewFileIsStillCreated(t *testing.T) {
 	root := writeRepo(t, map[string]string{manifestRel: manifestBody})
 	reply := nscReply
 	reply.NeedsNewFile = []string{"network_security_config.xml: disable cleartext"}
-	s := nscSession(t, root, reply, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-		if req.Path == nscRel {
-			return agent.FixResult{Changed: true, PatchedContent: nscBody}, nil
+	s := nscSession(t, root, reply, func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+		if fixPath == nscRel {
+			return fixResult{Changed: true, PatchedContent: nscBody}, nil
 		}
-		return agent.FixResult{Changed: true, PatchedContent: manifestNSC}, nil
+		return fixResult{Changed: true, PatchedContent: manifestNSC}, nil
 	})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
@@ -250,11 +250,11 @@ func TestRun_NewFileAlsoInNeedsNewFileIsStillCreated(t *testing.T) {
 // file nothing uses fixes nothing, so it must not ship.
 func TestRun_OrphanNewFileRollsBack(t *testing.T) {
 	root := writeRepo(t, map[string]string{manifestRel: manifestBody})
-	s := nscSession(t, root, nscReply, func(_ context.Context, _ agent.Config, req agent.FixRequest) (agent.FixResult, error) {
-		if req.Path == nscRel {
-			return agent.FixResult{Changed: true, PatchedContent: nscBody}, nil
+	s := nscSession(t, root, nscReply, func(_ context.Context, fixPath string, fixTC targetContext, fixPrior *patchViolation) (fixResult, error) {
+		if fixPath == nscRel {
+			return fixResult{Changed: true, PatchedContent: nscBody}, nil
 		}
-		return agent.FixResult{}, nil
+		return fixResult{}, nil
 	})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
@@ -275,28 +275,14 @@ func TestRun_NewFileOutsideTheUsersSourceSetIsRefused(t *testing.T) {
 		NewFiles: []agent.Target{{Path: "lib/src/main/res/xml/network_security_config.xml", Why: "wrong module"}},
 	}
 	called := false
-	s := nscSession(t, root, reply, func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
+	s := nscSession(t, root, reply, func(context.Context, string, targetContext, *patchViolation) (fixResult, error) {
 		called = true
-		return agent.FixResult{}, nil
+		return fixResult{}, nil
 	})
 	out, err := s.run(context.Background())
 	require.NoError(t, err)
 	require.False(t, called)
 	require.Contains(t, out.Findings[0].Detail, "not in the source set of any file that uses it")
-}
-
-func TestRun_NewFileNeedsAgentFixMode(t *testing.T) {
-	root := writeRepo(t, map[string]string{manifestRel: manifestBody})
-	called := false
-	s := nscSession(t, root, nscReply, func(context.Context, agent.Config, agent.FixRequest) (agent.FixResult, error) {
-		called = true
-		return agent.FixResult{}, nil
-	})
-	s.opts.FixMode = "server"
-	out, err := s.run(context.Background())
-	require.NoError(t, err)
-	require.False(t, called, "nothing is uploaded or fixed")
-	require.Contains(t, out.Findings[0].Detail, "--fix-mode agent")
 }
 
 func TestSourceSetOf(t *testing.T) {
