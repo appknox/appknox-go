@@ -1,0 +1,997 @@
+package helper
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/appknox/appknox-go/agent"
+	"github.com/appknox/appknox-go/appknox"
+	"github.com/appknox/appknox-go/appknox/enums"
+	"github.com/appknox/appknox-go/ghfetch"
+	"github.com/pmezard/go-difflib/difflib"
+	"github.com/spf13/viper"
+)
+
+var (
+	autofixPollInterval = 5 * time.Second
+	autofixHardLimit    = time.Hour
+	autofixSleep        = time.Sleep
+)
+
+// AutofixOptions carries the flags for the client-side autofix flow.
+type AutofixOptions struct {
+	Repo          string // GitHub owner/name from CI (GITHUB_REPOSITORY)
+	Ref           string // PR base / merge target; empty = repo default branch
+	HeadRef       string // feature branch this autofix belongs to (CI: GITHUB_HEAD_REF / GITHUB_REF)
+	RepoPath      string // already-checked-out repo (CI: GITHUB_WORKSPACE)
+	FileID        int    // Appknox file id. 0 = latest upload on the base branch
+	PackageName   string // package name or bundle id used to find that upload; empty = detect from the checkout
+	Platform      string // "android" or "ios" for that lookup; empty = detect from the checkout
+	RiskThreshold int    // minimum computed risk Mycroft builds units for
+	GithubToken   string // GitHub token for the --repo fetch and branch push
+	DryRun        bool   // locate + fix but do not push a branch
+	ListAnalyses  bool   // print the file's analyses + class hints, then exit
+
+	// LocateOnly runs targeting and validation, prints each finding's
+	// validated targets as TARGETS lines, and stops: no fix call, no job
+	// registration, no delivery. Used to measure locate accuracy (spec 3.6).
+	LocateOnly bool
+
+	// JobID is the Mycroft autofix job this run drives. Set after start.
+	JobID int
+	// Units are the findings the worker published.
+	Units *[]appknox.AutofixUnit
+	// PRTitle is the title Mycroft returned from complete.
+	PRTitle string
+	// PRBody is the pull-request description this run writes to GitHub.
+	PRBody string
+	// jobDone is set once complete has been accepted, so a later failure
+	// does not mark the job timed out.
+	jobDone *bool
+}
+
+// autofixDeps are the injectable collaborators (seams for cost-free tests).
+type autofixDeps struct {
+	// locate and fix run one model turn each. Nil means the real thing: a
+	// turn on this run's Mycroft job (locateViaMycroft, fixViaMycroft).
+	locate      func(ctx context.Context, u FindingUnit) (agent.TargetReply, error)
+	fix         func(ctx context.Context, path string, tc targetContext, prior *patchViolation) (fixResult, error)
+	deliver     func(ctx context.Context, opts AutofixOptions, patches []filePatch) (Delivery, error)
+	report      func(ctx context.Context, opts AutofixOptions, d Delivery, patches []filePatch) error
+	knoxiqReady func(ctx context.Context, fileID int) error
+	// analyses lists the file's analyses, for each finding's severity. Nil
+	// leaves severities empty.
+	analyses func(ctx context.Context, fileID int) ([]*appknox.Analysis, error)
+}
+
+// defaultDeps wires every real collaborator. locate and fix stay nil: they
+// need the session's job, which only exists once the run has started.
+func defaultDeps() autofixDeps {
+	return autofixDeps{
+		deliver:     deliverBranch,
+		report:      reportAutofixPR,
+		knoxiqReady: checkKnoxIQReady,
+		analyses: func(ctx context.Context, fileID int) ([]*appknox.Analysis, error) {
+			return allAnalyses(ctx, getClient(), fileID)
+		},
+	}
+}
+
+// filePatch is one located file's generated fix.
+type filePatch struct {
+	Path    string
+	Content string
+	Diff    string
+	Applied bool
+	Finding string
+	// Formatting is cosmetic advice about the patch -- tabs in a space-indented
+	// file, say. Reported on the run and never enforced: see formatting.go.
+	Formatting string
+}
+
+// Outcome is the source-free result of a run — one or more fixed files.
+type Outcome struct {
+	Located   []string    // every located path
+	Patches   []filePatch // per-file fixes that changed something
+	BranchURL string      // GitHub PR URL after delivery
+	CommitSHA string      // git commit SHA of the pushed branch
+	Branch    string      // pushed branch name
+	PRCreated bool        // true when GitHub opened a new PR this run
+
+	// Truncated explains why the run stopped before attempting every target,
+	// and is empty when it did not.
+	//
+	// The gateway budget is per SESSION and one run is one session, so a large
+	// scan can exhaust it partway through. Discarding the fixes already
+	// produced would waste every model call the run had already spent and
+	// leave the developer with nothing to review, so the work already done is
+	// kept and delivered, and this field labels the result as partial.
+	Truncated string
+
+	// Findings holds one outcome line per KnoxIQ finding attempted, plus one
+	// per analysis KnoxIQ gave nothing to fix (spec 3.4).
+	Findings []findingOutcome
+}
+
+// ErrAutofixOnAutofixBranch is printed when the base branch is itself an
+// autofix branch. The command shows it and exits 0: autofix must not run
+// again on appknox-autofix/….
+var ErrAutofixOnAutofixBranch = errors.New("Autofix can not be run at appknox autofix branch")
+
+// AutofixBranchError reports ErrAutofixOnAutofixBranch when the PR base,
+// after CI defaults, starts with appknox-autofix/. A normal feature branch
+// returns nil.
+func AutofixBranchError(opts AutofixOptions) error {
+	opts = applyCIDefaults(opts)
+	ref := strings.TrimSpace(opts.Ref)
+	ref = strings.TrimPrefix(ref, "refs/heads/")
+	if strings.HasPrefix(ref, autofixBranchPrefix) {
+		return ErrAutofixOnAutofixBranch
+	}
+	return nil
+}
+
+// ProcessAutofix runs the client-side flow and exits non-zero on error.
+func ProcessAutofix(opts AutofixOptions) {
+	if err := AutofixBranchError(opts); err != nil {
+		PrintError(err)
+		return
+	}
+	if err := AutofixEventError(); err != nil {
+		PrintError(err)
+		os.Exit(1)
+	}
+	var err error
+	opts, err = EnsureAutofixFile(context.Background(), opts)
+	if err != nil {
+		PrintError(err)
+		os.Exit(1)
+	}
+	if opts.ListAnalyses {
+		if err := checkKnoxIQReady(context.Background(), opts.FileID); err != nil {
+			PrintError(err)
+			os.Exit(1)
+		}
+		if err := listAnalyses(opts.FileID); err != nil {
+			PrintError(err)
+			os.Exit(1)
+		}
+		return
+	}
+	// --file-id registers the job and waits until the worker has published
+	// units, then locates and fixes. Dry-run and locate-only still complete
+	// the job so the worker does not time out; they do not push a branch.
+	// Waiting for Processed here deadlocks: that status is written when there
+	// is nothing to open, or after this CLI records the PR.
+	if opts.FileID > 0 {
+		var jobDone bool
+		opts.jobDone = &jobDone
+		req, done, err := processAutofixWait(context.Background(), opts)
+		if err != nil {
+			PrintError(err)
+			os.Exit(1)
+		}
+		if done {
+			return
+		}
+		if req != nil {
+			opts.JobID = req.ID
+			opts.Units = req.Units
+		}
+		defer func() {
+			if opts.JobID > 0 && !jobDone {
+				reportAutofixTimeout(getClient(), opts.FileID)
+			}
+		}()
+	}
+	out, err := runAutofix(context.Background(), opts, defaultDeps())
+	if err != nil {
+		printOutcomeLines(out.Findings)
+		PrintError(err)
+		if opts.JobID > 0 && opts.jobDone != nil && !*opts.jobDone {
+			reportAutofixTimeout(getClient(), opts.FileID)
+		}
+		os.Exit(1)
+	}
+	printOutcome(opts, out)
+	if opts.FileID > 0 && !opts.DryRun && out.BranchURL != "" {
+		printJobResult(opts.FileID, out)
+	}
+}
+
+func processAutofixWait(ctx context.Context, opts AutofixOptions) (req *appknox.AutofixRequest, alreadyDone bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, autofixHardLimit)
+	defer cancel()
+	if err := checkKnoxIQReady(ctx, opts.FileID); err != nil {
+		if isAutofixTimeout(ctx, err) {
+			return nil, false, autofixTimeoutError(opts.FileID)
+		}
+		return nil, false, err
+	}
+	req, err = awaitAutofix(ctx, getClient(), opts)
+	if err != nil {
+		return nil, false, err
+	}
+	if req != nil && req.Status == appknox.AutofixStatusProcessed {
+		printJobSummary(req.Status, req.PRURL, false, true)
+		return req, true, nil
+	}
+	return req, false, nil
+}
+
+func awaitAutofix(ctx context.Context, client *appknox.Client, opts AutofixOptions) (*appknox.AutofixRequest, error) {
+	if client == nil {
+		return nil, fmt.Errorf("autofix start failed: missing Appknox client")
+	}
+	opts = applyCIDefaults(opts)
+	if opts.Repo == "" || opts.Ref == "" {
+		return nil, errors.New("autofix start needs a repo and base ref (--repo and --ref, or GITHUB_REPOSITORY and GITHUB_BASE_REF)")
+	}
+	started, _, err := client.KnoxIQ.StartAutofix(ctx, opts.FileID, &appknox.AutofixStart{
+		Repo: opts.Repo, BaseRef: opts.Ref, HeadRef: opts.HeadRef,
+		CommitSHA: headSHA(opts.RepoPath), RiskThreshold: opts.RiskThreshold,
+	})
+	if err != nil {
+		if isAutofixTimeout(ctx, err) {
+			reportAutofixTimeout(client, opts.FileID)
+			return nil, autofixTimeoutError(opts.FileID)
+		}
+		return nil, fmt.Errorf("autofix start failed: %w", err)
+	}
+	fmt.Println("\nAutofix status:")
+	return pollAutofix(ctx, client, opts.FileID, started)
+}
+
+func pollAutofix(ctx context.Context, client *appknox.Client, fileID int, current *appknox.AutofixRequest) (*appknox.AutofixRequest, error) {
+	last := ""
+	for {
+		if current == nil {
+			return nil, fmt.Errorf("autofix status missing for file %d", fileID)
+		}
+		if current.Status != last {
+			fmt.Printf("  %s\n", current.Status)
+			last = current.Status
+		}
+		switch current.Status {
+		case appknox.AutofixStatusProcessing:
+			// Units stay null until the worker has built them. Keep polling
+			// the job detail until that field is present, even when it is empty.
+			if current.Units != nil {
+				return current, nil
+			}
+		case appknox.AutofixStatusProcessed:
+			return current, nil
+		case appknox.AutofixStatusErrored:
+			msg := current.ErrorMessage
+			if msg == "" {
+				msg = "autofix failed"
+			}
+			return nil, fmt.Errorf("autofix errored for file %d: %s", fileID, msg)
+		case appknox.AutofixStatusTimedOut:
+			return nil, autofixTimeoutError(fileID)
+		}
+		if err := ctx.Err(); err != nil {
+			reportAutofixTimeout(client, fileID)
+			return nil, autofixTimeoutError(fileID)
+		}
+		autofixSleep(autofixPollInterval)
+		if err := ctx.Err(); err != nil {
+			reportAutofixTimeout(client, fileID)
+			return nil, autofixTimeoutError(fileID)
+		}
+		var next *appknox.AutofixRequest
+		var err error
+		if current.ID > 0 {
+			next, _, err = client.KnoxIQ.GetAutofix(ctx, fileID, current.ID)
+		} else {
+			next, _, err = client.KnoxIQ.GetAutofixStatus(ctx, fileID)
+		}
+		if err != nil {
+			if isAutofixTimeout(ctx, err) {
+				reportAutofixTimeout(client, fileID)
+				return nil, autofixTimeoutError(fileID)
+			}
+			return nil, fmt.Errorf("autofix status check failed: %w", err)
+		}
+		current = next
+	}
+}
+
+func isAutofixTimeout(ctx context.Context, err error) bool {
+	return errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func autofixTimeoutError(fileID int) error {
+	return fmt.Errorf("autofix timed out for file %d after %s", fileID, autofixHardLimit)
+}
+
+func reportAutofixTimeout(client *appknox.Client, fileID int) {
+	if client == nil {
+		return
+	}
+	_, _, _ = client.KnoxIQ.MarkAutofixTimedOut(context.Background(), fileID)
+}
+
+// runAutofix: KnoxIQ ready → the job's findings → locate and fix each → deliver.
+func runAutofix(ctx context.Context, opts AutofixOptions, d autofixDeps) (Outcome, error) {
+	if d.knoxiqReady != nil {
+		if err := d.knoxiqReady(ctx, opts.FileID); err != nil {
+			return Outcome{}, err
+		}
+	}
+	opts = applyCIDefaults(opts)
+	if opts.Units == nil {
+		return Outcome{}, errors.New("autofix needs a Mycroft job: pass --file-id, or upload a build on this branch first")
+	}
+	if viper.GetString("access-token") == "" {
+		return Outcome{}, errors.New("autofix needs an Appknox access token (--access-token or APPKNOX_ACCESS_TOKEN)")
+	}
+	targets := targetsFromUnits(opts.Units)
+	stampSeverity(ctx, d.analyses, opts.FileID, targets)
+	root, cleanup, err := resolveRepoRoot(ctx, opts)
+	if err != nil {
+		return Outcome{}, err
+	}
+	defer cleanup()
+
+	host, err := resolvedAPIHost()
+	if err != nil {
+		return Outcome{}, err
+	}
+	// Tool results carry the checkout's file contents to this host. Gate
+	// before the first turn so a plaintext remote cannot leak them or the
+	// token (CWE-319).
+	if err := validateEndpoint(host); err != nil {
+		return Outcome{}, err
+	}
+	// Once per run, not once per finding: describeBuild walks the build files
+	// and the answer is identical for every analysis in the repository.
+	build := describeBuild(root)
+	work := newWorkingTree(root)
+	// Unconditional, not dry-run-only: this restores the developer's checkout
+	// to what it was found regardless of whether the run actually wrote
+	// anything, on the theory that leaving no trace on disk is correct
+	// hygiene and, in CI, the checkout is ephemeral anyway. It is safe only
+	// because nothing downstream of work.apply reads the patched files back
+	// off disk -- delivery and PR reporting both build their payloads from
+	// out.Patches in memory, and this defer does not fire until run() (and
+	// therefore delivery) has returned. Anything added later that needs the
+	// patched content after the loop must take it from out.Patches, not from
+	// the working tree, or it will read what this defer just erased.
+	defer func() {
+		// Printed, not swallowed: a failed restore leaves the developer's own
+		// checkout patched with no on-screen sign of it, and that is worse
+		// than the run failing outright. It must not fail the run itself --
+		// the fix was already delivered (or reported) by the time this runs.
+		if err := work.restore(); err != nil {
+			fmt.Printf("autofix: failed to restore the working tree to its original state: %v\n", err)
+		}
+	}()
+	var job *mycroftJob
+	if opts.JobID > 0 {
+		job = &mycroftJob{fileID: opts.FileID, id: opts.JobID, done: opts.jobDone}
+	}
+	return fixSession{opts: opts, d: d, root: root, targets: targets, build: build,
+		work: work, job: job}.run(ctx)
+}
+
+// fixSession carries the resolved context for locating + fixing every finding
+// of one Mycroft job.
+type fixSession struct {
+	opts    AutofixOptions
+	d       autofixDeps
+	root    string
+	targets []analysisTarget
+	// build describes the build system this checkout uses, sent with each
+	// fix turn as typed values because the fixer cannot infer any of it from
+	// its one file.
+	build buildProfile
+	// work is shared across analyses so two findings in the same file compose
+	// instead of overwriting each other.
+	work *workingTree
+	// job is the Mycroft autofix job this run drives. Nil only in tests that
+	// stub d.locate and d.fix.
+	job *mycroftJob
+	// tally counts locate and fix calls for the all-failed exit decision.
+	// run() sets it; a nil tally records nothing.
+	tally *callTally
+}
+
+// run locates and fixes each finding, then delivers every patch on one branch.
+//
+// A locate or fix call that fails because the gateway's per-SESSION model-call
+// budget is exhausted (isGatewayBudgetExhausted) is not an ordinary failure:
+// every remaining target would fail the identical way, so the run stops
+// attempting further targets rather than logging N identical failures, but it
+// does NOT discard what was already produced -- see Outcome.Truncated. This is
+// the guard the fetch loop in autofix_targets.go already has for the KnoxIQ
+// GETs; this is the same guard for the two calls that actually go through the
+// gateway (locate and fix).
+//
+// The unit of work is a KnoxIQ finding (spec 3.3): each analysis's findings
+// (unitsOf) are located and fixed one at a time via runUnit, in manifest →
+// res → source order within a finding, rather than the whole analysis
+// sharing one locate call.
+func (s fixSession) run(ctx context.Context) (Outcome, error) {
+	s.tally = &callTally{}
+	out := Outcome{}
+	located := map[string]bool{}
+targetLoop:
+	for i, t := range s.targets {
+		in := t.Inputs
+		// Findings KnoxIQ gave us but that never became a Unit (F1): filtered
+		// while a sibling stayed fixable, or left with no remediation text.
+		// Each already carries its own outcome line.
+		out.Findings = append(out.Findings, in.Skipped...)
+		if in.SkipReason != "" {
+			out.Findings = append(out.Findings, skippedAnalysis(t.AnalysisID, in))
+			continue
+		}
+		units := unitsOf(in)
+		for j, u := range units {
+			res, err := s.runUnit(ctx, in, u)
+			out = mergeUnit(out, located, res)
+			if err == nil {
+				continue
+			}
+			if isGatewayBudgetExhausted(err) {
+				s.truncate(&out, i, err)
+				// The unit that hit the exhaustion already has its own line
+				// from runUnit above; everything after it -- its own
+				// siblings, then every later target -- never got a call and
+				// otherwise gets no line at all (F4).
+				out.Findings = append(out.Findings, notAttemptedOutcomes(in, units[j+1:])...)
+				out.Findings = append(out.Findings, remainingNotAttempted(s.targets[i+1:])...)
+				break targetLoop
+			}
+			return out, err
+		}
+	}
+	var runErr error
+	if s.tally.allFailed() {
+		runErr = fmt.Errorf("%w: %d of %d locate/fix calls failed, last: %v",
+			ErrAllCallsFailed, s.tally.failures, s.tally.calls, s.tally.last)
+	}
+	// One file, one blob. Two analyses that patched the same file each appended
+	// a patch; the last holds both fixes because each was built on the previous
+	// one via the working tree. Shipping both would push the intermediate state.
+	// lastPatchPerPath is handed s.work.original so it can recompute Finding
+	// and Diff across the ORIGINAL content when it collapses more than one
+	// patch on the same path -- see its own doc comment. s.work is nil in a
+	// handful of narrow unit tests that never reach a patch (e.g.
+	// TestRun_EmptyRemediationNeverReachesTheFixer); guard rather than
+	// dereference, since a nil map read is safe and out.Patches is empty then
+	// anyway.
+	var original map[string]string
+	if s.work != nil {
+		original = s.work.original
+	}
+	out.Patches = lastPatchPerPath(out.Patches, original)
+	if s.job != nil {
+		title, _, err := s.finishJob(ctx, &out)
+		if err != nil && runErr == nil {
+			return out, err
+		}
+		if title != "" {
+			s.opts.PRTitle = title
+		}
+	}
+	if runErr != nil {
+		return out, runErr
+	}
+	if len(out.Patches) == 0 || s.opts.DryRun {
+		return out, nil
+	}
+	s.opts.PRBody = renderAutofixPRBody(out.Findings, out.Patches, out.Truncated)
+	return s.deliver(ctx, out)
+}
+
+// truncate records why the run is stopping before every target was attempted,
+// and prints an unmissable warning. i is the index of the target being
+// attempted when cause fired, so i targets were already fully attempted
+// (successfully or not) before it.
+//
+// Exit-code decision: a truncated run that still delivers patches exits 0 --
+// the work done is good, and this Truncated warning (surfaced again in
+// printOutcome) is the signal that something was cut short, not a failure
+// that should paint the CI run red. See final-fix-report.md (I3).
+func (s fixSession) truncate(out *Outcome, i int, cause error) {
+	out.Truncated = fmt.Sprintf(
+		"KnoxIQ gateway budget exhausted after %d/%d target(s); the remaining %d were not attempted (%v). "+
+			"Re-run to continue from here; the patch(es) already produced are still delivered.",
+		i, len(s.targets), len(s.targets)-i, cause)
+	fmt.Printf("\n!! %s\n", out.Truncated)
+}
+
+// maxFixRetries is how many times a rejected patch is regenerated before the
+// file is abandoned. One retry: the gate tells the fixer the one fact it could
+// not see, and a second miss on the same fact is not a third-attempt problem.
+const maxFixRetries = 1
+
+// produceFixFor generates a patch for one file and holds it to the static
+// gate, retrying once with the violated fact before abandoning the file. It
+// says why no patch came back: reasonDeclined when the fixer abstained,
+// "rejected by patch gate (<rule>)" when the gate discarded the patch after
+// its retry.
+//
+// The gate is relative, not absolute: verifyPatch compares the patch against
+// the original, so a repository that already fails a check is never blamed on
+// the patch that did not introduce it.
+func (s fixSession) produceFixFor(ctx context.Context, path string, tc targetContext) (fixResult, string, error) {
+	refused := "" // the rule the previous attempt broke, if any
+	var violation *patchViolation
+	for attempt := 0; ; attempt++ {
+		res, err := s.attemptFix(ctx, path, tc, violation)
+		if err != nil {
+			return res, "", err
+		}
+		// Nothing to check. An abstention is already the safe outcome -- the
+		// gate exists to turn a bad edit into one of these. After a refusal it
+		// is still a refusal: the file needed a change the gate would not
+		// allow (mfva 116's RootBeer dependency), which is not the same as
+		// needing no change, and fixTargets' rollback must see the difference.
+		if !res.Changed || res.PatchedContent == "" {
+			if refused != "" {
+				return res, fmt.Sprintf("rejected by patch gate (%s), then declined", refused), nil
+			}
+			return res, reasonDeclined, nil
+		}
+		// The original is what is on disk: the fixer restores the file before
+		// it returns, so the checkout still holds the pre-patch content. An
+		// unreadable file means no delta can be computed, and a check that
+		// cannot be computed must not reject.
+		original, readErr := "", error(nil)
+		if !tc.Create {
+			original, readErr = readUnderRoot(s.root, path)
+		}
+		if readErr != nil {
+			return res, "", nil
+		}
+		v := verifyPatch(s.root, path, original, res.PatchedContent)
+		if v == nil {
+			return res, "", nil
+		}
+		if attempt >= maxFixRetries {
+			// Discard the patch rather than ship it. A reported gap is
+			// recoverable; a branch that does not compile is not.
+			return fixResult{}, fmt.Sprintf("rejected by patch gate (%s)", v.Rule), nil
+		}
+		violation, refused = v, v.Rule
+	}
+}
+
+// attemptFix runs one fix turn on path. prior is the rule the previous
+// attempt broke, nil on the first.
+func (s fixSession) attemptFix(
+	ctx context.Context, path string, tc targetContext, prior *patchViolation,
+) (fixResult, error) {
+	if s.d.fix != nil {
+		return s.d.fix(ctx, path, tc, prior)
+	}
+	return s.fixViaMycroft(ctx, path, tc, prior)
+}
+
+// deliver pushes all patches to one GitHub branch and records the delivery on Appknox.
+func (s fixSession) deliver(ctx context.Context, out Outcome) (Outcome, error) {
+	del, err := s.d.deliver(ctx, s.opts, out.Patches)
+	if err != nil {
+		return out, err
+	}
+	out.BranchURL = del.URL
+	out.CommitSHA = del.CommitSHA
+	out.Branch = del.Branch
+	out.PRCreated = del.PRCreated
+	if s.d.report != nil {
+		if err := s.d.report(ctx, s.opts, del, out.Patches); err != nil {
+			return out, fmt.Errorf("pushed %s but failed to record on Appknox: %w", del.URL, err)
+		}
+	}
+	return out, nil
+}
+
+// resolveRepoRoot returns the repo root and a cleanup func: a local checkout
+// (--repo-path or GITHUB_WORKSPACE), or a freshly fetched GitHub tarball.
+func resolveRepoRoot(ctx context.Context, opts AutofixOptions) (string, func(), error) {
+	if opts.RepoPath != "" {
+		return opts.RepoPath, func() {}, nil
+	}
+	if opts.Repo == "" {
+		return "", nil, errors.New("autofix needs a CI checkout (GITHUB_WORKSPACE) or --repo-path <dir>")
+	}
+	owner, name, err := splitRepo(opts.Repo)
+	if err != nil {
+		return "", nil, err
+	}
+	return ghfetch.FetchTarball(ctx, ghfetch.Config{
+		Owner: owner, Repo: name, Ref: opts.Ref,
+		Token: firstNonEmpty(opts.GithubToken, os.Getenv("GITHUB_TOKEN")),
+	})
+}
+
+// severityName is the risk label written into the pull-request table.
+// Passed and Unknown are not severities of a finding.
+func severityName(r enums.RiskType) string {
+	switch r {
+	case enums.Risk.Low, enums.Risk.Medium, enums.Risk.High, enums.Risk.Critical:
+		return r.String()
+	default:
+		return ""
+	}
+}
+
+// stampSeverity fills each target's severity from the file's analyses.
+// Targets are built from Mycroft units, which do not carry risk. A lookup
+// failure leaves severity empty; the pull request still opens.
+func stampSeverity(
+	ctx context.Context,
+	analyses func(context.Context, int) ([]*appknox.Analysis, error),
+	fileID int, targets []analysisTarget,
+) {
+	if analyses == nil || fileID <= 0 || len(targets) == 0 {
+		return
+	}
+	all, err := analyses(ctx, fileID)
+	if err != nil {
+		return
+	}
+	byVuln := map[int]enums.RiskType{}
+	for _, a := range all {
+		if a == nil || a.VulnerabilityID == 0 || severityName(a.ComputedRisk) == "" {
+			continue
+		}
+		if prev, ok := byVuln[a.VulnerabilityID]; ok && prev >= a.ComputedRisk {
+			continue
+		}
+		byVuln[a.VulnerabilityID] = a.ComputedRisk
+	}
+	for i := range targets {
+		risk, ok := byVuln[targets[i].Inputs.VulnerabilityID]
+		if !ok {
+			continue
+		}
+		name := risk.String()
+		targets[i].Inputs.Severity = name
+		for j := range targets[i].Inputs.Skipped {
+			if targets[i].Inputs.Skipped[j].Severity == "" {
+				targets[i].Inputs.Skipped[j].Severity = name
+			}
+		}
+	}
+}
+
+// allAnalyses fetches every analysis for a file (count, then the full list).
+func allAnalyses(ctx context.Context, client *appknox.Client, fileID int) ([]*appknox.Analysis, error) {
+	_, resp, err := client.Analyses.ListByFile(ctx, fileID, nil)
+	if err != nil {
+		return nil, err
+	}
+	opt := &appknox.AnalysisListOptions{ListOptions: appknox.ListOptions{Limit: resp.GetCount()}}
+	all, _, err := client.Analyses.ListByFile(ctx, fileID, opt)
+	return all, err
+}
+
+// listAnalyses prints each analysis with its first-party classes so the user can
+// pick a good autofix target: "+" = single-class (locatable), "*" = multi-class.
+func listAnalyses(fileID int) error {
+	if fileID <= 0 {
+		return errors.New("--list-analyses needs --file-id")
+	}
+	all, err := allAnalyses(context.Background(), getClient(), fileID)
+	if err != nil {
+		return err
+	}
+	for _, a := range all {
+		hints := classHintsFromFindings(findingsText(a))
+		marker := analysisMarker(len(hints))
+		fmt.Printf("%s id=%-6d risk=%-8v vuln=%-4d classes=%v\n",
+			marker, a.ID, a.ComputedRisk, a.VulnerabilityID, hints)
+	}
+	return nil
+}
+
+// analysisMarker flags an analysis by its first-party class count.
+func analysisMarker(n int) string {
+	switch {
+	case n > 1:
+		return "*" // multi-class
+	case n == 1:
+		return "+" // single-class
+	default:
+		return " "
+	}
+}
+
+// printOutcome renders the run result (one or more files) to stdout.
+func printOutcome(opts AutofixOptions, out Outcome) {
+	// Printed first: a partial run is the single most important thing to know
+	// about the result, and it explains a finding count lower than the scan's.
+	if out.Truncated != "" {
+		fmt.Printf("PARTIAL RUN: %s\n", out.Truncated)
+	}
+	printOutcomeLines(out.Findings)
+	if len(out.Located) == 0 {
+		fmt.Println("No source file located for this finding (advisory only).")
+		return
+	}
+	fmt.Printf("Located %d file(s): %s\n", len(out.Located), strings.Join(out.Located, ", "))
+	if len(out.Patches) == 0 {
+		fmt.Println("No change produced (advisory only).")
+		return
+	}
+	for _, p := range out.Patches {
+		fmt.Printf("\n=== %s ===\n", p.Path)
+		if p.Formatting != "" {
+			fmt.Printf("formatting (not enforced): %s\n", p.Formatting)
+		}
+		fmt.Println(p.Diff)
+	}
+	printDelivery(opts, out)
+}
+
+// printDelivery renders the delivery outcome (dry-run or created/updated PR).
+func printDelivery(opts AutofixOptions, out Outcome) {
+	switch {
+	case opts.DryRun:
+		fmt.Printf("\n[dry-run] not pushing %d patched file(s).\n", len(out.Patches))
+	case out.BranchURL != "" && opts.FileID > 0:
+		// ProcessAutofix prints Autofix request + Created/Updated PR after Mycroft records it.
+		return
+	case out.BranchURL != "":
+		fmt.Printf("\n%s: %s\n", prAction(out.PRCreated), out.BranchURL)
+		if out.CommitSHA != "" {
+			fmt.Printf("commit: %s\n", out.CommitSHA)
+		}
+	default:
+		fmt.Printf("\nGenerated fix for %d file(s): %s\n", len(out.Patches), patchPaths(out.Patches))
+	}
+}
+
+func printJobResult(fileID int, out Outcome) {
+	status := appknox.AutofixStatusProcessed
+	prURL := out.BranchURL
+	if client := getClient(); client != nil {
+		req, _, err := client.KnoxIQ.GetAutofixStatus(context.Background(), fileID)
+		if err == nil && req != nil {
+			status = req.Status
+			if req.PRURL != "" {
+				prURL = req.PRURL
+			}
+		}
+	}
+	printJobSummary(status, prURL, out.PRCreated, false)
+	if out.CommitSHA != "" {
+		fmt.Printf("commit: %s\n", out.CommitSHA)
+	}
+}
+
+// printJobSummary prints Mycroft job status and the GitHub PR.
+// existing is true when this run did not create or update a PR (already Processed).
+func printJobSummary(status, prURL string, created, existing bool) {
+	fmt.Println()
+	if status != "" {
+		fmt.Printf("Autofix request: %s\n", status)
+	}
+	if prURL == "" {
+		return
+	}
+	if existing {
+		fmt.Printf("PR: %s\n", prURL)
+		return
+	}
+	fmt.Printf("%s: %s\n", prAction(created), prURL)
+}
+
+func prAction(created bool) string {
+	if created {
+		return "Created PR"
+	}
+	return "Updated PR"
+}
+
+// patchPaths joins the patched file paths for display.
+func patchPaths(patches []filePatch) string {
+	names := make([]string, len(patches))
+	for i, p := range patches {
+		names[i] = p.Path
+	}
+	return strings.Join(names, ", ")
+}
+
+// repoComponentRE is GitHub's owner/repo charset — rejects "/", "?", spaces, etc.
+// so a --repo value can never inject extra URL path/query segments (CWE-20).
+var repoComponentRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// splitRepo parses and validates an "owner/name" repo spec.
+func splitRepo(spec string) (string, string, error) {
+	parts := strings.SplitN(spec, "/", 2)
+	if len(parts) != 2 || !repoComponentRE.MatchString(parts[0]) || !repoComponentRE.MatchString(parts[1]) {
+		return "", "", fmt.Errorf("invalid --repo %q, expected owner/name (letters, digits, . _ -)", spec)
+	}
+	return parts[0], parts[1], nil
+}
+
+// firstNonEmpty returns a if non-empty, else b.
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// workingTree tracks edits made during a run so later analyses see earlier
+// fixes.
+//
+// Each analysis fixes a file starting from whatever is on disk. Without this,
+// two findings in one file would each be fixed against the ORIGINAL content and
+// the second push would silently clobber the first -- which is exactly what
+// happened on mfva PR #18, where a crypto fix was lost to a PRNG fix in the same
+// file.
+type workingTree struct {
+	root     string
+	original map[string]string // path -> content before we touched it
+	// created holds paths that did not exist before this run touched them.
+	// Their original is "" (a diff against nothing), and restore deletes
+	// them rather than writing an empty file.
+	created map[string]bool
+	// createdDirs are the directories each created path needed, deepest
+	// first, removed with it when they are empty again.
+	createdDirs map[string][]string
+}
+
+func newWorkingTree(root string) *workingTree {
+	return &workingTree{root: root, original: map[string]string{}, created: map[string]bool{},
+		createdDirs: map[string][]string{}}
+}
+
+// apply writes a patch to the tree, remembering the original content once. A
+// path that does not exist yet is recorded as created.
+func (w *workingTree) apply(path, content string) error {
+	if _, seen := w.original[path]; !seen {
+		before, err := readUnderRoot(w.root, path)
+		switch {
+		case err == nil:
+			w.original[path] = before
+		case errors.Is(err, fs.ErrNotExist):
+			dest, destErr := safeDest(w.root, path)
+			if destErr != nil {
+				return destErr
+			}
+			w.original[path] = ""
+			w.created[path] = true
+			w.createdDirs[path] = missingParents(dest)
+		default:
+			return err
+		}
+	}
+	return applyPatch(w.root, path, content)
+}
+
+// remove deletes a file this run created, for a rolled-back unit. The path
+// stays recorded as created, so a later unit that creates it again, and the
+// final restore, both still treat it as new.
+func (w *workingTree) remove(path string) error {
+	if !w.created[path] {
+		return fmt.Errorf("refusing to delete %s: this run did not create it", path)
+	}
+	dest, err := safeDest(w.root, path)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(dest); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	for _, dir := range w.createdDirs[path] {
+		if os.Remove(dir) != nil {
+			break // not empty (or gone): something else lives there
+		}
+	}
+	return nil
+}
+
+// missingParents returns abs's ancestors that do not exist yet, deepest first.
+func missingParents(abs string) []string {
+	var dirs []string
+	for dir := filepath.Dir(abs); filepath.Dir(dir) != dir; dir = filepath.Dir(dir) {
+		if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+			break
+		}
+		dirs = append(dirs, dir)
+	}
+	return dirs
+}
+
+// restore puts every touched file back, for a dry run that must leave no
+// trace: created files are deleted, the rest rewritten.
+func (w *workingTree) restore() error {
+	for path, content := range w.original {
+		if w.created[path] {
+			if err := w.remove(path); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := applyPatch(w.root, path, content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// lastPatchPerPath keeps one patch per path, preserving first-seen order so
+// the pull request body still reads in the order fixes were made.
+//
+// The kept filePatch's Content is always the LAST patch's -- that is correct,
+// since the final content already carries every earlier fix to that path via
+// the working tree. But naively keeping the last patch's own Finding and Diff
+// too would under-report every earlier finding that also touched the path:
+// its Diff would cover only the last turn's edit, and its Finding would name
+// only the last finding. So when MORE THAN ONE patch touches a path, this
+// merges every patch's Finding name (deduplicated, first-seen order) and
+// recomputes the Diff from the path's ORIGINAL content -- before this run
+// touched it at all -- to the FINAL content, never from an intermediate
+// state. A path with only one patch is untouched by this: its Finding and
+// Diff already correctly describe that one patch.
+//
+// original is s.work.original -- the content read the first time each path
+// was touched THIS run, i.e. before any of this run's own fixes.
+func lastPatchPerPath(patches []filePatch, original map[string]string) []filePatch {
+	latest := make(map[string]filePatch, len(patches))
+	findingSeen := map[string]map[string]bool{}
+	findingOrder := map[string][]string{}
+	var order []string
+	for _, p := range patches {
+		if _, seen := latest[p.Path]; !seen {
+			order = append(order, p.Path)
+			findingSeen[p.Path] = map[string]bool{}
+		}
+		latest[p.Path] = p
+		if p.Finding != "" && !findingSeen[p.Path][p.Finding] {
+			findingSeen[p.Path][p.Finding] = true
+			findingOrder[p.Path] = append(findingOrder[p.Path], p.Finding)
+		}
+	}
+	out := make([]filePatch, 0, len(order))
+	for _, path := range order {
+		out = append(out, collapsedPatch(latest[path], findingOrder[path], original[path]))
+	}
+	return out
+}
+
+// collapsedPatch merges names (every distinct Finding seen for p.Path) and
+// before (the path's original content, "" and absent are indistinguishable
+// here, but an empty original is never a valid pre-patch state for a file
+// that was actually touched) into p when more than one patch touched the
+// path. A single-patch path is returned unchanged.
+func collapsedPatch(p filePatch, names []string, before string) filePatch {
+	if len(names) <= 1 {
+		return p
+	}
+	p.Finding = strings.Join(names, "; ")
+	if before != "" {
+		if d := unifiedDiff(p.Path, before, p.Content); d != "" {
+			p.Diff = d
+		}
+	}
+	return p
+}
+
+// unifiedDiff renders a standard unified diff between two whole-file
+// contents. Used only by collapsedPatch, where the diff must span the path's
+// ORIGINAL content to its FINAL content rather than an intermediate state.
+func unifiedDiff(path, before, after string) string {
+	text, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
+		A: difflib.SplitLines(before), B: difflib.SplitLines(after),
+		FromFile: path, ToFile: path, Context: 3,
+	})
+	if err != nil {
+		return ""
+	}
+	return text
+}
