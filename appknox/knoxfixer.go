@@ -8,18 +8,13 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-
-	"github.com/appknox/appknox-go/version"
 )
 
 // KnoxFixerService talks to Mycroft's knoxfixer job API. The CLI never talks
 // to the KnoxFixer service or any LLM directly, and never sends prompts.
 type KnoxFixerService service
 
-const (
-	knoxFixerSessionHeader = "X-Knoxfixer-Session"
-	cliVersionHeader       = "X-Appknox-CLI-Version"
-)
+const knoxFixerSessionHeader = "X-Knoxfixer-Session"
 
 // KnoxFixerAPIError is a Mycroft error with a stable machine code.
 type KnoxFixerAPIError struct {
@@ -178,7 +173,6 @@ func (s *KnoxFixerService) do(ctx context.Context, method, path, session string,
 		return 0, err
 	}
 	req = req.WithContext(ctx)
-	req.Header.Set(cliVersionHeader, version.Version)
 	if session != "" {
 		req.Header.Set(knoxFixerSessionHeader, session)
 	}

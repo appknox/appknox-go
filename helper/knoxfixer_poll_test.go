@@ -20,7 +20,6 @@ func pollServer(t *testing.T, handler func(afterSeq int, session string) (int, i
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		afterSeq, _ := strconv.Atoi(r.URL.Query().Get("after_seq"))
-		assert.NotEmpty(t, r.Header.Get("X-Appknox-CLI-Version"))
 		status, body := handler(afterSeq, r.Header.Get("X-Knoxfixer-Session"))
 		w.WriteHeader(status)
 		json.NewEncoder(w).Encode(body)
