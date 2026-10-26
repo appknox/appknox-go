@@ -7,4 +7,9 @@ const (
 	flagRiskThreshold              = "risk-threshold"
 	flagHealthScoreThreshold       = "health-score-threshold"
 	flagExploitLikelihoodThreshold = "exploit-likelihood-threshold"
+
+	// knoxfixer
+	flagFileID    = "file-id"
+	flagVerifyCmd = "verify-cmd"
+	flagAppRoot   = "app-root"
 )
