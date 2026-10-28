@@ -74,28 +74,9 @@ func globToRegexp(glob string) *regexp.Regexp {
 	return regexp.MustCompile(b.String())
 }
 
-// Files the CLI never reads or sends (secrets / credentials).
+// Files the CLI never reads, sends or writes (secrets / credentials).
 var blockedFileRe = regexp.MustCompile(`(?i)(^|/)(\.env[^/]*|[^/]*\.(keystore|jks|p12|pfx|pem|key|mobileprovision|cer|der|p8)|google-services\.json|GoogleService-Info\.plist|local\.properties|secrets?\.[^/]+|credentials[^/]*|id_rsa[^/]*)$`)
 
-// Directories never walked or edited (generated, vendored, VCS).
+// Directories skipped when listing / searching (generated, vendored, VCS).
+// The agent can still read or change a path inside them by name.
 var skippedDirRe = regexp.MustCompile(`(?i)^(\.git|\.gradle|\.idea|build|Pods|Carthage|DerivedData|node_modules|\.build|\.appknox|generated|intermediates)$`)
-
-// Paths never edited by the CLI (CI config, Xcode project files, generated).
-var blockedEditRe = regexp.MustCompile(`(?i)(^|/)(\.github|\.gitlab-ci\.yml|\.circleci|Jenkinsfile|bitrise\.yml|fastlane|build|Pods|Carthage|DerivedData|generated)(/|$)|\.pbxproj$|\.xcodeproj(/|$)|\.xcworkspace(/|$)|(^|/)R\.java$|(^|/)BuildConfig\.java$`)
-
-func isHiddenPath(rel string) bool {
-	for _, part := range strings.Split(rel, "/") {
-		if strings.HasPrefix(part, ".") {
-			return true
-		}
-	}
-	return false
-}
-
-func isReadableRepoFile(rel string) bool {
-	return !blockedFileRe.MatchString(rel) && !isHiddenPath(rel)
-}
-
-func isEditableRepoFile(rel string) bool {
-	return isReadableRepoFile(rel) && !blockedEditRe.MatchString(rel)
-}

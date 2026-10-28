@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"time"
 
 	"github.com/appknox/appknox-go/appknox"
@@ -23,14 +22,17 @@ const (
 	knoxFixerMaxRun      = 60 * time.Minute
 	knoxFixerPollWait    = 25
 	knoxFixerPollBackoff = 2 * time.Second
+	// Repo listing sent once (paths only); the agent can list / search more.
+	knoxFixerMaxRepoFiles = 200000
 )
 
 // errSuperseded: another CLI run took over the job. Never push.
 var errSuperseded = errors.New("superseded")
 
 // ProcessKnoxFixer runs `appknox knoxfixer` and returns the process exit code.
-// The CLI holds no prompt, model or LLM key: it locates files, sends small
-// snippets, applies the edits Mycroft relays, and opens / updates the PR.
+// The CLI holds no prompt, model or LLM key: it prepares the branch, runs the
+// server-side fix agent's tools (list / search / read / edit / create /
+// delete files, verify) in a worktree, then commits and opens / updates the PR.
 func ProcessKnoxFixer(opts KnoxFixerOptions) int {
 	env, err := readKnoxFixerCIEnv(os.Getenv)
 	if errors.Is(err, errKnoxFixerBranchSkip) {
@@ -109,15 +111,12 @@ type knoxFixerRun struct {
 	opts KnoxFixerOptions
 	root string
 
-	// state built while answering the plan
+	// state built while answering `prepare`
 	git           *gitRunner
 	cleanup       func()
-	idx           *repoIndex
+	tools         *toolRunner
 	head          string
 	pr            *githubPR // PR being updated (open / reopened), nil → new PR
-	located       map[string]string
-	titles        map[string]string
-	limits        appknox.KnoxFixerLimits
 	conflictFiles []string
 	lastSeq       int
 }
@@ -176,13 +175,13 @@ func (r *knoxFixerRun) loop() int {
 		r.lastSeq = msg.Seq
 		var err error
 		switch msg.Type {
-		case "plan":
-			err = r.handlePlan(msg)
-		case "need_context":
-			err = r.handleNeedContext(msg)
-		case "edits":
+		case "prepare":
+			err = r.handlePrepare(msg)
+		case "tools":
+			err = r.handleTools(msg)
+		case "finish":
 			var done bool
-			done, err = r.handleEdits(msg)
+			done, err = r.handleFinish(msg)
 			if err == nil && done {
 				return 0
 			}
@@ -255,58 +254,6 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
-}
-
-// --- plan ------------------------------------------------------------------------
-
-func (r *knoxFixerRun) handlePlan(msg *appknox.KnoxFixerMessage) error {
-	p := msg.Payload
-	r.head = firstNonEmpty(p.HeadBranch, KnoxFixerBranchPrefix+r.env.BaseBranch)
-	r.limits = p.Limits
-	r.titles = map[string]string{}
-	for _, f := range p.Findings {
-		r.titles[f.Ref] = f.Title
-	}
-	if r.cleanup == nil {
-		if err := r.prepareBranch(); err != nil {
-			return err
-		}
-	}
-	idx, err := buildRepoIndex(r.git.dir, r.opts.AppRoot)
-	if err != nil {
-		return err
-	}
-	r.idx = idx
-	located, unresolved := locateFindings(idx, p.Findings)
-	snippets, failed := buildSnippets(idx, located, p.Limits.SnippetLinesPerFinding)
-	unresolved = append(unresolved, failed...)
-	r.located = map[string]string{}
-	for _, f := range located {
-		r.located[f.Ref] = f.Path
-	}
-
-	req := &appknox.KnoxFixerContextRequest{
-		InReplyToSeq: msg.Seq, UnresolvedRefs: unresolved, Snippets: snippets,
-		ConflictFiles: r.conflictFiles,
-	}
-	if r.pr != nil {
-		url := r.pr.HTMLURL
-		req.PRURL = &url
-	}
-	fmt.Printf("knoxfixer: %d findings located, %d not found in the repository\n", len(located), len(unresolved))
-	return r.sendContext(req)
-}
-
-func (r *knoxFixerRun) sendContext(req *appknox.KnoxFixerContextRequest) error {
-	if req.Snippets == nil {
-		req.Snippets = []appknox.KnoxFixerSnippet{}
-	}
-	err := r.api.SendContext(r.ctx, r.job.JobID, r.job.CLISession, req)
-	var apiErr *appknox.KnoxFixerAPIError
-	if errors.As(err, &apiErr) && apiErr.Code == "superseded" {
-		return errSuperseded
-	}
-	return err
 }
 
 // prepareBranch picks the PR to update (GitHub is the only source of truth
@@ -392,35 +339,86 @@ func (r *knoxFixerRun) reopen(pr *githubPR) bool {
 	return true
 }
 
-// --- need_context ----------------------------------------------------------------
+// --- prepare ---------------------------------------------------------------------
 
-func (r *knoxFixerRun) handleNeedContext(msg *appknox.KnoxFixerMessage) error {
-	if r.idx == nil {
-		return errors.New("need_context before plan")
+func (r *knoxFixerRun) handlePrepare(msg *appknox.KnoxFixerMessage) error {
+	p := msg.Payload
+	r.head = firstNonEmpty(p.HeadBranch, KnoxFixerBranchPrefix+r.env.BaseBranch)
+	if r.cleanup == nil {
+		if err := r.prepareBranch(); err != nil {
+			return err
+		}
 	}
-	snippets := buildNeedSnippets(r.idx, msg.Payload.Need, r.located, r.limits.ExtraContextLines)
-	return r.sendContext(&appknox.KnoxFixerContextRequest{InReplyToSeq: msg.Seq, Snippets: snippets})
+	r.tools = newToolRunner(r.git.dir, r.opts.VerifyCmd)
+	files := r.tools.repoFiles(knoxFixerMaxRepoFiles)
+	req := &appknox.KnoxFixerContextRequest{
+		InReplyToSeq:    msg.Seq,
+		ConflictFiles:   append([]string{}, r.conflictFiles...),
+		RepoFiles:       files,
+		VerifyAvailable: r.opts.VerifyCmd != "",
+	}
+	if r.pr != nil {
+		url := r.pr.HTMLURL
+		req.PRURL = &url
+	}
+	fmt.Printf("knoxfixer: branch ready (%d files); fixing findings...\n", len(files))
+	return r.sendContext(req)
 }
 
-// --- edits → commit → push → PR --------------------------------------------------
+func (r *knoxFixerRun) sendContext(req *appknox.KnoxFixerContextRequest) error {
+	err := r.api.SendContext(r.ctx, r.job.JobID, r.job.CLISession, req)
+	var apiErr *appknox.KnoxFixerAPIError
+	if errors.As(err, &apiErr) && apiErr.Code == "superseded" {
+		return errSuperseded
+	}
+	return err
+}
 
-func (r *knoxFixerRun) handleEdits(msg *appknox.KnoxFixerMessage) (bool, error) {
-	if r.git == nil {
-		return false, errors.New("edits before plan")
+// --- tools ---------------------------------------------------------------------------
+
+// handleTools runs the fix agent's tool calls in the worktree and sends back
+// their results.
+func (r *knoxFixerRun) handleTools(msg *appknox.KnoxFixerMessage) error {
+	if r.tools == nil {
+		return errors.New("tools before prepare")
+	}
+	results := r.tools.run(r.ctx, msg.Payload.Calls)
+	for _, call := range msg.Payload.Calls {
+		if call.Name == "edit_file" || call.Name == "create_file" || call.Name == "delete_file" {
+			fmt.Printf("  %s %v\n", call.Name, call.Input["path"])
+		}
+	}
+	err := r.api.SendToolResults(r.ctx, r.job.JobID, r.job.CLISession, &appknox.KnoxFixerToolResultsRequest{
+		InReplyToSeq: msg.Seq, Results: results,
+	})
+	var apiErr *appknox.KnoxFixerAPIError
+	if errors.As(err, &apiErr) && apiErr.Code == "superseded" {
+		return errSuperseded
+	}
+	return err
+}
+
+// --- finish → commit → push → PR ------------------------------------------------------
+
+func (r *knoxFixerRun) handleFinish(msg *appknox.KnoxFixerMessage) (bool, error) {
+	if r.git == nil || r.tools == nil {
+		return false, errors.New("finish before prepare")
 	}
 	p := msg.Payload
-	res, original, err := applyEdits(r.git.dir, p.Edits)
-	if err != nil {
-		return false, err
+	files := r.tools.changedFiles()
+	if len(p.Fixed) == 0 || len(files) == 0 || p.PR == nil {
+		fmt.Println("knoxfixer: nothing was changed; no commit")
+		r.printSkipped(p.Skipped)
+		return r.complete(msg.Seq, nil, "", nil, nil, p.Skipped)
 	}
-	res, err = verifyAndRevert(r.ctx, r.git.dir, r.opts.VerifyCmd, p.Edits, res, original)
-	if err != nil {
-		return false, err
-	}
-	skipped := append(append([]appknox.KnoxFixerSkipped{}, p.Skipped...), res.Skipped...)
-	if len(res.Files) == 0 {
-		fmt.Println("knoxfixer: no edit could be applied; nothing to commit")
-		return r.complete(msg.Seq, nil, "", nil, nil, skipped)
+
+	body := p.PR.Body
+	if r.opts.VerifyCmd != "" {
+		if ok, _ := runVerifyCommand(r.ctx, r.git.dir, r.opts.VerifyCmd); !ok {
+			fmt.Println("warning: the verify command fails on the fixed code; the PR says so")
+			body = "> **Warning:** the configured verify command (`--verify-cmd`) failed on " +
+				"this change. Check the CI log before merging.\n\n" + body
+		}
 	}
 
 	// Never push if another run owns the job now.
@@ -434,7 +432,7 @@ func (r *knoxFixerRun) handleEdits(msg *appknox.KnoxFixerMessage) (bool, error) 
 	// half-done commit), so use a context that outlives the job budget.
 	finishCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	sha, err := r.git.commit(finishCtx, res.Files, firstNonEmpty(p.CommitMessage, p.PR.Title))
+	sha, err := r.git.commit(finishCtx, files, firstNonEmpty(p.CommitMessage, p.PR.Title))
 	if err != nil {
 		return false, err
 	}
@@ -444,12 +442,12 @@ func (r *knoxFixerRun) handleEdits(msg *appknox.KnoxFixerMessage) (bool, error) 
 
 	var prURL string
 	if r.pr != nil {
-		if err := r.gh.updatePR(finishCtx, r.pr.Number, p.PR.Title, p.PR.Body); err != nil {
+		if err := r.gh.updatePR(finishCtx, r.pr.Number, p.PR.Title, body); err != nil {
 			fmt.Printf("warning: could not update PR #%d title/body: %v\n", r.pr.Number, err)
 		}
 		prURL = r.pr.HTMLURL
 	} else {
-		pr, err := r.gh.createPR(finishCtx, r.head, r.env.BaseBranch, p.PR.Title, p.PR.Body)
+		pr, err := r.gh.createPR(finishCtx, r.head, r.env.BaseBranch, p.PR.Title, body)
 		if err != nil {
 			if hint := prCreateHint(err); hint != "" {
 				err = fmt.Errorf("%w (%s)", err, hint)
@@ -458,35 +456,29 @@ func (r *knoxFixerRun) handleEdits(msg *appknox.KnoxFixerMessage) (bool, error) 
 		}
 		prURL = pr.HTMLURL
 	}
+	fmt.Printf("knoxfixer: %d findings fixed, %d files changed → %s\n", len(p.Fixed), len(files), prURL)
+	r.printSkipped(p.Skipped)
+	return r.complete(msg.Seq, &prURL, p.PR.Title, &sha, p.Fixed, p.Skipped)
+}
 
-	var fixed []appknox.KnoxFixerFixed
-	var refs []string
-	for ref := range res.FilesByRef {
-		refs = append(refs, ref)
-	}
-	sort.Strings(refs)
-	for _, ref := range refs {
-		fixed = append(fixed, appknox.KnoxFixerFixed{Ref: ref, FilesPatched: res.FilesByRef[ref]})
-	}
-	fmt.Printf("knoxfixer: %d findings fixed → %s\n", len(fixed), prURL)
+func (r *knoxFixerRun) printSkipped(skipped []appknox.KnoxFixerSkipped) {
 	for _, s := range skipped {
-		fmt.Printf("  skipped %s: %s\n", firstNonEmpty(s.Title, r.titles[s.Ref], s.Ref), s.Reason)
+		fmt.Printf("  not fixed: %s: %s\n", firstNonEmpty(s.Title, s.Ref), s.Reason)
 	}
-	return r.complete(msg.Seq, &prURL, p.PR.Title, &sha, fixed, skipped)
 }
 
 func (r *knoxFixerRun) complete(seq int, prURL *string, title string, sha *string, fixed []appknox.KnoxFixerFixed, skipped []appknox.KnoxFixerSkipped) (bool, error) {
 	if fixed == nil {
 		fixed = []appknox.KnoxFixerFixed{}
 	}
-	for i := range skipped {
-		skipped[i].Reason = truncate(skipped[i].Reason, 200)
-		skipped[i].Title = ""
+	out := make([]appknox.KnoxFixerSkipped, 0, len(skipped))
+	for _, s := range skipped {
+		out = append(out, appknox.KnoxFixerSkipped{Ref: s.Ref, Reason: truncate(s.Reason, 500)})
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	status, err := r.api.Complete(ctx, r.job.JobID, r.job.CLISession, &appknox.KnoxFixerCompleteRequest{
-		InReplyToSeq: seq, PRURL: prURL, Title: title, CommitSHA: sha, Fixed: fixed, Skipped: skipped,
+		InReplyToSeq: seq, PRURL: prURL, Title: title, CommitSHA: sha, Fixed: fixed, Skipped: out,
 	})
 	if err != nil {
 		return false, err

@@ -48,43 +48,18 @@ type KnoxFixerJob struct {
 	Attached   bool   `json:"attached"`
 }
 
-// KnoxFixerLocate are the server's hints for finding a finding in the repo.
-type KnoxFixerLocate struct {
-	Kind        string   `json:"kind"`
-	ClassNames  []string `json:"class_names"`
-	PathGlobs   []string `json:"path_globs"`
-	SearchTerms []string `json:"search_terms"`
+// KnoxFixerToolCall is one tool the fix agent wants run in the repository.
+type KnoxFixerToolCall struct {
+	ID    string                 `json:"id"`
+	Name  string                 `json:"name"`
+	Input map[string]interface{} `json:"input"`
 }
 
-// KnoxFixerPlanFinding is one finding the CLI must locate.
-type KnoxFixerPlanFinding struct {
-	Ref    string          `json:"ref"`
-	Title  string          `json:"title"`
-	Rule   string          `json:"rule"`
-	Method string          `json:"method"`
-	Locate KnoxFixerLocate `json:"locate"`
-}
-
-// KnoxFixerLimits are the per-finding snippet limits.
-type KnoxFixerLimits struct {
-	SnippetLinesPerFinding int `json:"snippet_lines_per_finding"`
-	ExtraContextLines      int `json:"extra_context_lines"`
-}
-
-// KnoxFixerNeed is one extra line range asked for in the need_context step.
-type KnoxFixerNeed struct {
-	Ref       string `json:"ref"`
-	Path      string `json:"path"`
-	StartLine int    `json:"start_line"`
-	EndLine   int    `json:"end_line"`
-}
-
-// KnoxFixerEdit is a search/replace edit to apply in the repo.
-type KnoxFixerEdit struct {
-	Ref     string `json:"ref"`
-	Path    string `json:"path"`
-	Search  string `json:"search"`
-	Replace string `json:"replace"`
+// KnoxFixerToolResult is the outcome of one tool call.
+type KnoxFixerToolResult struct {
+	ID     string `json:"id"`
+	OK     bool   `json:"ok"`
+	Output string `json:"output"`
 }
 
 // KnoxFixerSkipped is a finding that was not fixed (PR body / summary).
@@ -102,17 +77,15 @@ type KnoxFixerPRText struct {
 
 // KnoxFixerPayload holds every field any message type may carry.
 type KnoxFixerPayload struct {
-	// plan
-	BaseBranch string                 `json:"base_branch,omitempty"`
-	HeadBranch string                 `json:"head_branch,omitempty"`
-	Findings   []KnoxFixerPlanFinding `json:"findings,omitempty"`
-	Limits     KnoxFixerLimits        `json:"limits,omitempty"`
-	// need_context
-	Need []KnoxFixerNeed `json:"need,omitempty"`
-	// edits
-	Edits         []KnoxFixerEdit    `json:"edits,omitempty"`
-	PR            KnoxFixerPRText    `json:"pr,omitempty"`
+	// prepare
+	BaseBranch string `json:"base_branch,omitempty"`
+	HeadBranch string `json:"head_branch,omitempty"`
+	// tools
+	Calls []KnoxFixerToolCall `json:"calls,omitempty"`
+	// finish
+	PR            *KnoxFixerPRText   `json:"pr,omitempty"`
 	CommitMessage string             `json:"commit_message,omitempty"`
+	Fixed         []KnoxFixerFixed   `json:"fixed,omitempty"`
 	Skipped       []KnoxFixerSkipped `json:"skipped,omitempty"`
 	// done / failed
 	Message string `json:"message,omitempty"`
@@ -126,22 +99,20 @@ type KnoxFixerMessage struct {
 	Payload KnoxFixerPayload `json:"payload"`
 }
 
-// KnoxFixerSnippet is a small line range of one file (never a whole file).
-type KnoxFixerSnippet struct {
-	Refs      []string `json:"refs"`
-	Path      string   `json:"path"`
-	StartLine int      `json:"start_line"`
-	EndLine   int      `json:"end_line"`
-	Content   string   `json:"content"`
+// KnoxFixerContextRequest answers `prepare`: the PR in use, files that
+// conflicted when merging base into it, and the repository file list (paths).
+type KnoxFixerContextRequest struct {
+	InReplyToSeq    int      `json:"in_reply_to_seq"`
+	PRURL           *string  `json:"pr_url,omitempty"`
+	ConflictFiles   []string `json:"conflict_files"`
+	RepoFiles       []string `json:"repo_files"`
+	VerifyAvailable bool     `json:"verify_available"`
 }
 
-// KnoxFixerContextRequest answers a plan or need_context message.
-type KnoxFixerContextRequest struct {
-	InReplyToSeq   int                `json:"in_reply_to_seq"`
-	PRURL          *string            `json:"pr_url,omitempty"`
-	ConflictFiles  []string           `json:"conflict_files,omitempty"`
-	UnresolvedRefs []string           `json:"unresolved_refs,omitempty"`
-	Snippets       []KnoxFixerSnippet `json:"snippets"`
+// KnoxFixerToolResultsRequest answers a `tools` message.
+type KnoxFixerToolResultsRequest struct {
+	InReplyToSeq int                   `json:"in_reply_to_seq"`
+	Results      []KnoxFixerToolResult `json:"results"`
 }
 
 // KnoxFixerFixed reports the files patched for one fixed finding.
@@ -184,7 +155,7 @@ func (s *KnoxFixerService) do(ctx context.Context, method, path, session string,
 		return 0, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
 		return resp.StatusCode, err
 	}
@@ -227,9 +198,15 @@ func (s *KnoxFixerService) Next(ctx context.Context, jobID int, session string, 
 	return &msg, nil
 }
 
-// SendContext answers a plan / need_context message with snippets.
+// SendContext answers the `prepare` message.
 func (s *KnoxFixerService) SendContext(ctx context.Context, jobID int, session string, body *KnoxFixerContextRequest) error {
 	_, err := s.do(ctx, "POST", fmt.Sprintf("api/knoxiq/knoxfixer/jobs/%d/context", jobID), session, body, nil)
+	return err
+}
+
+// SendToolResults answers a `tools` message with the results of the calls.
+func (s *KnoxFixerService) SendToolResults(ctx context.Context, jobID int, session string, body *KnoxFixerToolResultsRequest) error {
+	_, err := s.do(ctx, "POST", fmt.Sprintf("api/knoxiq/knoxfixer/jobs/%d/tool_results", jobID), session, body, nil)
 	return err
 }
 

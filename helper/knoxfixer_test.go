@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -104,34 +105,6 @@ func TestGlobAndPaths(t *testing.T) {
 	for _, bad := range []string{"/abs/x", "./x", "../x", "a/../../x", `a\b`, "C:/x"} {
 		assert.Error(t, validateRepoRelPath(bad), bad)
 	}
-	assert.False(t, isReadableRepoFile("app/google-services.json"))
-	assert.False(t, isReadableRepoFile(".env"))
-	assert.False(t, isReadableRepoFile("app/release.keystore"))
-	assert.False(t, isEditableRepoFile("App.xcodeproj/project.pbxproj"))
-	assert.False(t, isEditableRepoFile(".github/workflows/ci.yml"))
-	assert.True(t, isEditableRepoFile("app/src/main/AndroidManifest.xml"))
-}
-
-func TestMaskSecrets(t *testing.T) {
-	in := "val apiKey = \"abcdef123456\"\nval aws = \"AKIAABCDEFGHIJKLMNOP\"\n<string name=\"maps_key\">AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX</string>\nval x = 1\n"
-	out := maskSecrets(in)
-	assert.NotContains(t, out, "abcdef123456")
-	assert.NotContains(t, out, "AKIAABCDEFGHIJKLMNOP")
-	assert.NotContains(t, out, "AIzaSy")
-	assert.Contains(t, out, "val x = 1")
-	assert.Equal(t, strings.Count(in, "\n"), strings.Count(out, "\n"))
-}
-
-func TestMergeRanges(t *testing.T) {
-	merged := mergeRanges([]lineRange{
-		{start: 1, end: 120, refs: []string{"a"}},
-		{start: 100, end: 219, refs: []string{"b"}},
-		{start: 220, end: 339, refs: []string{"c"}}, // touching → merged
-		{start: 500, end: 619, refs: []string{"d"}},
-	})
-	require.Len(t, merged, 2)
-	assert.Equal(t, []string{"a", "b", "c"}, merged[0].refs)
-	assert.LessOrEqual(t, merged[0].end-merged[0].start+1, 120*len(merged[0].refs))
 }
 
 func writeRepo(t *testing.T, files map[string]string) string {
@@ -145,74 +118,149 @@ func writeRepo(t *testing.T, files map[string]string) string {
 	return root
 }
 
-func TestLocateAndSnippets(t *testing.T) {
-	var manifest strings.Builder
-	for i := 1; i <= 300; i++ {
-		if i == 150 {
-			manifest.WriteString("    <application android:debuggable=\"true\">\n")
-			continue
-		}
-		manifest.WriteString("<!-- line -->\n")
-	}
-	root := writeRepo(t, map[string]string{
-		"app/src/main/AndroidManifest.xml":    manifest.String(),
-		"lib/src/main/AndroidManifest.xml":    "<manifest/>\n",
-		"app/src/main/java/com/acme/Login.kt": "class Login {\n fun onClick() {}\n}\n",
-		"app/src/test/java/com/acme/Login.kt": "class LoginTest\n",
-		"app/google-services.json":            "{}",
-		"app/build/generated/com/acme/Gen.kt": "x",
-	})
-	idx, err := buildRepoIndex(root, "")
-	require.NoError(t, err)
-	assert.NotContains(t, idx.files, "app/google-services.json")
-	assert.NotContains(t, idx.files, "app/build/generated/com/acme/Gen.kt")
-
-	findings := []appknox.KnoxFixerPlanFinding{
-		{Ref: "f_1", Locate: appknox.KnoxFixerLocate{Kind: "android_manifest",
-			PathGlobs: []string{"**/src/main/AndroidManifest.xml"}, SearchTerms: []string{"android:debuggable"}}},
-		{Ref: "f_2", Locate: appknox.KnoxFixerLocate{Kind: "source",
-			PathGlobs: []string{"**/com/acme/Login.kt"}, SearchTerms: []string{"onClick"}}},
-		{Ref: "f_3", Locate: appknox.KnoxFixerLocate{Kind: "source", PathGlobs: []string{"**/Nope.kt"}}},
-	}
-	located, unresolved := locateFindings(idx, findings)
-	assert.Equal(t, []string{"f_3"}, unresolved)
-	require.Len(t, located, 2)
-	assert.Equal(t, "app/src/main/AndroidManifest.xml", located[0].Path)
-	assert.Equal(t, 150, located[0].Line)
-	assert.Equal(t, "app/src/main/java/com/acme/Login.kt", located[1].Path)
-
-	snippets, failed := buildSnippets(idx, located, 120)
-	assert.Empty(t, failed)
-	for _, s := range snippets {
-		assert.LessOrEqual(t, s.EndLine-s.StartLine+1, 120*len(s.Refs))
-		assert.Equal(t, s.EndLine-s.StartLine+1, strings.Count(s.Content, "\n"))
-	}
+func call(id, name string, input map[string]interface{}) appknox.KnoxFixerToolCall {
+	return appknox.KnoxFixerToolCall{ID: id, Name: name, Input: input}
 }
 
-func TestApplyEdits(t *testing.T) {
-	root := writeRepo(t, map[string]string{
-		"a.xml": "line1\r\nandroid:debuggable=\"true\"\r\nline3\r\n",
-		"b.kt":  "val r = Random()\nval s = Random()\n",
+func runTool(t *testing.T, tr *toolRunner, name string, input map[string]interface{}) appknox.KnoxFixerToolResult {
+	t.Helper()
+	res := tr.run(context.Background(), []appknox.KnoxFixerToolCall{call("t", name, input)})
+	require.Len(t, res, 1)
+	return res[0]
+}
+
+func fixtureRepo(t *testing.T) string {
+	return writeRepo(t, map[string]string{
+		"app/src/main/AndroidManifest.xml":    "<manifest>\r\n    <application android:allowBackup=\"true\">\r\n    </application>\r\n</manifest>\r\n",
+		"app/src/main/java/com/acme/Login.kt": "class Login {\n    val apiKey = \"abcdef123456\"\n    fun onClick() {}\n}\n",
+		"app/build.gradle":                    "android {\n    buildTypes {\n        release {\n            minifyEnabled false\n        }\n    }\n}\n",
+		".github/workflows/ci.yml":            "on: push\n",
+		"app/google-services.json":            "{\"key\": \"x\"}",
+		"app/build/generated/Gen.kt":          "x",
 	})
-	edits := []appknox.KnoxFixerEdit{
-		// LF edit on a CRLF file
-		{Ref: "f_1", Path: "a.xml", Search: "line1\nandroid:debuggable=\"true\"", Replace: "line1\nandroid:debuggable=\"false\""},
-		// same edit for a second finding: applied once, counted for both
-		{Ref: "f_2", Path: "a.xml", Search: "line1\nandroid:debuggable=\"true\"", Replace: "line1\nandroid:debuggable=\"false\""},
-		// not unique → whole finding skipped
-		{Ref: "f_3", Path: "b.kt", Search: "Random()", Replace: "SecureRandom()"},
-		{Ref: "f_4", Path: ".github/workflows/x.yml", Search: "a", Replace: "b"},
+}
+
+func TestToolsListAndSearch(t *testing.T) {
+	tr := newToolRunner(fixtureRepo(t), "")
+	files := tr.repoFiles(1000)
+	assert.Contains(t, files, "app/build.gradle")
+	assert.Contains(t, files, ".github/workflows/ci.yml") // CI files are editable now
+	assert.NotContains(t, files, "app/google-services.json")
+	assert.NotContains(t, files, "app/build/generated/Gen.kt")
+
+	res := runTool(t, tr, "list_files", map[string]interface{}{"glob": "**/*.gradle"})
+	assert.True(t, res.OK)
+	assert.Equal(t, "app/build.gradle", res.Output)
+
+	res = runTool(t, tr, "search", map[string]interface{}{"pattern": `allowBackup|minifyEnabled`, "glob": ""})
+	assert.True(t, res.OK)
+	assert.Contains(t, res.Output, "app/src/main/AndroidManifest.xml:2:")
+	assert.Contains(t, res.Output, "app/build.gradle:4:")
+
+	res = runTool(t, tr, "search", map[string]interface{}{"pattern": "(", "glob": ""})
+	assert.False(t, res.OK)
+}
+
+func TestToolsReadWholeFileWithSecretsMasked(t *testing.T) {
+	tr := newToolRunner(fixtureRepo(t), "")
+	res := runTool(t, tr, "read_file", map[string]interface{}{"path": "app/src/main/java/com/acme/Login.kt", "start_line": 0.0, "end_line": 0.0})
+	require.True(t, res.OK)
+	assert.Contains(t, res.Output, "     1| class Login {")
+	assert.Contains(t, res.Output, "     4| }")
+	assert.NotContains(t, res.Output, "abcdef123456")
+	assert.Contains(t, res.Output, "__APPKNOX_SECRET_1__")
+
+	res = runTool(t, tr, "read_file", map[string]interface{}{"path": "app/google-services.json"})
+	assert.False(t, res.OK)
+	res = runTool(t, tr, "read_file", map[string]interface{}{"path": "../outside.txt"})
+	assert.False(t, res.OK)
+	res = runTool(t, tr, "read_file", map[string]interface{}{"path": ".git/config"})
+	assert.False(t, res.OK)
+}
+
+func TestToolsEditCreateDelete(t *testing.T) {
+	root := fixtureRepo(t)
+	tr := newToolRunner(root, "")
+
+	// LF edit on a CRLF file keeps CRLF
+	res := runTool(t, tr, "edit_file", map[string]interface{}{
+		"path":     "app/src/main/AndroidManifest.xml",
+		"old_text": "<manifest>\n    <application android:allowBackup=\"true\">",
+		"new_text": "<manifest>\n    <application android:allowBackup=\"false\">",
+	})
+	require.True(t, res.OK, res.Output)
+	data, _ := os.ReadFile(filepath.Join(root, "app/src/main/AndroidManifest.xml"))
+	assert.Contains(t, string(data), "<manifest>\r\n    <application android:allowBackup=\"false\">")
+
+	// a masked secret moved by the agent is written back with its real value
+	runTool(t, tr, "read_file", map[string]interface{}{"path": "app/src/main/java/com/acme/Login.kt"})
+	res = runTool(t, tr, "edit_file", map[string]interface{}{
+		"path":     "app/src/main/java/com/acme/Login.kt",
+		"old_text": "    val apiKey = \"__APPKNOX_SECRET_1__\"\n",
+		"new_text": "    val apiKey = BuildConfig.API_KEY\n",
+	})
+	require.True(t, res.OK, res.Output)
+	res = runTool(t, tr, "edit_file", map[string]interface{}{
+		"path":     "app/build.gradle",
+		"old_text": "            minifyEnabled false\n",
+		"new_text": "            minifyEnabled true\n            buildConfigField \"String\", \"API_KEY\", \"\\\"__APPKNOX_SECRET_1__\\\"\"\n",
+	})
+	require.True(t, res.OK, res.Output)
+	gradle, _ := os.ReadFile(filepath.Join(root, "app/build.gradle"))
+	assert.Contains(t, string(gradle), `abcdef123456`)
+	assert.Contains(t, string(gradle), "minifyEnabled true")
+
+	// not unique / not found
+	res = runTool(t, tr, "edit_file", map[string]interface{}{"path": "app/build.gradle", "old_text": "    ", "new_text": "x"})
+	assert.False(t, res.OK)
+	assert.Contains(t, res.Output, "occurs")
+	res = runTool(t, tr, "edit_file", map[string]interface{}{"path": "app/build.gradle", "old_text": "nope", "new_text": "x"})
+	assert.False(t, res.OK)
+
+	// new file, existing file refused, delete
+	res = runTool(t, tr, "create_file", map[string]interface{}{"path": "app/src/main/res/xml/network_security_config.xml", "content": "<network-security-config/>\n"})
+	require.True(t, res.OK, res.Output)
+	res = runTool(t, tr, "create_file", map[string]interface{}{"path": "app/build.gradle", "content": "x"})
+	assert.False(t, res.OK)
+	res = runTool(t, tr, "delete_file", map[string]interface{}{"path": ".github/workflows/ci.yml"})
+	require.True(t, res.OK, res.Output)
+	res = runTool(t, tr, "create_file", map[string]interface{}{"path": ".env", "content": "x"})
+	assert.False(t, res.OK)
+
+	assert.Equal(t, []string{
+		".github/workflows/ci.yml",
+		"app/build.gradle",
+		"app/src/main/AndroidManifest.xml",
+		"app/src/main/java/com/acme/Login.kt",
+		"app/src/main/res/xml/network_security_config.xml",
+	}, tr.changedFiles())
+}
+
+func TestToolsVerify(t *testing.T) {
+	root := fixtureRepo(t)
+	res := runTool(t, newToolRunner(root, ""), "run_verify", map[string]interface{}{})
+	assert.False(t, res.OK)
+	res = runTool(t, newToolRunner(root, "exit 3"), "run_verify", map[string]interface{}{})
+	assert.True(t, res.OK)
+	assert.Contains(t, res.Output, "verify FAILED")
+	res = runTool(t, newToolRunner(root, "echo fine"), "run_verify", map[string]interface{}{})
+	assert.Contains(t, res.Output, "verify passed")
+}
+
+func TestToolsUnknownTool(t *testing.T) {
+	res := runTool(t, newToolRunner(t.TempDir(), ""), "rm_rf", map[string]interface{}{})
+	assert.False(t, res.OK)
+}
+
+func TestReadFilePaging(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < readPageLines+10; i++ {
+		b.WriteString("x\n")
 	}
-	res, _, err := applyEdits(root, edits)
-	require.NoError(t, err)
-	data, _ := os.ReadFile(filepath.Join(root, "a.xml"))
-	assert.Equal(t, "line1\r\nandroid:debuggable=\"false\"\r\nline3\r\n", string(data))
-	assert.Equal(t, []string{"a.xml"}, res.FilesByRef["f_1"])
-	assert.Equal(t, []string{"a.xml"}, res.FilesByRef["f_2"])
-	assert.NotContains(t, res.FilesByRef, "f_3")
-	assert.NotContains(t, res.FilesByRef, "f_4")
-	assert.Len(t, res.Skipped, 2)
-	assert.Equal(t, []string{"a.xml"}, res.Files)
+	tr := newToolRunner(writeRepo(t, map[string]string{"big.txt": b.String()}), "")
+	res := runTool(t, tr, "read_file", map[string]interface{}{"path": "big.txt"})
+	require.True(t, res.OK)
+	assert.Contains(t, res.Output, fmt.Sprintf("read from line %d", readPageLines+1))
 }
 
 func git(t *testing.T, dir string, args ...string) string {
