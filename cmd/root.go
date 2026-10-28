@@ -37,15 +37,29 @@ func init() {
 	viper.BindEnv("access-token", "APPKNOX_ACCESS_TOKEN")
 	viper.SetDefault("access-token", "")
 
+	// Service account credentials, an alternative to --access-token for CI/CD
+	// and other automated usage. Exactly one of the two credential types
+	// (access-token, or the access-key-id/access-key-secret pair) must be
+	// provided — see helper.getCredentials.
+	RootCmd.PersistentFlags().String("access-key-id", "", "Appknox Service Account Access Key ID")
+	viper.BindPFlag("access-key-id", RootCmd.PersistentFlags().Lookup("access-key-id"))
+	viper.BindEnv("access-key-id", "APPKNOX_ACCESS_KEY_ID")
+	viper.SetDefault("access-key-id", "")
+
+	RootCmd.PersistentFlags().String("access-key-secret", "", "Appknox Service Account Access Key Secret")
+	viper.BindPFlag("access-key-secret", RootCmd.PersistentFlags().Lookup("access-key-secret"))
+	viper.BindEnv("access-key-secret", "APPKNOX_ACCESS_KEY_SECRET")
+	viper.SetDefault("access-key-secret", "")
+
 	RootCmd.PersistentFlags().String("host", "", "Appknox Server") // No default value here
-    viper.BindPFlag("host", RootCmd.PersistentFlags().Lookup("host"))
-    viper.BindEnv("host", "APPKNOX_API_HOST")
+	viper.BindPFlag("host", RootCmd.PersistentFlags().Lookup("host"))
+	viper.BindEnv("host", "APPKNOX_API_HOST")
 
 	// Define flags globally here for all subcommands
 	RootCmd.PersistentFlags().String("region", "", "Region names, e.g., global, saudi, uae. By default, global is used")
-    viper.BindPFlag("region", RootCmd.PersistentFlags().Lookup("region"))
-    viper.BindEnv("region", "APPKNOX_API_REGION")
-    viper.SetDefault("region", "global")
+	viper.BindPFlag("region", RootCmd.PersistentFlags().Lookup("region"))
+	viper.BindEnv("region", "APPKNOX_API_REGION")
+	viper.SetDefault("region", "global")
 
 	RootCmd.PersistentFlags().String("proxy", "", "proxy url")
 	viper.BindPFlag("proxy", RootCmd.PersistentFlags().Lookup("proxy"))

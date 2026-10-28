@@ -12,7 +12,12 @@ import (
 	"github.com/manifoldco/promptui"
 )
 
-//ProcessInit initializes Appknox CLI.
+// ponytail: PAT-only interactive wizard. Service account credentials are for
+// CI/automation and are already accepted via --access-key-id/--access-key-secret
+// flags or APPKNOX_ACCESS_KEY_ID/APPKNOX_ACCESS_KEY_SECRET env vars (see
+// helper.getCredentials) — add an interactive SA setup flow only if users ask.
+
+// ProcessInit initializes Appknox CLI.
 func ProcessInit() {
 	host := viper.GetString("host")
 	if strings.Contains(host, "https://api.appknox.com") {
