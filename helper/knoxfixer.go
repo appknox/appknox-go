@@ -26,6 +26,13 @@ const (
 	knoxFixerMaxRepoFiles = 200000
 )
 
+// /complete: per-attempt timeout and the waits between retries (vars so
+// tests can shorten them).
+var (
+	knoxFixerCompleteTimeout = 60 * time.Second
+	knoxFixerCompleteBackoff = []time.Duration{5 * time.Second, 15 * time.Second}
+)
+
 // errSuperseded: another CLI run took over the job. Never push.
 var errSuperseded = errors.New("superseded")
 
@@ -475,13 +482,17 @@ func (r *knoxFixerRun) complete(seq int, prURL *string, title string, sha *strin
 	for _, s := range skipped {
 		out = append(out, appknox.KnoxFixerSkipped{Ref: s.Ref, Reason: truncate(s.Reason, 500)})
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	status, err := r.api.Complete(ctx, r.job.JobID, r.job.CLISession, &appknox.KnoxFixerCompleteRequest{
+	status, err := r.completeWithRetry(&appknox.KnoxFixerCompleteRequest{
 		InReplyToSeq: seq, PRURL: prURL, Title: title, CommitSHA: sha, Fixed: fixed, Skipped: out,
 	})
 	if err != nil {
-		return false, err
+		if prURL != nil {
+			// The PR is pushed and open; only the bookkeeping call failed.
+			// Don't fail the pipeline for that.
+			fmt.Printf("warning: could not report the result to Appknox (%v); the PR is ready: %s\n", err, *prURL)
+			return true, nil
+		}
+		return false, abortWith("cli_error", fmt.Errorf("could not report the result to Appknox: %w", err))
 	}
 	if status != "" && status != "completed" && status != "running" {
 		return false, fmt.Errorf("job ended with status %s", status)
@@ -490,4 +501,27 @@ func (r *knoxFixerRun) complete(seq int, prURL *string, title string, sha *strin
 		fmt.Println("knoxfixer: PR " + *prURL)
 	}
 	return true, nil
+}
+
+// completeWithRetry sends /complete, retrying network errors, timeouts and
+// 5xx with backoff. A 4xx is final: the server rejected the reply.
+func (r *knoxFixerRun) completeWithRetry(req *appknox.KnoxFixerCompleteRequest) (string, error) {
+	var err error
+	for attempt := 0; attempt < len(knoxFixerCompleteBackoff)+1; attempt++ {
+		if attempt > 0 {
+			time.Sleep(knoxFixerCompleteBackoff[attempt-1])
+		}
+		var status string
+		ctx, cancel := context.WithTimeout(context.Background(), knoxFixerCompleteTimeout)
+		status, err = r.api.Complete(ctx, r.job.JobID, r.job.CLISession, req)
+		cancel()
+		if err == nil {
+			return status, nil
+		}
+		var apiErr *appknox.KnoxFixerAPIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 {
+			return "", err
+		}
+	}
+	return "", err
 }
