@@ -110,6 +110,7 @@ type Analysis struct {
 	Sama            []string                `json:"sama,omitempty"`
 	Eucra           []string                `json:"eucra,omitempty"`
 	Dora            []string                `json:"dora,omitempty"`
+	Popia           []string                `json:"popia,omitempty"`
 	Owaspmobile2024 []string                `json:"owaspmobile2024,omitempty"`
 	Findings        []Finding               `json:"findings,omitempty"`
 	UpdatedOn       *time.Time              `json:"updated_on,omitempty"`
