@@ -59,6 +59,9 @@ func ProcessAnalyses(fileID int) {
 	if profileReportPref.ShowDora.Value {
 		header = append(header, "DORA")
 	}
+	if profileReportPref.ShowPopia.Value {
+		header = append(header, "POPIA")
+	}
 	header = append(header, "UPDATED-ON", "VULNERABILITY-ID")
 	t.AddHeader(header...)
 	for i := 0; i < len(finalAnalyses); i++ {
@@ -100,6 +103,9 @@ func ProcessAnalyses(fileID int) {
 		}
 		if profileReportPref.ShowDora.Value {
 			row = append(row, finalAnalyses[i].Dora)
+		}
+		if profileReportPref.ShowPopia.Value {
+			row = append(row, finalAnalyses[i].Popia)
 		}
 		row = append(row, *finalAnalyses[i].UpdatedOn,
 			finalAnalyses[i].VulnerabilityID)

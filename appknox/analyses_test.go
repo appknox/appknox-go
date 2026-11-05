@@ -52,6 +52,7 @@ func TestAnalysesCompliance_marshall(t *testing.T) {
 		Sama:            []string{"3_3_6"},
 		Eucra:           []string{"cra_i_2_d", "cra_i_2_e"},
 		Dora:            []string{"dora_9_2_crypto", "dora_25_1_security_testing"},
+		Popia:           []string{"popia_19_1_a", "popia_19_2_b"},
 		Owaspmobile2024: []string{"M6_2024"},
 		VulnerabilityID: 1,
 	}
@@ -71,6 +72,7 @@ func TestAnalysesCompliance_marshall(t *testing.T) {
 		"sama": ["3_3_6"],
 		"eucra": ["cra_i_2_d", "cra_i_2_e"],
 		"dora": ["dora_9_2_crypto", "dora_25_1_security_testing"],
+		"popia": ["popia_19_1_a", "popia_19_2_b"],
 		"owaspmobile2024": ["M6_2024"],
 		"vulnerability": 1
 	}`
@@ -87,7 +89,8 @@ func TestAnalysesService_ListByFile_Compliance(t *testing.T) {
 			"id": 1,
 			"sama": ["3_3_6"],
 			"eucra": ["cra_i_2_d", "cra_i_2_e"],
-			"dora": ["dora_9_2_crypto", "dora_25_1_security_testing"]
+			"dora": ["dora_9_2_crypto", "dora_25_1_security_testing"],
+			"popia": ["popia_19_1_a", "popia_19_2_b"]
 		}]}`)
 	})
 
@@ -101,6 +104,7 @@ func TestAnalysesService_ListByFile_Compliance(t *testing.T) {
 		Sama:  []string{"3_3_6"},
 		Eucra: []string{"cra_i_2_d", "cra_i_2_e"},
 		Dora:  []string{"dora_9_2_crypto", "dora_25_1_security_testing"},
+		Popia: []string{"popia_19_1_a", "popia_19_2_b"},
 	}}
 	if !reflect.DeepEqual(analyses, want) {
 		t.Errorf("Analyses.ListByFile returned %+v, want %+v", analyses, want)
