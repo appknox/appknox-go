@@ -34,6 +34,7 @@ var cicheckCmd = &cobra.Command{
 			helper.PrintError(err)
 			os.Exit(1)
 		}
+		recordCiCheckPolicyState(cmd, fileID, policy)
 		if policy.HealthScoreThreshold >= 0 {
 			helper.ProcessHealthScoreCiCheck(fileID, policy)
 			return
@@ -115,8 +116,12 @@ func applyLikelihoodGate(cmd *cobra.Command, policy *helper.CiPolicy, changed bo
 	return nil
 }
 
-func parseRiskThreshold(cmd *cobra.Command) (int, error) {
-	value, _ := cmd.Flags().GetString(flagRiskThreshold)
+// riskThresholdFromName maps a --risk-threshold value to its numeric level.
+// The single source of this mapping: parseRiskThreshold (cicheck's own flag
+// parsing) and cmd/cicheck_policy.go's autofixRiskThreshold (autofix's env
+// var and recorded-policy sources) both call this instead of duplicating the
+// switch.
+func riskThresholdFromName(value string) (int, error) {
 	switch strings.ToLower(value) {
 	case "low":
 		return 1, nil
@@ -128,6 +133,11 @@ func parseRiskThreshold(cmd *cobra.Command) (int, error) {
 		return 4, nil
 	}
 	return 0, errors.New("valid risk threshold is required")
+}
+
+func parseRiskThreshold(cmd *cobra.Command) (int, error) {
+	value, _ := cmd.Flags().GetString(flagRiskThreshold)
+	return riskThresholdFromName(value)
 }
 
 func init() {
