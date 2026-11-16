@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	knoxFixerGitName  = "github-actions[bot]"
-	knoxFixerGitEmail = "41898282+github-actions[bot]@users.noreply.github.com"
+	autofixGitName  = "github-actions[bot]"
+	autofixGitEmail = "41898282+github-actions[bot]@users.noreply.github.com"
 )
 
 // gitRunner runs the git binary in one directory. Never force-pushes.
@@ -33,8 +33,8 @@ func (e *gitError) Error() string {
 
 func (g *gitRunner) run(ctx context.Context, args ...string) (string, error) {
 	full := append([]string{
-		"-c", "user.name=" + knoxFixerGitName,
-		"-c", "user.email=" + knoxFixerGitEmail,
+		"-c", "user.name=" + autofixGitName,
+		"-c", "user.email=" + autofixGitEmail,
 		"-c", "core.hooksPath=" + os.DevNull,
 	}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
@@ -51,7 +51,7 @@ func (g *gitRunner) run(ctx context.Context, args ...string) (string, error) {
 func gitToplevel(ctx context.Context, dir string) (string, error) {
 	out, err := (&gitRunner{dir: dir}).run(ctx, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return "", errors.New("knoxfixer must run inside the git checkout of the repository")
+		return "", errors.New("autofix must run inside the git checkout of the repository")
 	}
 	return filepath.Clean(filepath.FromSlash(out)), nil
 }
@@ -93,7 +93,7 @@ func (g *gitRunner) fetchBranch(ctx context.Context, branch string) error {
 // addWorktree checks out ref in a separate temp worktree, so the CI
 // workspace itself is never modified.
 func (g *gitRunner) addWorktree(ctx context.Context, ref string) (*gitRunner, func(), error) {
-	dir, err := os.MkdirTemp("", "appknox-knoxfixer-")
+	dir, err := os.MkdirTemp("", "appknox-autofix-")
 	if err != nil {
 		return nil, nil, err
 	}

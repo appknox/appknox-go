@@ -74,8 +74,8 @@ type Client struct {
 	// KnoxIQ service is used to interact with appknox KnoxIQ APIs.
 	KnoxIQ *KnoxIQService
 
-	// KnoxFixer service drives `appknox knoxfixer` jobs on Mycroft.
-	KnoxFixer *KnoxFixerService
+	// Autofix service drives `appknox autofix` jobs on Mycroft.
+	Autofix *AutofixService
 }
 
 // NewClient returns a new appknox API client.
@@ -113,7 +113,7 @@ func NewClient(accessToken string) (*Client, error) {
 	c.Reports = (*ReportsService)(&c.common)
 	c.DynamicScans = (*DynamicScanService)(&c.common)
 	c.KnoxIQ = (*KnoxIQService)(&c.common)
-	c.KnoxFixer = (*KnoxFixerService)(&c.common)
+	c.Autofix = (*AutofixService)(&c.common)
 	return c, nil
 }
 

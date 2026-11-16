@@ -10,8 +10,8 @@ import (
 // `appknox upload` only prints the id, so the pipeline must pass it on.
 var errNoFileID = errors.New("No file id found. Pass --file-id or set APPKNOX_FILE_ID")
 
-// resolveKnoxFixerFileID: --file-id flag > APPKNOX_FILE_ID env > error.
-func resolveKnoxFixerFileID(flagValue int, getenv func(string) string) (int, error) {
+// resolveAutofixFileID: --file-id flag > APPKNOX_FILE_ID env > error.
+func resolveAutofixFileID(flagValue int, getenv func(string) string) (int, error) {
 	if flagValue > 0 {
 		return flagValue, nil
 	}

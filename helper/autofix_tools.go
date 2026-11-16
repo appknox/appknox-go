@@ -21,7 +21,7 @@ import (
 )
 
 // The fix agent (on the server) asks for these tools; the CLI runs them in
-// the knoxfixer worktree of the customer's repository. Files are read in full
+// the autofix worktree of the customer's repository. Files are read in full
 // when asked (they only pass through the server, never stored there); secret
 // values are replaced by placeholders before anything leaves the runner and
 // restored when the agent writes them back.
@@ -62,20 +62,20 @@ func (t *toolRunner) changedFiles() []string {
 }
 
 // run executes calls in order; each gets a result (ok=false on error).
-func (t *toolRunner) run(ctx context.Context, calls []appknox.KnoxFixerToolCall) []appknox.KnoxFixerToolResult {
-	results := make([]appknox.KnoxFixerToolResult, 0, len(calls))
+func (t *toolRunner) run(ctx context.Context, calls []appknox.AutofixToolCall) []appknox.AutofixToolResult {
+	results := make([]appknox.AutofixToolResult, 0, len(calls))
 	for _, call := range calls {
 		output, err := t.runOne(ctx, call)
 		if err != nil {
-			results = append(results, appknox.KnoxFixerToolResult{ID: call.ID, OK: false, Output: t.vault.mask(err.Error())})
+			results = append(results, appknox.AutofixToolResult{ID: call.ID, OK: false, Output: t.vault.mask(err.Error())})
 			continue
 		}
-		results = append(results, appknox.KnoxFixerToolResult{ID: call.ID, OK: true, Output: output})
+		results = append(results, appknox.AutofixToolResult{ID: call.ID, OK: true, Output: output})
 	}
 	return results
 }
 
-func (t *toolRunner) runOne(ctx context.Context, call appknox.KnoxFixerToolCall) (string, error) {
+func (t *toolRunner) runOne(ctx context.Context, call appknox.AutofixToolCall) (string, error) {
 	in := call.Input
 	switch call.Name {
 	case "list_files":

@@ -17,7 +17,7 @@ import (
 // completeRun builds a run whose /complete answers with replies[i] on the
 // i-th call (the last reply repeats). A zero status means "hang past the
 // per-attempt timeout".
-func completeRun(t *testing.T, replies []int) (*knoxFixerRun, *int32) {
+func completeRun(t *testing.T, replies []int) (*autofixRun, *int32) {
 	t.Helper()
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -38,16 +38,16 @@ func completeRun(t *testing.T, replies []int) (*knoxFixerRun, *int32) {
 	}))
 	t.Cleanup(srv.Close)
 
-	oldTimeout, oldBackoff := knoxFixerCompleteTimeout, knoxFixerCompleteBackoff
-	knoxFixerCompleteTimeout = 50 * time.Millisecond
-	knoxFixerCompleteBackoff = []time.Duration{time.Millisecond, time.Millisecond}
-	t.Cleanup(func() { knoxFixerCompleteTimeout, knoxFixerCompleteBackoff = oldTimeout, oldBackoff })
+	oldTimeout, oldBackoff := autofixCompleteTimeout, autofixCompleteBackoff
+	autofixCompleteTimeout = 50 * time.Millisecond
+	autofixCompleteBackoff = []time.Duration{time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { autofixCompleteTimeout, autofixCompleteBackoff = oldTimeout, oldBackoff })
 
 	client, err := appknox.NewClient("token")
 	require.NoError(t, err)
 	base, _ := url.Parse(srv.URL + "/")
 	client.BaseURL = base
-	return &knoxFixerRun{api: client.KnoxFixer, job: &appknox.KnoxFixerJob{JobID: 1, CLISession: "s_1"}}, &calls
+	return &autofixRun{api: client.Autofix, job: &appknox.AutofixJob{JobID: 1, CLISession: "s_1"}}, &calls
 }
 
 func TestCompleteRetriesTimeoutThenSucceeds(t *testing.T) {
@@ -73,7 +73,7 @@ func TestCompleteFailureWithoutPRIsCLIError(t *testing.T) {
 	done, err := run.complete(1, nil, "", nil, nil, nil)
 	require.Error(t, err)
 	assert.False(t, done)
-	var abortErr *knoxFixerAbort
+	var abortErr *autofixAbort
 	require.ErrorAs(t, err, &abortErr)
 	assert.Equal(t, "cli_error", abortErr.reason)
 }

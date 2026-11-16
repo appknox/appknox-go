@@ -93,9 +93,9 @@ func (g *githubClient) do(ctx context.Context, method, path string, body, out in
 	return resp.StatusCode, nil
 }
 
-// latestKnoxFixerPR returns the PR to use for head → base: the newest open one
+// latestAutofixPR returns the PR to use for head → base: the newest open one
 // (warning if there are several), else the newest of any state. nil if none.
-func (g *githubClient) latestKnoxFixerPR(ctx context.Context, head, base string) (*githubPR, int, error) {
+func (g *githubClient) latestAutofixPR(ctx context.Context, head, base string) (*githubPR, int, error) {
 	owner := strings.SplitN(g.repo, "/", 2)[0]
 	query := url.Values{}
 	query.Set("head", owner+":"+head)

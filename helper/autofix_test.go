@@ -40,26 +40,26 @@ func baseEnv() map[string]string {
 	}
 }
 
-func TestKnoxFixerEnvPush(t *testing.T) {
-	env, err := readKnoxFixerCIEnv(envFrom(baseEnv()))
+func TestAutofixEnvPush(t *testing.T) {
+	env, err := readAutofixCIEnv(envFrom(baseEnv()))
 	require.NoError(t, err)
 	assert.Equal(t, "https://github.com/acme/app", env.RepoURL)
 	assert.Equal(t, "main", env.BaseBranch)
 	assert.Equal(t, "deadbeef", env.BaseSHA)
 }
 
-func TestKnoxFixerEnvPullRequestUsesHeadBranchAndSHA(t *testing.T) {
+func TestAutofixEnvPullRequestUsesHeadBranchAndSHA(t *testing.T) {
 	m := baseEnv()
 	m["GITHUB_EVENT_NAME"] = "pull_request"
 	m["GITHUB_HEAD_REF"] = "feature/x"
 	m["GITHUB_EVENT_PATH"] = writeEvent(t, false, "acme/app")
-	env, err := readKnoxFixerCIEnv(envFrom(m))
+	env, err := readAutofixCIEnv(envFrom(m))
 	require.NoError(t, err)
 	assert.Equal(t, "feature/x", env.BaseBranch)
 	assert.Equal(t, "abc123", env.BaseSHA)
 }
 
-func TestKnoxFixerEnvRefusals(t *testing.T) {
+func TestAutofixEnvRefusals(t *testing.T) {
 	fork := baseEnv()
 	fork["GITHUB_EVENT_NAME"] = "pull_request"
 	fork["GITHUB_HEAD_REF"] = "x"
@@ -71,29 +71,29 @@ func TestKnoxFixerEnvRefusals(t *testing.T) {
 	notGH := baseEnv()
 	delete(notGH, "GITHUB_ACTIONS")
 	for name, m := range map[string]map[string]string{"fork": fork, "target": target, "tag": tag, "not_github": notGH} {
-		_, err := readKnoxFixerCIEnv(envFrom(m))
+		_, err := readAutofixCIEnv(envFrom(m))
 		assert.Error(t, err, name)
-		assert.NotErrorIs(t, err, errKnoxFixerBranchSkip, name)
+		assert.NotErrorIs(t, err, errAutofixBranchSkip, name)
 	}
 }
 
-func TestKnoxFixerEnvOwnBranchIsSkipped(t *testing.T) {
+func TestAutofixEnvOwnBranchIsSkipped(t *testing.T) {
 	m := baseEnv()
 	m["GITHUB_REF_NAME"] = "appknox-knoxfixer/main"
-	_, err := readKnoxFixerCIEnv(envFrom(m))
-	assert.ErrorIs(t, err, errKnoxFixerBranchSkip)
+	_, err := readAutofixCIEnv(envFrom(m))
+	assert.ErrorIs(t, err, errAutofixBranchSkip)
 }
 
 func TestResolveFileID(t *testing.T) {
-	id, err := resolveKnoxFixerFileID(12, envFrom(map[string]string{"APPKNOX_FILE_ID": "99"}))
+	id, err := resolveAutofixFileID(12, envFrom(map[string]string{"APPKNOX_FILE_ID": "99"}))
 	require.NoError(t, err)
 	assert.Equal(t, 12, id)
-	id, err = resolveKnoxFixerFileID(0, envFrom(map[string]string{"APPKNOX_FILE_ID": " 99 "}))
+	id, err = resolveAutofixFileID(0, envFrom(map[string]string{"APPKNOX_FILE_ID": " 99 "}))
 	require.NoError(t, err)
 	assert.Equal(t, 99, id)
-	_, err = resolveKnoxFixerFileID(0, envFrom(map[string]string{}))
+	_, err = resolveAutofixFileID(0, envFrom(map[string]string{}))
 	assert.Equal(t, errNoFileID, err)
-	_, err = resolveKnoxFixerFileID(0, envFrom(map[string]string{"APPKNOX_FILE_ID": "abc"}))
+	_, err = resolveAutofixFileID(0, envFrom(map[string]string{"APPKNOX_FILE_ID": "abc"}))
 	assert.Error(t, err)
 }
 
@@ -118,13 +118,13 @@ func writeRepo(t *testing.T, files map[string]string) string {
 	return root
 }
 
-func call(id, name string, input map[string]interface{}) appknox.KnoxFixerToolCall {
-	return appknox.KnoxFixerToolCall{ID: id, Name: name, Input: input}
+func call(id, name string, input map[string]interface{}) appknox.AutofixToolCall {
+	return appknox.AutofixToolCall{ID: id, Name: name, Input: input}
 }
 
-func runTool(t *testing.T, tr *toolRunner, name string, input map[string]interface{}) appknox.KnoxFixerToolResult {
+func runTool(t *testing.T, tr *toolRunner, name string, input map[string]interface{}) appknox.AutofixToolResult {
 	t.Helper()
-	res := tr.run(context.Background(), []appknox.KnoxFixerToolCall{call("t", name, input)})
+	res := tr.run(context.Background(), []appknox.AutofixToolCall{call("t", name, input)})
 	require.Len(t, res, 1)
 	return res[0]
 }
@@ -297,7 +297,7 @@ func TestMergeTheirsKeepsBaseOnConflict(t *testing.T) {
 	assert.Equal(t, "keep-fixed\n", strings.ReplaceAll(string(b), "\r\n", "\n")) // non-conflict fix kept
 }
 
-func TestLatestKnoxFixerPR(t *testing.T) {
+func TestLatestAutofixPR(t *testing.T) {
 	prs := `[
 	 {"number": 3, "state": "closed", "merged_at": null, "created_at": "2026-10-03T00:00:00Z", "head": {"ref": "appknox-knoxfixer/main", "sha": "s3"}},
 	 {"number": 2, "state": "closed", "merged_at": null, "created_at": "2026-10-02T00:00:00Z", "head": {"ref": "appknox-knoxfixer/main", "sha": "s2"}},
@@ -311,7 +311,7 @@ func TestLatestKnoxFixerPR(t *testing.T) {
 	}))
 	defer srv.Close()
 	gh := newGitHubClient(srv.URL, "acme/app", "tok")
-	pr, open, err := gh.latestKnoxFixerPR(context.Background(), "appknox-knoxfixer/main", "main")
+	pr, open, err := gh.latestAutofixPR(context.Background(), "appknox-knoxfixer/main", "main")
 	require.NoError(t, err)
 	assert.Equal(t, 3, pr.Number) // newest closed-unmerged → reopen candidate
 	assert.Equal(t, 0, open)
@@ -336,7 +336,7 @@ func TestReopenRestoresDeletedBranch(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	run := &knoxFixerRun{ctx: context.Background(), gh: newGitHubClient(srv.URL, "acme/app", "tok"), head: "appknox-knoxfixer/main"}
+	run := &autofixRun{ctx: context.Background(), gh: newGitHubClient(srv.URL, "acme/app", "tok"), head: "appknox-knoxfixer/main"}
 	pr := &githubPR{Number: 3}
 	pr.Head.SHA = "s3"
 	assert.True(t, run.reopen(pr))
@@ -357,7 +357,7 @@ func TestReopenFailureFallsBack(t *testing.T) {
 		w.Write([]byte(`{}`))
 	}))
 	defer srv.Close()
-	run := &knoxFixerRun{ctx: context.Background(), gh: newGitHubClient(srv.URL, "acme/app", "tok"), head: "appknox-knoxfixer/main"}
+	run := &autofixRun{ctx: context.Background(), gh: newGitHubClient(srv.URL, "acme/app", "tok"), head: "appknox-knoxfixer/main"}
 	assert.False(t, run.reopen(&githubPR{Number: 3}))
 }
 

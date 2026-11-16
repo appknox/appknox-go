@@ -49,7 +49,7 @@ func TestPollerDeliversEveryMessageInOrder(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	run := &knoxFixerRun{ctx: ctx, api: client.KnoxFixer, job: &appknox.KnoxFixerJob{JobID: 1, CLISession: "s_1"}}
+	run := &autofixRun{ctx: ctx, api: client.Autofix, job: &appknox.AutofixJob{JobID: 1, CLISession: "s_1"}}
 	events := make(chan pollEvent, 8)
 	go run.poll(events)
 	time.Sleep(200 * time.Millisecond) // main flow busy; poller keeps going
@@ -63,15 +63,15 @@ func TestPollerDeliversEveryMessageInOrder(t *testing.T) {
 
 func TestPollerStopsOnSuperseded(t *testing.T) {
 	client := pollServer(t, func(int, string) (int, interface{}) {
-		return 409, map[string]string{"code": "superseded", "detail": "another knoxfixer run took over job 1"}
+		return 409, map[string]string{"code": "superseded", "detail": "another autofix run took over job 1"}
 	})
-	run := &knoxFixerRun{ctx: context.Background(), api: client.KnoxFixer, job: &appknox.KnoxFixerJob{JobID: 1, CLISession: "old"}}
+	run := &autofixRun{ctx: context.Background(), api: client.Autofix, job: &appknox.AutofixJob{JobID: 1, CLISession: "old"}}
 	events := make(chan pollEvent, 2)
 	go run.poll(events)
 	ev := <-events
 	require.Error(t, ev.err)
 	assert.Equal(t, 1, run.handlePollError(ev.err))
-	var apiErr *appknox.KnoxFixerAPIError
+	var apiErr *appknox.AutofixAPIError
 	require.ErrorAs(t, ev.err, &apiErr)
 	assert.Equal(t, "superseded", apiErr.Code)
 }

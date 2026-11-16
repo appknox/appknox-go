@@ -8,13 +8,13 @@ import (
 	"strings"
 )
 
-// KnoxFixerBranchPrefix is reserved for knoxfixer PR branches. Runs on such a
-// branch are skipped (and pass) so knoxfixer never loops on its own PRs.
-const KnoxFixerBranchPrefix = "appknox-knoxfixer/"
+// AutofixBranchPrefix is reserved for autofix PR branches. Runs on such a
+// branch are skipped (and pass) so autofix never loops on its own PRs.
+const AutofixBranchPrefix = "appknox-knoxfixer/"
 
-// knoxFixerCIEnv is the CI context. Only RepoURL, BaseBranch and Provider go
+// autofixCIEnv is the CI context. Only RepoURL, BaseBranch and Provider go
 // to Mycroft; the rest stays in the CLI.
-type knoxFixerCIEnv struct {
+type autofixCIEnv struct {
 	Provider   string // "github_actions"
 	ServerURL  string // https://github.com
 	APIURL     string // https://api.github.com
@@ -42,14 +42,14 @@ type githubEvent struct {
 	} `json:"pull_request"`
 }
 
-// errKnoxFixerBranchSkip means "this is a knoxfixer branch: skip and pass".
-var errKnoxFixerBranchSkip = errors.New("knoxfixer does not work on appknox-knoxfixer branch")
+// errAutofixBranchSkip means "this is an autofix branch: skip and pass".
+var errAutofixBranchSkip = errors.New("autofix does not work on appknox-knoxfixer branch")
 
-func readKnoxFixerCIEnv(getenv func(string) string) (*knoxFixerCIEnv, error) {
+func readAutofixCIEnv(getenv func(string) string) (*autofixCIEnv, error) {
 	if getenv("GITHUB_ACTIONS") != "true" {
-		return nil, errors.New("knoxfixer currently supports GitHub Actions only (GITHUB_ACTIONS is not set)")
+		return nil, errors.New("autofix currently supports GitHub Actions only (GITHUB_ACTIONS is not set)")
 	}
-	env := &knoxFixerCIEnv{
+	env := &autofixCIEnv{
 		Provider:   "github_actions",
 		ServerURL:  strings.TrimRight(firstNonEmpty(getenv("GITHUB_SERVER_URL"), "https://github.com"), "/"),
 		APIURL:     strings.TrimRight(firstNonEmpty(getenv("GITHUB_API_URL"), "https://api.github.com"), "/"),
@@ -64,7 +64,7 @@ func readKnoxFixerCIEnv(getenv func(string) string) (*knoxFixerCIEnv, error) {
 
 	switch env.EventName {
 	case "pull_request_target":
-		return nil, errors.New("knoxfixer refuses to run on pull_request_target events")
+		return nil, errors.New("autofix refuses to run on pull_request_target events")
 	case "pull_request":
 		env.BaseBranch = getenv("GITHUB_HEAD_REF")
 		event, err := readGitHubEvent(getenv("GITHUB_EVENT_PATH"))
@@ -76,22 +76,22 @@ func readKnoxFixerCIEnv(getenv func(string) string) (*knoxFixerCIEnv, error) {
 		}
 		head := event.PullRequest.Head
 		if head.Repo.Fork || !strings.EqualFold(head.Repo.FullName, event.PullRequest.Base.Repo.FullName) {
-			return nil, errors.New("knoxfixer refuses to run on pull requests from forks")
+			return nil, errors.New("autofix refuses to run on pull requests from forks")
 		}
 		// The workspace is the refs/pull/N/merge commit; work on the PR
 		// source branch tip that was built instead.
 		env.BaseSHA = head.SHA
 	default:
 		if getenv("GITHUB_REF_TYPE") == "tag" {
-			return nil, errors.New("knoxfixer needs a branch build (tag builds are not supported)")
+			return nil, errors.New("autofix needs a branch build (tag builds are not supported)")
 		}
 		env.BaseBranch = getenv("GITHUB_REF_NAME")
 	}
 	if env.BaseBranch == "" {
 		return nil, errors.New("could not determine the CI branch (detached HEAD?)")
 	}
-	if strings.HasPrefix(env.BaseBranch, KnoxFixerBranchPrefix) {
-		return env, errKnoxFixerBranchSkip
+	if strings.HasPrefix(env.BaseBranch, AutofixBranchPrefix) {
+		return env, errAutofixBranchSkip
 	}
 	if env.BaseSHA == "" {
 		return nil, errors.New("GITHUB_SHA is not set")
