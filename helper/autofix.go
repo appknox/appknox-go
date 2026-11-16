@@ -110,7 +110,7 @@ func reportCreateError(err error) int {
 			fmt.Println("autofix does not work on appknox-autofix branch")
 			return 0
 		}
-		PrintError("autofix: " + apiErr.Detail)
+		PrintError("autofix: " + apiErr.Error())
 		return 1
 	}
 	PrintError("autofix: could not create job: ", err)
