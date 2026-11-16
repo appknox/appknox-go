@@ -10,11 +10,11 @@ import (
 	"strconv"
 )
 
-// AutofixService talks to Mycroft's knoxfixer job API. The CLI never talks
+// AutofixService talks to Mycroft's autofix job API. The CLI never talks
 // to the Autofix service or any LLM directly, and never sends prompts.
 type AutofixService service
 
-const autofixSessionHeader = "X-Knoxfixer-Session"
+const autofixSessionHeader = "X-Autofix-Session"
 
 // AutofixAPIError is a Mycroft error with a stable machine code.
 type AutofixAPIError struct {
@@ -28,7 +28,7 @@ func (e *AutofixAPIError) Error() string {
 	if e.Detail != "" {
 		return fmt.Sprintf("%s (%d %s)", e.Detail, e.StatusCode, e.Code)
 	}
-	return fmt.Sprintf("knoxfixer API error %d %s", e.StatusCode, e.Code)
+	return fmt.Sprintf("autofix API error %d %s", e.StatusCode, e.Code)
 }
 
 // AutofixCreateJobRequest is the body of POST /jobs: typed fields only.
@@ -175,11 +175,11 @@ func (s *AutofixService) do(ctx context.Context, method, path, session string, b
 	return resp.StatusCode, nil
 }
 
-// CreateJob creates a knoxfixer job, or attaches to (takes over) the active
+// CreateJob creates an autofix job, or attaches to (takes over) the active
 // job on the same file.
 func (s *AutofixService) CreateJob(ctx context.Context, body *AutofixCreateJobRequest) (*AutofixJob, error) {
 	var job AutofixJob
-	if _, err := s.do(ctx, "POST", "api/knoxiq/knoxfixer/jobs", "", body, &job); err != nil {
+	if _, err := s.do(ctx, "POST", "api/knoxiq/autofix/jobs", "", body, &job); err != nil {
 		return nil, err
 	}
 	return &job, nil
@@ -190,7 +190,7 @@ func (s *AutofixService) Next(ctx context.Context, jobID int, session string, af
 	query := url.Values{}
 	query.Set("after_seq", strconv.Itoa(afterSeq))
 	query.Set("wait", strconv.Itoa(waitSeconds))
-	path := fmt.Sprintf("api/knoxiq/knoxfixer/jobs/%d/next?%s", jobID, query.Encode())
+	path := fmt.Sprintf("api/knoxiq/autofix/jobs/%d/next?%s", jobID, query.Encode())
 	var msg AutofixMessage
 	if _, err := s.do(ctx, "GET", path, session, nil, &msg); err != nil {
 		return nil, err
@@ -200,13 +200,13 @@ func (s *AutofixService) Next(ctx context.Context, jobID int, session string, af
 
 // SendContext answers the `prepare` message.
 func (s *AutofixService) SendContext(ctx context.Context, jobID int, session string, body *AutofixContextRequest) error {
-	_, err := s.do(ctx, "POST", fmt.Sprintf("api/knoxiq/knoxfixer/jobs/%d/context", jobID), session, body, nil)
+	_, err := s.do(ctx, "POST", fmt.Sprintf("api/knoxiq/autofix/jobs/%d/context", jobID), session, body, nil)
 	return err
 }
 
 // SendToolResults answers a `tools` message with the results of the calls.
 func (s *AutofixService) SendToolResults(ctx context.Context, jobID int, session string, body *AutofixToolResultsRequest) error {
-	_, err := s.do(ctx, "POST", fmt.Sprintf("api/knoxiq/knoxfixer/jobs/%d/tool_results", jobID), session, body, nil)
+	_, err := s.do(ctx, "POST", fmt.Sprintf("api/knoxiq/autofix/jobs/%d/tool_results", jobID), session, body, nil)
 	return err
 }
 
@@ -215,12 +215,12 @@ func (s *AutofixService) Complete(ctx context.Context, jobID int, session string
 	var out struct {
 		Status string `json:"status"`
 	}
-	_, err := s.do(ctx, "POST", fmt.Sprintf("api/knoxiq/knoxfixer/jobs/%d/complete", jobID), session, body, &out)
+	_, err := s.do(ctx, "POST", fmt.Sprintf("api/knoxiq/autofix/jobs/%d/complete", jobID), session, body, &out)
 	return out.Status, err
 }
 
 // Abort reports a CLI side failure.
 func (s *AutofixService) Abort(ctx context.Context, jobID int, session string, body *AutofixAbortRequest) error {
-	_, err := s.do(ctx, "POST", fmt.Sprintf("api/knoxiq/knoxfixer/jobs/%d/abort", jobID), session, body, nil)
+	_, err := s.do(ctx, "POST", fmt.Sprintf("api/knoxiq/autofix/jobs/%d/abort", jobID), session, body, nil)
 	return err
 }

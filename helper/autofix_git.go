@@ -131,7 +131,7 @@ func (g *gitRunner) mergeTheirs(ctx context.Context, baseSHA string) ([]string, 
 	conflicts := intersect(ours, theirs)
 
 	_, mergeErr := g.run(ctx, "merge", "--no-edit", "--no-ff", "-X", "theirs", baseSHA,
-		"-m", "Merge base into appknox-knoxfixer branch")
+		"-m", "Merge base into appknox-autofix branch")
 	if mergeErr != nil {
 		unmerged, err := g.run(ctx, "diff", "--name-only", "--diff-filter=U")
 		if err != nil || unmerged == "" {

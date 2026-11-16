@@ -10,7 +10,7 @@ import (
 
 // AutofixBranchPrefix is reserved for autofix PR branches. Runs on such a
 // branch are skipped (and pass) so autofix never loops on its own PRs.
-const AutofixBranchPrefix = "appknox-knoxfixer/"
+const AutofixBranchPrefix = "appknox-autofix/"
 
 // autofixCIEnv is the CI context. Only RepoURL, BaseBranch and Provider go
 // to Mycroft; the rest stays in the CLI.
@@ -43,7 +43,7 @@ type githubEvent struct {
 }
 
 // errAutofixBranchSkip means "this is an autofix branch: skip and pass".
-var errAutofixBranchSkip = errors.New("autofix does not work on appknox-knoxfixer branch")
+var errAutofixBranchSkip = errors.New("autofix does not work on appknox-autofix branch")
 
 func readAutofixCIEnv(getenv func(string) string) (*autofixCIEnv, error) {
 	if getenv("GITHUB_ACTIONS") != "true" {

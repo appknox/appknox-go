@@ -13,7 +13,7 @@ var autofixCmd = &cobra.Command{
 	Use:   "autofix",
 	Short: "Fix KnoxIQ findings in the repository and open / update a pull request.",
 	Long: `Applies KnoxIQ remediations to the CI branch and opens (or updates) a pull request
-on appknox-knoxfixer/<branch>. Run it after "appknox cicheck" in the same pipeline,
+on appknox-autofix/<branch>. Run it after "appknox cicheck" in the same pipeline,
 with the file id of that upload (--file-id or APPKNOX_FILE_ID). Needs GITHUB_TOKEN
 with contents: write and pull-requests: write.`,
 	Args: cobra.NoArgs,

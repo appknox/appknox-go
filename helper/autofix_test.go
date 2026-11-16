@@ -79,7 +79,7 @@ func TestAutofixEnvRefusals(t *testing.T) {
 
 func TestAutofixEnvOwnBranchIsSkipped(t *testing.T) {
 	m := baseEnv()
-	m["GITHUB_REF_NAME"] = "appknox-knoxfixer/main"
+	m["GITHUB_REF_NAME"] = "appknox-autofix/main"
 	_, err := readAutofixCIEnv(envFrom(m))
 	assert.ErrorIs(t, err, errAutofixBranchSkip)
 }
@@ -299,9 +299,9 @@ func TestMergeTheirsKeepsBaseOnConflict(t *testing.T) {
 
 func TestLatestAutofixPR(t *testing.T) {
 	prs := `[
-	 {"number": 3, "state": "closed", "merged_at": null, "created_at": "2026-10-03T00:00:00Z", "head": {"ref": "appknox-knoxfixer/main", "sha": "s3"}},
-	 {"number": 2, "state": "closed", "merged_at": null, "created_at": "2026-10-02T00:00:00Z", "head": {"ref": "appknox-knoxfixer/main", "sha": "s2"}},
-	 {"number": 1, "state": "closed", "merged_at": "2026-10-01T05:00:00Z", "created_at": "2026-10-01T00:00:00Z", "head": {"ref": "appknox-knoxfixer/main", "sha": "s1"}}
+	 {"number": 3, "state": "closed", "merged_at": null, "created_at": "2026-10-03T00:00:00Z", "head": {"ref": "appknox-autofix/main", "sha": "s3"}},
+	 {"number": 2, "state": "closed", "merged_at": null, "created_at": "2026-10-02T00:00:00Z", "head": {"ref": "appknox-autofix/main", "sha": "s2"}},
+	 {"number": 1, "state": "closed", "merged_at": "2026-10-01T05:00:00Z", "created_at": "2026-10-01T00:00:00Z", "head": {"ref": "appknox-autofix/main", "sha": "s1"}}
 	]`
 	var gotQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -311,12 +311,12 @@ func TestLatestAutofixPR(t *testing.T) {
 	}))
 	defer srv.Close()
 	gh := newGitHubClient(srv.URL, "acme/app", "tok")
-	pr, open, err := gh.latestAutofixPR(context.Background(), "appknox-knoxfixer/main", "main")
+	pr, open, err := gh.latestAutofixPR(context.Background(), "appknox-autofix/main", "main")
 	require.NoError(t, err)
 	assert.Equal(t, 3, pr.Number) // newest closed-unmerged → reopen candidate
 	assert.Equal(t, 0, open)
 	assert.Contains(t, gotQuery, "state=all")
-	assert.Contains(t, gotQuery, "head=acme%3Aappknox-knoxfixer%2Fmain")
+	assert.Contains(t, gotQuery, "head=acme%3Aappknox-autofix%2Fmain")
 }
 
 func TestReopenRestoresDeletedBranch(t *testing.T) {
@@ -336,12 +336,12 @@ func TestReopenRestoresDeletedBranch(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	run := &autofixRun{ctx: context.Background(), gh: newGitHubClient(srv.URL, "acme/app", "tok"), head: "appknox-knoxfixer/main"}
+	run := &autofixRun{ctx: context.Background(), gh: newGitHubClient(srv.URL, "acme/app", "tok"), head: "appknox-autofix/main"}
 	pr := &githubPR{Number: 3}
 	pr.Head.SHA = "s3"
 	assert.True(t, run.reopen(pr))
 	assert.Equal(t, []string{
-		"GET /repos/acme/app/branches/appknox-knoxfixer/main",
+		"GET /repos/acme/app/branches/appknox-autofix/main",
 		"POST /repos/acme/app/git/refs",
 		"PATCH /repos/acme/app/pulls/3",
 	}, calls)
@@ -357,7 +357,7 @@ func TestReopenFailureFallsBack(t *testing.T) {
 		w.Write([]byte(`{}`))
 	}))
 	defer srv.Close()
-	run := &autofixRun{ctx: context.Background(), gh: newGitHubClient(srv.URL, "acme/app", "tok"), head: "appknox-knoxfixer/main"}
+	run := &autofixRun{ctx: context.Background(), gh: newGitHubClient(srv.URL, "acme/app", "tok"), head: "appknox-autofix/main"}
 	assert.False(t, run.reopen(&githubPR{Number: 3}))
 }
 

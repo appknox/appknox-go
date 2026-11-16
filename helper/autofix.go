@@ -107,7 +107,7 @@ func reportCreateError(err error) int {
 	var apiErr *appknox.AutofixAPIError
 	if errors.As(err, &apiErr) {
 		if apiErr.Code == "branch_reserved" {
-			fmt.Println("autofix does not work on appknox-knoxfixer branch")
+			fmt.Println("autofix does not work on appknox-autofix branch")
 			return 0
 		}
 		PrintError("autofix: " + apiErr.Detail)
