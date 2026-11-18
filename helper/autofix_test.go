@@ -144,7 +144,7 @@ func TestToolsListAndSearch(t *testing.T) {
 	tr := newToolRunner(fixtureRepo(t), "")
 	files := tr.repoFiles(1000)
 	assert.Contains(t, files, "app/build.gradle")
-	assert.Contains(t, files, ".github/workflows/ci.yml") // CI files are editable now
+	assert.Contains(t, files, ".github/workflows/ci.yml") // listed / readable, but not writable
 	assert.NotContains(t, files, "app/google-services.json")
 	assert.NotContains(t, files, "app/build/generated/Gen.kt")
 
@@ -222,13 +222,14 @@ func TestToolsEditCreateDelete(t *testing.T) {
 	require.True(t, res.OK, res.Output)
 	res = runTool(t, tr, "create_file", map[string]interface{}{"path": "app/build.gradle", "content": "x"})
 	assert.False(t, res.OK)
+	// .github/, .gitmodules and .gitattributes are read-only: a compromised
+	// build script there could run with CI secrets during verify.
 	res = runTool(t, tr, "delete_file", map[string]interface{}{"path": ".github/workflows/ci.yml"})
-	require.True(t, res.OK, res.Output)
+	assert.False(t, res.OK)
 	res = runTool(t, tr, "create_file", map[string]interface{}{"path": ".env", "content": "x"})
 	assert.False(t, res.OK)
 
 	assert.Equal(t, []string{
-		".github/workflows/ci.yml",
 		"app/build.gradle",
 		"app/src/main/AndroidManifest.xml",
 		"app/src/main/java/com/acme/Login.kt",
@@ -245,6 +246,63 @@ func TestToolsVerify(t *testing.T) {
 	assert.Contains(t, res.Output, "verify FAILED")
 	res = runTool(t, newToolRunner(root, "echo fine"), "run_verify", map[string]interface{}{})
 	assert.Contains(t, res.Output, "verify passed")
+}
+
+func TestBlockedFilesNarrowedNotBroadened(t *testing.T) {
+	for _, rel := range []string{".npmrc", ".netrc", ".pypirc", ".git-credentials", "infra/prod.tfvars", "secrets.yml", "credentials"} {
+		assert.True(t, blockedFileRe.MatchString(rel), rel)
+	}
+	for _, rel := range []string{"app/secrets.ts", "app/CredentialsManager.java"} {
+		assert.False(t, blockedFileRe.MatchString(rel), rel)
+	}
+}
+
+func TestDotGitCheckIsCaseInsensitive(t *testing.T) {
+	tr := newToolRunner(fixtureRepo(t), "")
+	for _, rel := range []string{".git/config", ".Git/config", ".GIT/HEAD"} {
+		res := runTool(t, tr, "read_file", map[string]interface{}{"path": rel})
+		assert.False(t, res.OK, rel)
+	}
+}
+
+func TestSymlinkCannotEscapeRepo(t *testing.T) {
+	root := fixtureRepo(t)
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("top-secret"), 0o644))
+	require.NoError(t, os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(root, "app", "escape.txt")))
+
+	tr := newToolRunner(root, "")
+	res := runTool(t, tr, "read_file", map[string]interface{}{"path": "app/escape.txt"})
+	assert.False(t, res.OK)
+	res = runTool(t, tr, "edit_file", map[string]interface{}{"path": "app/escape.txt", "old_text": "x", "new_text": "y"})
+	assert.False(t, res.OK)
+}
+
+func TestWritesDeniedUnderGithubAndGitControlFiles(t *testing.T) {
+	root := writeRepo(t, map[string]string{
+		".github/workflows/ci.yml": "on: push\n",
+		".gitmodules":              "[submodule]\n",
+		".gitattributes":           "* text=auto\n",
+	})
+	tr := newToolRunner(root, "")
+	for _, rel := range []string{".github/workflows/ci.yml", ".gitmodules", ".gitattributes"} {
+		res := runTool(t, tr, "edit_file", map[string]interface{}{"path": rel, "old_text": "x", "new_text": "y"})
+		assert.False(t, res.OK, rel)
+		res = runTool(t, tr, "delete_file", map[string]interface{}{"path": rel})
+		assert.False(t, res.OK, rel)
+		// still readable
+		res = runTool(t, tr, "read_file", map[string]interface{}{"path": rel})
+		assert.True(t, res.OK, rel)
+	}
+}
+
+func TestValidAutofixHead(t *testing.T) {
+	assert.True(t, validAutofixHead("appknox-autofix/main"))
+	assert.True(t, validAutofixHead("appknox-autofix/feature/x"))
+	for _, bad := range []string{"main", "appknox-autofix/", "appknox-autofix/..", "appknox-autofix/-x",
+		"appknox-autofix/a@{b", "appknox-autofix/a/", "appknox-autofix/a.lock", "appknox-autofix/a//b"} {
+		assert.False(t, validAutofixHead(bad), bad)
+	}
 }
 
 func TestToolsUnknownTool(t *testing.T) {

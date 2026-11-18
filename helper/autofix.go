@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"regexp"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/appknox/appknox-go/appknox"
 )
@@ -15,7 +19,6 @@ type AutofixOptions struct {
 	FileID              int
 	LikelihoodThreshold string // low | medium | high
 	VerifyCmd           string
-	AppRoot             string
 }
 
 const (
@@ -91,7 +94,7 @@ func ProcessAutofix(opts AutofixOptions) int {
 		return reportCreateError(err)
 	}
 	run := &autofixRun{
-		ctx: ctx, api: client.Autofix, job: job, env: env, opts: opts, root: root,
+		ctx: ctx, api: client.Autofix, job: job, env: env, opts: opts, root: root, token: token,
 		gh: newGitHubClient(env.APIURL, env.Repository, token),
 	}
 	if job.Attached {
@@ -125,6 +128,9 @@ type autofixRun struct {
 	env  *autofixCIEnv
 	opts AutofixOptions
 	root string
+	// token authenticates git push explicitly instead of relying on
+	// whatever credential helper the CI checkout step may have persisted.
+	token string
 
 	// state built while answering `prepare`
 	git           *gitRunner
@@ -153,14 +159,18 @@ func (r *autofixRun) poll(out chan<- pollEvent) {
 		msg, err := r.api.Next(r.ctx, r.job.JobID, r.job.CLISession, afterSeq, autofixPollWait)
 		if err != nil {
 			var apiErr *appknox.AutofixAPIError
-			if errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 {
+			if errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 &&
+				apiErr.StatusCode != http.StatusRequestTimeout && apiErr.StatusCode != http.StatusTooManyRequests {
 				out <- pollEvent{err: err}
 				return
 			}
 			if r.ctx.Err() != nil {
 				break
 			}
-			time.Sleep(autofixPollBackoff) // transient network error: keep polling
+			select { // transient network error, timeout or rate limit: keep polling
+			case <-time.After(autofixPollBackoff):
+			case <-r.ctx.Done():
+			}
 			continue
 		}
 		if msg.Type == "wait" || msg.Seq <= afterSeq {
@@ -270,7 +280,32 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
 	return s[:n]
+}
+
+// validAutofixHead reports whether head is a safe autofix branch ref: under
+// the reserved appknox-autofix/ prefix (so deleteBranch/push can never reach
+// a real branch such as main) and a plausible git ref — no "..", no leading
+// "-", no "@{", no trailing "/" or ".lock", ASCII path-like characters only.
+var validAutofixHeadRe = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+
+func validAutofixHead(head string) bool {
+	if !strings.HasPrefix(head, AutofixBranchPrefix) || strings.TrimPrefix(head, AutofixBranchPrefix) == "" {
+		return false
+	}
+	if strings.Contains(head, "..") || strings.Contains(head, "//") || strings.Contains(head, "@{") ||
+		strings.HasSuffix(head, "/") || strings.HasSuffix(head, ".lock") || !validAutofixHeadRe.MatchString(head) {
+		return false
+	}
+	for _, part := range strings.Split(head, "/") {
+		if strings.HasPrefix(part, "-") || part == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // prepareBranch picks the PR to update (GitHub is the only source of truth
@@ -300,6 +335,10 @@ func (r *autofixRun) prepareBranch() error {
 		if exists, err := r.gh.branchExists(ctx, r.head); err != nil {
 			return err
 		} else if exists {
+			// r.head is always under AutofixBranchPrefix (validAutofixHead),
+			// so this can only discard a prior/stray appknox-autofix branch,
+			// never a real branch — but still log it since it is a delete.
+			PrintError(fmt.Sprintf("autofix: deleting stale branch %s (no open or reopenable PR tracks it)", r.head))
 			if err := r.gh.deleteBranch(ctx, r.head); err != nil {
 				return fmt.Errorf("could not delete stale branch %s: %w", r.head, err)
 			}
@@ -335,14 +374,17 @@ func (r *autofixRun) reopen(pr *githubPR) bool {
 	ctx := r.ctx
 	exists, err := r.gh.branchExists(ctx, r.head)
 	if err != nil {
+		PrintError(fmt.Sprintf("autofix: could not check if branch %s exists: %v", r.head, err))
 		return false
 	}
 	if !exists {
 		if err := r.gh.createBranch(ctx, r.head, pr.Head.SHA); err != nil {
+			PrintError(fmt.Sprintf("autofix: could not recreate branch %s: %v", r.head, err))
 			return false
 		}
 	}
 	if err := r.gh.reopenPR(ctx, pr.Number); err != nil {
+		PrintError(fmt.Sprintf("autofix: could not reopen PR #%d: %v", pr.Number, err))
 		return false
 	}
 	return true
@@ -352,7 +394,11 @@ func (r *autofixRun) reopen(pr *githubPR) bool {
 
 func (r *autofixRun) handlePrepare(msg *appknox.AutofixMessage) error {
 	p := msg.Payload
-	r.head = firstNonEmpty(p.HeadBranch, AutofixBranchPrefix+r.env.BaseBranch)
+	head := firstNonEmpty(p.HeadBranch, AutofixBranchPrefix+r.env.BaseBranch)
+	if !validAutofixHead(head) {
+		return fmt.Errorf("refusing unsafe head_branch from server: %q", head)
+	}
+	r.head = head
 	if r.cleanup == nil {
 		if err := r.prepareBranch(); err != nil {
 			return err
@@ -360,7 +406,7 @@ func (r *autofixRun) handlePrepare(msg *appknox.AutofixMessage) error {
 	}
 	r.tools = newToolRunner(r.git.dir, r.opts.VerifyCmd)
 	files := r.tools.repoFiles(autofixMaxRepoFiles)
-	req := &appknox.AutofixContextRequest{
+	req := &appknox.AutofixPrepareReply{
 		InReplyToSeq:    msg.Seq,
 		ConflictFiles:   append([]string{}, r.conflictFiles...),
 		RepoFiles:       files,
@@ -374,11 +420,11 @@ func (r *autofixRun) handlePrepare(msg *appknox.AutofixMessage) error {
 		r.inProgressPrinted = true
 		printAutofixStatus("In progress")
 	}
-	return r.sendContext(req)
+	return r.replyPrepare(req)
 }
 
-func (r *autofixRun) sendContext(req *appknox.AutofixContextRequest) error {
-	err := r.api.SendContext(r.ctx, r.job.JobID, r.job.CLISession, req)
+func (r *autofixRun) replyPrepare(req *appknox.AutofixPrepareReply) error {
+	err := r.api.ReplyPrepare(r.ctx, r.job.JobID, r.job.CLISession, req)
 	var apiErr *appknox.AutofixAPIError
 	if errors.As(err, &apiErr) && apiErr.Code == "superseded" {
 		return errSuperseded
@@ -437,10 +483,18 @@ func (r *autofixRun) handleFinish(msg *appknox.AutofixMessage) (bool, error) {
 	finishCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	sha, err := r.git.commit(finishCtx, files, firstNonEmpty(p.CommitMessage, p.PR.Title))
+	if errors.Is(err, errNothingToCommit) {
+		// The agent's edits ended up identical to HEAD: nothing new to push.
+		var existingURL *string
+		if r.pr != nil {
+			existingURL = &r.pr.HTMLURL
+		}
+		return r.complete(msg.Seq, existingURL, "", nil, nil, p.Skipped)
+	}
 	if err != nil {
 		return false, err
 	}
-	if err := r.git.push(finishCtx, r.head); err != nil {
+	if err := r.git.push(finishCtx, r.head, r.token); err != nil {
 		return false, abortWith(pushFailureReason(err), err)
 	}
 
@@ -469,7 +523,7 @@ func (r *autofixRun) complete(seq int, prURL *string, title string, sha *string,
 	}
 	out := make([]appknox.AutofixSkipped, 0, len(skipped))
 	for _, s := range skipped {
-		out = append(out, appknox.AutofixSkipped{Ref: s.Ref, Reason: truncate(s.Reason, 500)})
+		out = append(out, appknox.AutofixSkipped{Ref: s.Ref, Title: s.Title, Reason: truncate(s.Reason, 500)})
 	}
 	status, err := r.completeWithRetry(&appknox.AutofixCompleteRequest{
 		InReplyToSeq: seq, PRURL: prURL, Title: title, CommitSHA: sha, Fixed: fixed, Skipped: out,
@@ -485,8 +539,13 @@ func (r *autofixRun) complete(seq int, prURL *string, title string, sha *string,
 		}
 		return false, abortWith("cli_error", fmt.Errorf("could not report the result to Appknox: %w", err))
 	}
-	if status != "" && status != "completed" && status != "running" {
-		return false, fmt.Errorf("job ended with status %s", status)
+	if status != "" && status != "completed" {
+		if prURL == nil {
+			return false, fmt.Errorf("job ended with status %s", status)
+		}
+		// The PR is already pushed and open; an odd status here is server
+		// bookkeeping, not a reason to fail a pipeline that already shipped.
+		PrintError(fmt.Sprintf("autofix: job ended with unexpected status %q after the PR was opened", status))
 	}
 	printAutofixStatus("Completed")
 	if prURL != nil {

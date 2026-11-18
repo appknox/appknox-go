@@ -49,6 +49,30 @@ func absRepoPath(root, rel string) (string, error) {
 	return abs, nil
 }
 
+// ensureNoSymlinkEscape rejects abs when it, or any existing ancestor
+// directory on its path, is a symlink that resolves outside root. A
+// committed symlink (file or directory) can point anywhere on disk, so the
+// string check in validateRepoRelPath/absRepoPath is not enough.
+func ensureNoSymlinkEscape(root, abs string) error {
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	for cur := abs; ; {
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			if real != rootReal && !strings.HasPrefix(real, rootReal+string(filepath.Separator)) {
+				return errors.New("path escapes the repository via a symlink: " + abs)
+			}
+			return nil
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return nil
+		}
+		cur = parent
+	}
+}
+
 // globToRegexp supports "**" (any number of directories), "*" and "?".
 func globToRegexp(glob string) *regexp.Regexp {
 	var b strings.Builder
@@ -75,8 +99,32 @@ func globToRegexp(glob string) *regexp.Regexp {
 }
 
 // Files the CLI never reads, sends or writes (secrets / credentials).
-var blockedFileRe = regexp.MustCompile(`(?i)(^|/)(\.env[^/]*|[^/]*\.(keystore|jks|p12|pfx|pem|key|mobileprovision|cer|der|p8)|google-services\.json|GoogleService-Info\.plist|local\.properties|secrets?\.[^/]+|credentials[^/]*|id_rsa[^/]*)$`)
+// Secret-file-name matches (secrets, credentials) are anchored to the whole
+// basename (optionally + a config extension) so they don't catch ordinary
+// source files such as secrets.ts or CredentialsManager.java.
+var blockedFileRe = regexp.MustCompile(`(?i)(^|/)(` +
+	`\.env[^/]*` +
+	`|\.npmrc|\.netrc|\.pypirc|\.git-credentials` +
+	`|[^/]*\.(keystore|jks|p12|pfx|pem|key|mobileprovision|cer|der|p8|tfvars)` +
+	`|google-services\.json|GoogleService-Info\.plist|local\.properties` +
+	`|secrets?(\.(ya?ml|json|properties|env|txt|ini|toml))?` +
+	`|credentials(\.(ya?ml|json|properties|env|txt|ini|toml))?` +
+	`|id_rsa[^/]*` +
+	`)$`)
+
+// blockedWritePathRe: CI/build control files the agent can read for context
+// but never create, edit or delete — a compromised build script here could
+// run with the CI environment (including GITHUB_TOKEN) during verify.
+var blockedWritePathRe = regexp.MustCompile(`(?i)^\.github(/.*)?$|^\.gitmodules$|^\.gitattributes$`)
 
 // Directories skipped when listing / searching (generated, vendored, VCS).
 // The agent can still read or change a path inside them by name.
 var skippedDirRe = regexp.MustCompile(`(?i)^(\.git|\.gradle|\.idea|build|Pods|Carthage|DerivedData|node_modules|\.build|\.appknox|generated|intermediates)$`)
+
+// isDotGitPath reports whether rel is (or is inside) a ".git" entry,
+// case-insensitively — .Git/config resolves to the real .git directory on
+// the case-insensitive filesystems macOS and Windows runners typically use.
+func isDotGitPath(rel string) bool {
+	lower := strings.ToLower(rel)
+	return lower == ".git" || strings.HasPrefix(lower, ".git/")
+}

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/appknox/appknox-go/appknox"
 )
@@ -35,10 +36,6 @@ const (
 	readPageBytes    = 600 << 10
 	verifyTailBytes  = 12 << 10
 )
-
-// errToolInput is a bad tool call from the agent: reported back to it as a
-// failed result, never fatal for the run.
-var errToolInput = errors.New("invalid tool input")
 
 type toolRunner struct {
 	root      string
@@ -93,7 +90,7 @@ func (t *toolRunner) runOne(ctx context.Context, call appknox.AutofixToolCall) (
 	case "run_verify":
 		return t.runVerify(ctx)
 	}
-	return "", fmt.Errorf("%w: unknown tool %q", errToolInput, call.Name)
+	return "", fmt.Errorf("unknown tool %q", call.Name)
 }
 
 func str(in map[string]interface{}, key string) string {
@@ -115,20 +112,43 @@ func num(in map[string]interface{}, key string) int {
 
 // --- paths ---------------------------------------------------------------------
 
-// resolve maps a repo-relative path to disk. Anything outside the checkout,
-// inside .git, or a secret/credential file is refused.
+// resolve maps a repo-relative path to disk. Anything outside the checkout
+// (including via a committed symlink), inside .git, or a secret/credential
+// file is refused.
 func (t *toolRunner) resolve(rel string) (string, error) {
 	rel = strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(rel)), "./")
 	if err := validateRepoRelPath(rel); err != nil {
-		return "", fmt.Errorf("%w: %v", errToolInput, err)
+		return "", fmt.Errorf("invalid tool input: %v", err)
 	}
-	if rel == ".git" || strings.HasPrefix(rel, ".git/") {
-		return "", fmt.Errorf("%w: .git is not accessible", errToolInput)
+	if isDotGitPath(rel) {
+		return "", errors.New("invalid tool input: .git is not accessible")
 	}
 	if blockedFileRe.MatchString(rel) {
-		return "", fmt.Errorf("%w: %s is a secret / credential file and is never read or written", errToolInput, rel)
+		return "", fmt.Errorf("invalid tool input: %s is a secret / credential file and is never read or written", rel)
 	}
-	return absRepoPath(t.root, rel)
+	abs, err := absRepoPath(t.root, rel)
+	if err != nil {
+		return "", err
+	}
+	if err := ensureNoSymlinkEscape(t.root, abs); err != nil {
+		return "", fmt.Errorf("invalid tool input: %v", err)
+	}
+	return abs, nil
+}
+
+// resolveForWrite is resolve plus a check against CI/build control files
+// (.github/, .gitmodules, .gitattributes) that must stay read-only: editing
+// them could change what runs during verify, which still has CI secrets.
+func (t *toolRunner) resolveForWrite(rel string) (string, error) {
+	abs, err := t.resolve(rel)
+	if err != nil {
+		return "", err
+	}
+	clean := strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(rel)), "./")
+	if blockedWritePathRe.MatchString(clean) {
+		return "", fmt.Errorf("invalid tool input: %s is a CI/build control file and cannot be changed", clean)
+	}
+	return abs, nil
 }
 
 func (t *toolRunner) walk(fn func(rel, abs string) bool) error {
@@ -147,7 +167,7 @@ func (t *toolRunner) walk(fn func(rel, abs string) bool) error {
 		}
 		rel, err := repoRelPath(t.root, p)
 		// In a worktree .git is a file pointing at the main repository.
-		if err != nil || rel == ".git" || blockedFileRe.MatchString(rel) {
+		if err != nil || isDotGitPath(rel) || blockedFileRe.MatchString(rel) {
 			return nil
 		}
 		if !fn(rel, p) {
@@ -177,7 +197,7 @@ func (t *toolRunner) listFiles(glob string) (string, error) {
 	}
 	var files []string
 	truncated := false
-	t.walk(func(rel, _ string) bool {
+	if err := t.walk(func(rel, _ string) bool {
 		if re == nil || re.MatchString(rel) {
 			if len(files) >= maxListedFiles {
 				truncated = true
@@ -186,7 +206,9 @@ func (t *toolRunner) listFiles(glob string) (string, error) {
 			files = append(files, rel)
 		}
 		return true
-	})
+	}); err != nil {
+		return "", err
+	}
 	sort.Strings(files)
 	out := strings.Join(files, "\n")
 	if len(files) == 0 {
@@ -209,7 +231,7 @@ func isBinary(data []byte) bool {
 func (t *toolRunner) search(pattern, glob string) (string, error) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		return "", fmt.Errorf("%w: bad regular expression: %v", errToolInput, err)
+		return "", fmt.Errorf("bad regular expression: %v", err)
 	}
 	var fileRe *regexp.Regexp
 	if strings.TrimSpace(glob) != "" {
@@ -217,7 +239,7 @@ func (t *toolRunner) search(pattern, glob string) (string, error) {
 	}
 	var matches []string
 	truncated := false
-	t.walk(func(rel, abs string) bool {
+	if err := t.walk(func(rel, abs string) bool {
 		if fileRe != nil && !fileRe.MatchString(rel) {
 			return true
 		}
@@ -242,12 +264,14 @@ func (t *toolRunner) search(pattern, glob string) (string, error) {
 			}
 			line = strings.TrimRight(line, "\r")
 			if len(line) > maxSearchLineLen {
-				line = line[:maxSearchLineLen] + "…"
+				line = truncateUTF8Head(line, maxSearchLineLen) + "…"
 			}
 			matches = append(matches, fmt.Sprintf("%s:%d: %s", rel, n, line))
 		}
 		return true
-	})
+	}); err != nil {
+		return "", err
+	}
 	out := strings.Join(matches, "\n")
 	if len(matches) == 0 {
 		out = "(no matches)"
@@ -265,10 +289,10 @@ func (t *toolRunner) readFile(rel string, start, end int) (string, error) {
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
-		return "", fmt.Errorf("%w: cannot read %s: %v", errToolInput, rel, err)
+		return "", fmt.Errorf("cannot read %s", rel)
 	}
 	if isBinary(data) {
-		return "", fmt.Errorf("%w: %s is a binary file", errToolInput, rel)
+		return "", fmt.Errorf("%s is a binary file", rel)
 	}
 	lines := strings.SplitAfter(t.vault.mask(string(data)), "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
@@ -285,7 +309,7 @@ func (t *toolRunner) readFile(rel string, start, end int) (string, error) {
 		return fmt.Sprintf("(%s is empty)", rel), nil
 	}
 	if start > total {
-		return "", fmt.Errorf("%w: %s has only %d lines", errToolInput, rel, total)
+		return "", fmt.Errorf("%s has only %d lines", rel, total)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s (%d lines)\n", rel, total)
@@ -305,32 +329,48 @@ func (t *toolRunner) readFile(rel string, start, end int) (string, error) {
 
 // --- changing tools ------------------------------------------------------------------
 
+// matchForReplace finds the single occurrence of oldText in content, trying
+// the file's CRLF line endings when oldText uses LF, and returns the exact
+// substring to replace plus its matching replacement. Counts occurrences
+// exactly once (for the LF form, then the CRLF form only if LF had none).
+func matchForReplace(content, oldText, newText string) (search, replace string, count int) {
+	search, replace = oldText, newText
+	count = strings.Count(content, search)
+	if count == 0 && strings.Contains(content, "\r\n") && !strings.Contains(oldText, "\r\n") {
+		search = strings.ReplaceAll(oldText, "\n", "\r\n")
+		replace = strings.ReplaceAll(newText, "\n", "\r\n")
+		count = strings.Count(content, search)
+	}
+	return search, replace, count
+}
+
 func (t *toolRunner) editFile(rel, oldText, newText string) (string, error) {
-	abs, err := t.resolve(rel)
+	abs, err := t.resolveForWrite(rel)
 	if err != nil {
 		return "", err
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
-		return "", fmt.Errorf("%w: cannot read %s: %v (use create_file for new files)", errToolInput, rel, err)
+		return "", fmt.Errorf("cannot read %s (use create_file for new files)", rel)
 	}
 	if oldText == "" {
-		return "", fmt.Errorf("%w: old_text is empty", errToolInput)
+		return "", errors.New("old_text is empty")
 	}
 	oldText, newText = t.vault.unmask(oldText), t.vault.unmask(newText)
 	content := string(data)
-	count := strings.Count(content, oldText)
-	if count == 0 && strings.Contains(content, "\r\n") {
-		count = strings.Count(content, strings.ReplaceAll(oldText, "\n", "\r\n"))
+	search, replace, count := matchForReplace(content, oldText, newText)
+	switch count {
+	case 0:
+		return "", fmt.Errorf("old_text not found in %s; read the file again", rel)
+	case 1:
+	default:
+		return "", fmt.Errorf("old_text occurs %d times in %s; include more surrounding lines", count, rel)
 	}
-	if count > 1 {
-		return "", fmt.Errorf("%w: old_text occurs %d times in %s; include more surrounding lines", errToolInput, count, rel)
+	updated := strings.Replace(content, search, replace, 1)
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", err
 	}
-	updated, ok := replaceOnce(content, oldText, newText)
-	if !ok {
-		return "", fmt.Errorf("%w: old_text not found in %s; read the file again", errToolInput, rel)
-	}
-	info, _ := os.Stat(abs)
 	if err := os.WriteFile(abs, []byte(updated), info.Mode().Perm()); err != nil {
 		return "", err
 	}
@@ -339,12 +379,12 @@ func (t *toolRunner) editFile(rel, oldText, newText string) (string, error) {
 }
 
 func (t *toolRunner) createFile(rel, content string) (string, error) {
-	abs, err := t.resolve(rel)
+	abs, err := t.resolveForWrite(rel)
 	if err != nil {
 		return "", err
 	}
 	if _, err := os.Stat(abs); err == nil {
-		return "", fmt.Errorf("%w: %s already exists; use edit_file", errToolInput, rel)
+		return "", fmt.Errorf("%s already exists; use edit_file", rel)
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return "", err
@@ -357,41 +397,26 @@ func (t *toolRunner) createFile(rel, content string) (string, error) {
 }
 
 func (t *toolRunner) deleteFile(rel string) (string, error) {
-	abs, err := t.resolve(rel)
+	abs, err := t.resolveForWrite(rel)
 	if err != nil {
 		return "", err
 	}
 	if err := os.Remove(abs); err != nil {
-		return "", fmt.Errorf("%w: cannot delete %s: %v", errToolInput, rel, err)
+		return "", fmt.Errorf("cannot delete %s", rel)
 	}
 	t.changed[rel] = true
 	return "deleted " + rel, nil
-}
-
-// replaceOnce applies one search/replace if the search block occurs exactly
-// once, trying the file's CRLF line endings when the edit uses LF.
-func replaceOnce(content, search, replace string) (string, bool) {
-	if strings.Count(content, search) == 1 {
-		return strings.Replace(content, search, replace, 1), true
-	}
-	if strings.Contains(content, "\r\n") && !strings.Contains(search, "\r\n") {
-		crlfSearch := strings.ReplaceAll(search, "\n", "\r\n")
-		if strings.Count(content, crlfSearch) == 1 {
-			return strings.Replace(content, crlfSearch, strings.ReplaceAll(replace, "\n", "\r\n"), 1), true
-		}
-	}
-	return content, false
 }
 
 // --- verify ---------------------------------------------------------------------------
 
 func (t *toolRunner) runVerify(ctx context.Context) (string, error) {
 	if t.verifyCmd == "" {
-		return "", fmt.Errorf("%w: no --verify-cmd is configured", errToolInput)
+		return "", errors.New("no --verify-cmd is configured")
 	}
 	ok, output := runVerifyCommand(ctx, t.root, t.verifyCmd)
 	if len(output) > verifyTailBytes {
-		output = "…" + output[len(output)-verifyTailBytes:]
+		output = "…" + truncateUTF8Tail(output, verifyTailBytes)
 	}
 	status := "verify passed"
 	if !ok {
@@ -401,7 +426,10 @@ func (t *toolRunner) runVerify(ctx context.Context) (string, error) {
 }
 
 // runVerifyCommand runs the customer's own verify command (e.g. a compile
-// task) in dir and returns whether it passed plus its combined output.
+// task) in dir and returns whether it passed plus its combined output. The
+// command runs with CI secrets scrubbed from its environment: the agent can
+// edit build scripts that this then executes, and the run still has
+// GITHUB_TOKEN in its own environment at this point.
 func runVerifyCommand(ctx context.Context, dir, command string) (bool, string) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
@@ -412,10 +440,52 @@ func runVerifyCommand(ctx context.Context, dir, command string) (bool, string) {
 		cmd = exec.CommandContext(ctx, "sh", "-c", command)
 	}
 	cmd.Dir = dir
+	cmd.Env = scrubbedVerifyEnv()
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
 	return err == nil, out.String()
+}
+
+// secretEnvKeyRe matches environment variable names that commonly hold CI
+// credentials (tokens, keys, passwords) so verify never sees them.
+var secretEnvKeyRe = regexp.MustCompile(`(?i)(TOKEN|SECRET|PASSWORD|PASSWD|_KEY$|APIKEY|CREDENTIAL)`)
+
+// scrubbedVerifyEnv is the current process environment with CI-secret-shaped
+// variables (GITHUB_TOKEN among them) removed.
+func scrubbedVerifyEnv() []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		key := kv
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			key = kv[:i]
+		}
+		if key == "GITHUB_TOKEN" || secretEnvKeyRe.MatchString(key) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// truncateUTF8Head returns the first n bytes of s, backing off to the start
+// of the previous rune if n would split a multi-byte UTF-8 character.
+func truncateUTF8Head(s string, n int) string {
+	for n > 0 && n < len(s) && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// truncateUTF8Tail returns the last n bytes of s, advancing to the start of
+// the next rune if n would split a multi-byte UTF-8 character.
+func truncateUTF8Tail(s string, n int) string {
+	cut := len(s) - n
+	for cut < len(s) && !utf8.RuneStart(s[cut]) {
+		cut++
+	}
+	return s[cut:]
 }
 
 // --- secrets ----------------------------------------------------------------------------

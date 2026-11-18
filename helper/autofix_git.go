@@ -3,6 +3,7 @@ package helper
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+// errNothingToCommit: the agent's edits ended up identical to HEAD, so there
+// is nothing to stage. Not a failure — the caller skips push/PR for this round.
+var errNothingToCommit = errors.New("nothing to commit")
 
 const (
 	autofixGitName  = "github-actions[bot]"
@@ -32,6 +37,12 @@ func (e *gitError) Error() string {
 }
 
 func (g *gitRunner) run(ctx context.Context, args ...string) (string, error) {
+	return g.runEnv(ctx, nil, args...)
+}
+
+// runEnv is run plus extra environment variables (appended, so they win over
+// any same-named entry from os.Environ()).
+func (g *gitRunner) runEnv(ctx context.Context, extraEnv []string, args ...string) (string, error) {
 	full := append([]string{
 		"-c", "user.name=" + autofixGitName,
 		"-c", "user.email=" + autofixGitEmail,
@@ -39,7 +50,7 @@ func (g *gitRunner) run(ctx context.Context, args ...string) (string, error) {
 	}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = g.dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0"), extraEnv...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -179,10 +190,16 @@ func (g *gitRunner) changedFiles(ctx context.Context, from, to string) ([]string
 }
 
 // commit stages only the patched files (never .appknox/ or anything else).
+// If the staged tree is identical to HEAD (the agent's edits net out to no
+// change), it returns errNothingToCommit instead of letting `git commit`
+// fail the run with "nothing to commit".
 func (g *gitRunner) commit(ctx context.Context, files []string, message string) (string, error) {
 	args := append([]string{"add", "--"}, files...)
 	if _, err := g.run(ctx, args...); err != nil {
 		return "", err
+	}
+	if _, err := g.run(ctx, "diff", "--cached", "--quiet"); err == nil {
+		return "", errNothingToCommit
 	}
 	if _, err := g.run(ctx, "commit", "--no-verify", "-m", message); err != nil {
 		return "", err
@@ -190,9 +207,17 @@ func (g *gitRunner) commit(ctx context.Context, files []string, message string) 
 	return g.run(ctx, "rev-parse", "HEAD")
 }
 
-// push is a normal (never forced) push of HEAD to refs/heads/<branch>.
-func (g *gitRunner) push(ctx context.Context, branch string) error {
-	_, err := g.run(ctx, "push", "--no-verify", "origin", "HEAD:refs/heads/"+branch)
+// push is a normal (never forced) push of HEAD to refs/heads/<branch>,
+// authenticated explicitly with token rather than relying on whatever
+// credential helper the CI checkout step may (or may not) have persisted.
+func (g *gitRunner) push(ctx context.Context, branch, token string) error {
+	basicAuth := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+	extraEnv := []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=http.extraheader",
+		"GIT_CONFIG_VALUE_0=AUTHORIZATION: basic " + basicAuth,
+	}
+	_, err := g.runEnv(ctx, extraEnv, "push", "--no-verify", "origin", "HEAD:refs/heads/"+branch)
 	return err
 }
 

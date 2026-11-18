@@ -16,12 +16,14 @@ type AutofixService service
 
 const autofixSessionHeader = "X-Autofix-Session"
 
+// autofixMaxResponseBytes caps how much of a response body do() reads.
+const autofixMaxResponseBytes = 64 << 20
+
 // AutofixAPIError is a Mycroft error with a stable machine code.
 type AutofixAPIError struct {
 	StatusCode int
 	Code       string `json:"code"`
 	Detail     string `json:"detail"`
-	JobID      int    `json:"job_id,omitempty"`
 }
 
 func (e *AutofixAPIError) Error() string {
@@ -99,9 +101,9 @@ type AutofixMessage struct {
 	Payload AutofixPayload `json:"payload"`
 }
 
-// AutofixContextRequest answers `prepare`: the PR in use, files that
+// AutofixPrepareReply answers `prepare`: the PR in use, files that
 // conflicted when merging base into it, and the repository file list (paths).
-type AutofixContextRequest struct {
+type AutofixPrepareReply struct {
 	InReplyToSeq    int      `json:"in_reply_to_seq"`
 	PRURL           *string  `json:"pr_url,omitempty"`
 	ConflictFiles   []string `json:"conflict_files"`
@@ -155,9 +157,12 @@ func (s *AutofixService) do(ctx context.Context, method, path, session string, b
 		return 0, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, autofixMaxResponseBytes+1))
 	if err != nil {
 		return resp.StatusCode, err
+	}
+	if len(data) > autofixMaxResponseBytes {
+		return resp.StatusCode, fmt.Errorf("autofix API response exceeds %d bytes", autofixMaxResponseBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		apiErr := &AutofixAPIError{StatusCode: resp.StatusCode}
@@ -198,8 +203,8 @@ func (s *AutofixService) Next(ctx context.Context, jobID int, session string, af
 	return &msg, nil
 }
 
-// SendContext answers the `prepare` message.
-func (s *AutofixService) SendContext(ctx context.Context, jobID int, session string, body *AutofixContextRequest) error {
+// ReplyPrepare answers the `prepare` message.
+func (s *AutofixService) ReplyPrepare(ctx context.Context, jobID int, session string, body *AutofixPrepareReply) error {
 	_, err := s.do(ctx, "POST", fmt.Sprintf("api/knoxiq/autofix/jobs/%d/context", jobID), session, body, nil)
 	return err
 }
